@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'logger'
 require 'pastel'
 require 'tty-box'
 require 'tty-logger'
@@ -19,14 +20,22 @@ module CoindcxBot
         $stdout.sync = true
         $stderr.sync = true
         pastel = Pastel.new
-        logger = TTY::Logger.new(output: $stdout)
         config = CoindcxBot::Config.load
-        engine = CoindcxBot::Core::Engine.new(config: config, logger: logger)
+
+        # Full-screen TUI owns stdout; engine + CoinDCX client log to stderr so api_call / candle lines
+        # do not paint over the box. COINDCX_TUI_VERBOSE=1 lowers threshold (DEBUG) on stderr.
+        engine_logger = Logger.new($stderr)
+        engine_logger.progname = 'coindcx_bot'
+        engine_logger.level =
+          ENV['COINDCX_TUI_VERBOSE'].to_s == '1' ? Logger::DEBUG : Logger::WARN
+
+        engine = CoindcxBot::Core::Engine.new(config: config, logger: engine_logger)
+        ui_logger = TTY::Logger.new(output: $stderr)
 
         worker = Thread.new do
           engine.run
         rescue StandardError => e
-          logger.error("Engine: #{e.full_message}")
+          ui_logger.error("Engine: #{e.full_message}")
         end
 
         sleep 0.75
@@ -54,7 +63,7 @@ module CoindcxBot
             end
           end
         rescue Interrupt
-          logger.info(pastel.dim('Interrupted — stopping engine…'))
+          ui_logger.info(pastel.dim('Interrupted — stopping engine…'))
         ensure
           engine.request_stop!
           worker.join(60) if worker&.alive?
@@ -118,7 +127,7 @@ module CoindcxBot
         body << metrics_line(pastel, snap)
         body << "\n"
         body << alerts_block(pastel, snap)
-        body << section_title(pastel, 'Markets (WebSocket LTP)', inner_w)
+        body << section_title(pastel, 'Markets (WS — prices + trades)', inner_w)
         body << markets_table(snap, inner_w)
         body << "\n"
         body << section_title(pastel, 'Journal positions', inner_w)
@@ -151,8 +160,8 @@ module CoindcxBot
           "TUI frame ##{@ui_frame} · redraw ~every #{REFRESH_SECONDS}s · #{t.strftime('%Y-%m-%d %H:%M:%S')}"
         )
         hint = pastel.dim(
-          'LTP / Last tick change only when CoinDCX sends a WebSocket price event (often << 1/s). ' \
-          'Same Ruby process as the engine — no Redis. If frame # and clock advance but prices stick, the feed is quiet.'
+          'LTP updates from WebSocket `price-change` (@prices-futures) and `new-trade` (@trades-futures); ' \
+          'when both are quiet, LTP sticks. Same Ruby process as the engine — no Redis.'
         )
         "#{mode}\n#{sub}\n#{hint}"
       end

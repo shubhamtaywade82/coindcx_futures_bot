@@ -46,6 +46,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
 
     expect(orders).to receive(:create) do |args|
       expect(args[:order][:leverage]).to eq(3)
+      expect(args[:order][:total_quantity]).to eq('0.01')
       CoindcxBot::Gateways::Result.ok({})
     end
 
