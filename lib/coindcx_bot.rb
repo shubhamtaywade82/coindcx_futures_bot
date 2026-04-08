@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative 'coindcx_bot/socket_io_uri_compat'
 require 'coindcx'
 require_relative 'coindcx_bot/coindcx_socket_eio_patch'
 

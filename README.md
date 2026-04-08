@@ -58,7 +58,7 @@ Keep `runtime.dry_run: true` until order payloads are validated for your account
 
 ## WebSocket (`SocketConnectionError`)
 
-The stream uses **Socket.IO** over `wss://stream.coindcx.com`. The bot **prepends** a small patch so `SocketIO::Client::Simple.connect` always receives **`{ EIO: … }`** (default **4** if `COINDCX_SOCKET_EIO` is unset). Try **`COINDCX_SOCKET_EIO=3`** if v4 still fails. If your `coindcx-client` adds `Configuration#socket_io_connect_options`, the engine sets that too when present.
+The stream uses **Socket.IO** over `wss://stream.coindcx.com`. The bot loads **`socket_io_uri_compat`** (Ruby 3 removed `URI.encode`, which `socket.io-client-simple` still uses) and **prepends** **`coindcx_socket_eio_patch`** so `connect` sends **`{ EIO: … }`** (default **4** if `COINDCX_SOCKET_EIO` is unset). Try **`COINDCX_SOCKET_EIO=3`** if v4 still fails. If your `coindcx-client` defines `Configuration#socket_io_connect_options`, the engine sets that too.
 
 If `bin/bot run` logs `CoinDCX::Errors::SocketConnectionError` with retries:
 
