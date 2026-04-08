@@ -32,5 +32,15 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
 
       expect(tick.change_pct).to eq(BigDecimal('2.5'))
     end
+
+    it 'reads trade-style price keys' do
+      tick = gateway.send(:normalize_tick, 'B-ETH_USDT', { 'price' => '2254.1' })
+      expect(tick.price).to eq(BigDecimal('2254.1'))
+    end
+
+    it 'uses first hash in an array payload' do
+      tick = gateway.send(:normalize_tick, 'B-SOL_USDT', [{ 'p' => '84.5' }])
+      expect(tick.price).to eq(BigDecimal('84.5'))
+    end
   end
 end
