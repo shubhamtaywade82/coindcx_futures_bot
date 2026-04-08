@@ -10,11 +10,12 @@ module CoindcxBot
         :running, :dry_run, :stale_tick_seconds, keyword_init: true
       )
 
-      def initialize(config:, logger: nil)
+      def initialize(config:, logger: nil, tick_store: nil)
         @config = config
         @logger = logger || Logger.new($stdout)
         @journal = Persistence::Journal.new(config.journal_path)
         @bus = EventBus.new
+        @tick_store = tick_store
         @stale_seconds = config.runtime.fetch(:stale_tick_seconds, 45).to_i
         @stale_recovery_sleep = config.runtime.fetch(:stale_recovery_sleep_seconds, 5).to_f
         @tracker = PositionTracker.new(
@@ -59,6 +60,7 @@ module CoindcxBot
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
           @tracker.record_tick(tick)
+          forward_tick_to_store(tick)
         end
 
         @ws_shutdown_timeout = config.runtime.fetch(:ws_shutdown_join_seconds, 45).to_f
@@ -131,6 +133,16 @@ module CoindcxBot
       end
 
       private
+
+      def forward_tick_to_store(tick)
+        return unless @tick_store
+
+        @tick_store.update(
+          symbol: tick.pair,
+          ltp: tick.price,
+          change_pct: tick.change_pct
+        )
+      end
 
       def configure_coin_dcx
         CoinDCX.configure do |c|

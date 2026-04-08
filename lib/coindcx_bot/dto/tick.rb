@@ -2,6 +2,6 @@
 
 module CoindcxBot
   module Dto
-    Tick = Struct.new(:pair, :price, :received_at, keyword_init: true)
+    Tick = Struct.new(:pair, :price, :change_pct, :received_at, keyword_init: true)
   end
 end

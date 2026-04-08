@@ -25,6 +25,10 @@ require_relative 'coindcx_bot/execution/coordinator'
 require_relative 'coindcx_bot/core/engine'
 require_relative 'coindcx_bot/doctor'
 require_relative 'coindcx_bot/cli'
+require_relative 'coindcx_bot/tui/tick_store'
+require_relative 'coindcx_bot/tui/render_loop'
+require_relative 'coindcx_bot/tui/panels/ltp_panel'
+require_relative 'coindcx_bot/tui/panels/status_panel'
 require_relative 'coindcx_bot/tui/app'
 
 module CoindcxBot

@@ -45,15 +45,17 @@ module CoindcxBot
       private
 
       def normalize_tick(instrument, payload)
-        h = payload.is_a?(Hash) ? payload.transform_keys { |k| k.to_sym } : {}
+        h = payload.is_a?(Hash) ? payload.transform_keys(&:to_sym) : {}
         price_raw = h[:p] || h[:last_price] || h[:ltp] || h[:price]
         return nil if price_raw.nil?
 
-        # Always key by the subscribed instrument so PositionTracker matches config.pairs
-        # (payload `s` often differs from REST / bot.yml codes).
+        change_raw = h[:pc] || h[:change_pct]
+        change_pct = change_raw.nil? ? nil : BigDecimal(change_raw.to_s)
+
         Dto::Tick.new(
           pair: instrument,
           price: BigDecimal(price_raw.to_s),
+          change_pct: change_pct,
           received_at: Time.now
         )
       end
