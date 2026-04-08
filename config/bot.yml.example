@@ -51,7 +51,10 @@ runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 120
   refresh_candles_seconds: 60
+  # Seconds without a WebSocket price tick before the feed is stale (new entries blocked).
   stale_tick_seconds: 45
+  # While WS is stale, wait this long between engine cycles instead of refresh_candles_seconds.
+  stale_recovery_sleep_seconds: 5
   # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
   ws_shutdown_join_seconds: 45
   dry_run: true

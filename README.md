@@ -66,7 +66,9 @@ If `bin/bot run` logs `CoinDCX::Errors::SocketConnectionError` with retries:
 2. **Optional URL override:** `COINDCX_SOCKET_BASE_URL=wss://stream.coindcx.com` (only if CoinDCX documents a different host).
 3. **Network:** VPN, corporate firewall, or WSL DNS can block WebSockets — test from another network or `openssl s_client -connect stream.coindcx.com:443`.
 
-**REST fallback:** On each candle refresh, if there is no fresh WebSocket tick yet (or the feed is stale), the engine seeds LTP from the **last closed candle** on your execution timeframe so the bot and TUI still have a price. Live ticks remain preferable for entries; this is a safety net, not a full replacement for WS.
+**Stale feed:** `stale=true` means **no WebSocket `price-change` for that symbol** within `runtime.stale_tick_seconds`. **New entries are blocked** until ticks resume; exits/strategy logic still run on REST candles. The dashboard `tick_at` / `age` reflect the **last WS tick**, not a fake refresh. If CoinDCX only pushes every minute or so, **raise `stale_tick_seconds`** in `config/bot.yml`. While stale, the engine sleeps `stale_recovery_sleep_seconds` (default 5) between cycles instead of `refresh_candles_seconds` so candles/strategy do not stall for a full minute.
+
+**REST bootstrap:** Before the first WS tick, LTP may be seeded once from the **last closed candle** only when there is no price yet — it does **not** reset timestamps when WS goes quiet (that would hide a dead feed).
 
 ## Risk and execution notes
 

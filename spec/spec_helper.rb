@@ -39,6 +39,7 @@ def minimal_bot_config(overrides = {})
       candle_lookback: 120,
       refresh_candles_seconds: 60,
       stale_tick_seconds: 45,
+      stale_recovery_sleep_seconds: 5,
       dry_run: true
     }
   }

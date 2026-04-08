@@ -7,7 +7,7 @@ module CoindcxBot
     class Engine
       Snapshot = Struct.new(
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
-        :running, :dry_run, keyword_init: true
+        :running, :dry_run, :stale_tick_seconds, keyword_init: true
       )
 
       def initialize(config:, logger: nil)
@@ -15,9 +15,11 @@ module CoindcxBot
         @logger = logger || Logger.new($stdout)
         @journal = Persistence::Journal.new(config.journal_path)
         @bus = EventBus.new
+        @stale_seconds = config.runtime.fetch(:stale_tick_seconds, 45).to_i
+        @stale_recovery_sleep = config.runtime.fetch(:stale_recovery_sleep_seconds, 5).to_f
         @tracker = PositionTracker.new(
           journal: @journal,
-          stale_tick_seconds: config.runtime.fetch(:stale_tick_seconds, 45).to_i
+          stale_tick_seconds: @stale_seconds
         )
         @exposure = Risk::ExposureGuard.new(config: config)
         @risk = Risk::Manager.new(config: config, journal: @journal, exposure_guard: @exposure)
@@ -52,8 +54,12 @@ module CoindcxBot
         @exec_res = config.strategy.fetch(:execution_resolution, '15m').to_s
         @refresh = config.runtime.fetch(:refresh_candles_seconds, 60).to_f
         @lookback = config.runtime.fetch(:candle_lookback, 120).to_i
+        @ws_tick_at = {}
 
-        @bus.subscribe(:tick) { |tick| @tracker.record_tick(tick) }
+        @bus.subscribe(:tick) do |tick|
+          @ws_tick_at[tick.pair] = Time.now
+          @tracker.record_tick(tick)
+        end
 
         @ws_shutdown_timeout = config.runtime.fetch(:ws_shutdown_join_seconds, 45).to_f
       end
@@ -65,7 +71,7 @@ module CoindcxBot
           tick_at = @tracker.last_tick_at(p)
           [p, { price: @tracker.ltp(p), at: tick_at }]
         end
-        stale = @config.pairs.any? { |p| @tracker.feed_stale?(p) }
+        stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
         Snapshot.new(
           pairs: @config.pairs,
           ticks: ticks,
@@ -76,7 +82,8 @@ module CoindcxBot
           last_error: @last_error,
           daily_pnl: @journal.daily_pnl_inr,
           running: !@stop,
-          dry_run: @config.dry_run?
+          dry_run: @config.dry_run?,
+          stale_tick_seconds: @stale_seconds
         )
       end
 
@@ -112,7 +119,7 @@ module CoindcxBot
           tick_cycle
           break if @stop
 
-          sleep @refresh
+          sleep sleep_seconds_after_tick_cycle
         end
         finished = ws_thread.join(@ws_shutdown_timeout)
         @logger.warn('WebSocket thread did not finish within ws_shutdown_join_seconds') unless finished
@@ -171,8 +178,8 @@ module CoindcxBot
       def tick_cycle
         @journal.reset_daily_pnl_if_new_day!
         load_candles
-        seed_tracker_from_last_candle_if_no_fresh_tick
-        stale = @config.pairs.any? { |p| @tracker.feed_stale?(p) }
+        seed_tracker_from_last_candle_if_no_ltp
+        stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
         @last_error = 'stale_feed' if stale
 
         @config.pairs.each { |pair| process_pair(pair, stale) }
@@ -181,9 +188,11 @@ module CoindcxBot
         @logger.error(e.full_message)
       end
 
-      def seed_tracker_from_last_candle_if_no_fresh_tick
+      # Only when we have never seen a price (WS slower than first REST load). Do not touch LTP when
+      # WS goes quiet — that would fake a fresh tick and hide `ws_feed_stale?` / unblock entries wrongly.
+      def seed_tracker_from_last_candle_if_no_ltp
         @config.pairs.each do |pair|
-          next if @tracker.ltp(pair) && !@tracker.feed_stale?(pair)
+          next if @tracker.ltp(pair)
 
           exec = @candles_exec[pair] || []
           candle = exec.last
@@ -193,6 +202,19 @@ module CoindcxBot
             Dto::Tick.new(pair: pair, price: candle.close, received_at: Time.now)
           )
         end
+      end
+
+      def ws_feed_stale?(pair)
+        at = @ws_tick_at[pair]
+        return true unless at
+
+        Time.now - at > @stale_seconds
+      end
+
+      def sleep_seconds_after_tick_cycle
+        return @stale_recovery_sleep if @config.pairs.any? { |p| ws_feed_stale?(p) }
+
+        @refresh
       end
 
       def load_candles
