@@ -17,7 +17,7 @@ module CoindcxBot
 
       def run
         pastel = Pastel.new
-        logger = TTY::Logger.new($stdout)
+        logger = TTY::Logger.new(output: $stdout)
         config = CoindcxBot::Config.load
         engine = CoindcxBot::Core::Engine.new(config: config, logger: logger)
 
