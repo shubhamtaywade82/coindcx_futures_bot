@@ -56,6 +56,18 @@ COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 
 Keep `runtime.dry_run: true` until order payloads are validated for your account.
 
+## WebSocket (`SocketConnectionError`)
+
+The stream uses **Socket.IO** over `wss://stream.coindcx.com`. The bot **prepends** a small patch so `SocketIO::Client::Simple.connect` always receives **`{ EIO: … }`** (default **4** if `COINDCX_SOCKET_EIO` is unset). Try **`COINDCX_SOCKET_EIO=3`** if v4 still fails. If your `coindcx-client` adds `Configuration#socket_io_connect_options`, the engine sets that too when present.
+
+If `bin/bot run` logs `CoinDCX::Errors::SocketConnectionError` with retries:
+
+1. **Try the other Engine.IO version** in `.env`: `COINDCX_SOCKET_EIO=3` or `COINDCX_SOCKET_EIO=4`, then run again.
+2. **Optional URL override:** `COINDCX_SOCKET_BASE_URL=wss://stream.coindcx.com` (only if CoinDCX documents a different host).
+3. **Network:** VPN, corporate firewall, or WSL DNS can block WebSockets — test from another network or `openssl s_client -connect stream.coindcx.com:443`.
+
+**REST fallback:** On each candle refresh, if there is no fresh WebSocket tick yet (or the feed is stale), the engine seeds LTP from the **last closed candle** on your execution timeframe so the bot and TUI still have a price. Live ticks remain preferable for entries; this is a safety net, not a full replacement for WS.
+
 ## Risk and execution notes
 
 - **Per-trade INR:** `risk.per_trade_inr_min` and `risk.per_trade_inr_max` define a band; position sizing uses the **midpoint** of that band (converted via `inr_per_usdt` to USDT risk at the stop).

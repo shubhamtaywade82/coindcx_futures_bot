@@ -10,9 +10,9 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
       expect(tick.pair).to eq('B-SOL_USDT')
     end
 
-    it 'uses payload symbol when present' do
+    it 'keys by subscribed instrument even when payload s differs' do
       tick = gateway.send(:normalize_tick, 'B-SOL_USDT', { 'p' => '1', 's' => 'B-ETH_USDT' })
-      expect(tick.pair).to eq('B-ETH_USDT')
+      expect(tick.pair).to eq('B-SOL_USDT')
     end
   end
 end

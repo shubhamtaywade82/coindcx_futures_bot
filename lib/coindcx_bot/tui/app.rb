@@ -16,6 +16,8 @@ module CoindcxBot
       end
 
       def run
+        $stdout.sync = true
+        $stderr.sync = true
         pastel = Pastel.new
         logger = TTY::Logger.new(output: $stdout)
         config = CoindcxBot::Config.load
@@ -77,19 +79,33 @@ module CoindcxBot
       def print_screen(snap, pastel)
         system('clear') || system('cls')
 
-        title = pastel.bold("CoinDCX bot  #{snap.dry_run ? '[DRY_RUN]' : ''}")
-        puts TTY::Box.frame(width: TTY::Screen.width, padding: 1, title: { top_left: title }) do
-          lines = []
-          lines << "running=#{snap.running} paused=#{snap.paused} kill=#{snap.kill_switch} stale=#{snap.stale}"
-          lines << "daily_pnl_inr=#{snap.daily_pnl.to_s('F')} last_error=#{snap.last_error.inspect}"
-          snap.pairs.each do |p|
-            t = snap.ticks[p]
-            lines << "  #{p}  ltp=#{t[:price]&.to_s('F')}  at=#{t[:at]}"
-          end
-          lines << ''
-          lines << table_positions(snap.positions)
-          lines.join("\n")
+        lines = []
+        lines << pastel.bold("CoinDCX bot  #{snap.dry_run ? '[DRY_RUN]' : ''}")
+        lines << "running=#{snap.running} paused=#{snap.paused} kill=#{snap.kill_switch} stale=#{snap.stale}"
+        lines << "daily_pnl_inr=#{snap.daily_pnl.to_s('F')} last_error=#{snap.last_error.inspect}"
+        snap.pairs.each do |p|
+          tick = snap.ticks[p] || {}
+          price = tick[:price]
+          at = tick[:at]
+          lines << "  #{p}  ltp=#{price ? price.to_s('F') : '—'}  at=#{at || '—'}"
         end
+        if snap.pairs.any? { |p| (snap.ticks[p] || {})[:price].nil? } && snap.last_error.nil?
+          lines << pastel.yellow('  (no WS price yet — check API keys, pair codes, and network)')
+        end
+        lines << ''
+        lines << table_positions(snap.positions)
+
+        body = lines.join("\n")
+        width = TTY::Screen.width
+        width = 80 if width.nil? || width < 40
+
+        begin
+          framed = TTY::Box.frame(width: width, padding: 1, title: { top_left: 'CoinDCX' }) { body }
+          puts framed
+        rescue StandardError
+          puts body
+        end
+        $stdout.flush
       end
 
       def table_positions(positions)

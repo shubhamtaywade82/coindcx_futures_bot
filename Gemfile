@@ -5,7 +5,8 @@ source 'https://rubygems.org'
 ruby '>= 3.1'
 
 # Latest from GitHub (override with `bundle config local.coindcx-client ../coindcx-client` for local dev)
-gem 'coindcx-client', git: 'https://github.com/shubhamtaywade82/coindcx-client.git', branch: 'main'
+# gem 'coindcx-client', git: 'https://github.com/shubhamtaywade82/coindcx-client.git', branch: 'main'
+gem 'coindcx-client', path: '../coindcx-client'
 
 gem 'bigdecimal'
 gem 'dotenv', '~> 3.1'

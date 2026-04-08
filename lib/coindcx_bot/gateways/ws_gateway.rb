@@ -49,15 +49,10 @@ module CoindcxBot
         price_raw = h[:p] || h[:last_price] || h[:ltp] || h[:price]
         return nil if price_raw.nil?
 
-        raw_symbol = h[:s]
-        sym =
-          if raw_symbol.nil?
-            ''
-          else
-            raw_symbol.to_s.strip
-          end
+        # Always key by the subscribed instrument so PositionTracker matches config.pairs
+        # (payload `s` often differs from REST / bot.yml codes).
         Dto::Tick.new(
-          pair: sym.empty? ? instrument : sym,
+          pair: instrument,
           price: BigDecimal(price_raw.to_s),
           received_at: Time.now
         )

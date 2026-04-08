@@ -130,6 +130,14 @@ module CoindcxBot
           c.api_key = ENV.fetch('COINDCX_API_KEY')
           c.api_secret = ENV.fetch('COINDCX_API_SECRET')
           c.logger = @logger
+
+          url = ENV['COINDCX_SOCKET_BASE_URL'].to_s.strip
+          c.socket_base_url = url unless url.empty?
+
+          if c.respond_to?(:socket_io_connect_options=)
+            eio = ENV['COINDCX_SOCKET_EIO'].to_s.strip
+            c.socket_io_connect_options = eio.empty? ? { EIO: 4 } : { EIO: Integer(eio) }
+          end
         end
       end
 
@@ -163,6 +171,7 @@ module CoindcxBot
       def tick_cycle
         @journal.reset_daily_pnl_if_new_day!
         load_candles
+        seed_tracker_from_last_candle_if_no_fresh_tick
         stale = @config.pairs.any? { |p| @tracker.feed_stale?(p) }
         @last_error = 'stale_feed' if stale
 
@@ -170,6 +179,20 @@ module CoindcxBot
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
+      end
+
+      def seed_tracker_from_last_candle_if_no_fresh_tick
+        @config.pairs.each do |pair|
+          next if @tracker.ltp(pair) && !@tracker.feed_stale?(pair)
+
+          exec = @candles_exec[pair] || []
+          candle = exec.last
+          next unless candle
+
+          @tracker.record_tick(
+            Dto::Tick.new(pair: pair, price: candle.close, received_at: Time.now)
+          )
+        end
       end
 
       def load_candles
