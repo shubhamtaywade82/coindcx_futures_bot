@@ -77,6 +77,90 @@ module CoindcxBot
       end
 
       # Wilder-style ADX using the last `period` of smoothed DX values; returns 0..100 or nil if not enough data.
+      # Wilder-smoothed ATR aligned to candle index `i` (nil until first value at index `period`).
+      def atr_wilder_series(candles, period)
+        n = candles.size
+        return Array.new(n) if n < 2
+
+        p = Integer(period)
+        trs = []
+        candles.each_cons(2) do |prev, cur|
+          hl = cur.high - cur.low
+          hc = (cur.high - prev.close).abs
+          lc = (cur.low - prev.close).abs
+          trs << [hl, hc, lc].max
+        end
+
+        atr = Array.new(n, nil)
+        return atr if trs.size < p
+
+        seed = trs.first(p).sum(BigDecimal('0')) / p
+        atr[p] = seed
+        ((p + 1)...n).each do |i|
+          atr[i] = (atr[i - 1] * (p - 1) + trs[i - 1]) / p
+        end
+        atr
+      end
+
+      # Classic Supertrend (ATR bands + final upper/lower). Returns per-candle trend after warmup.
+      # Each element is :bullish (close above bearish band / uptrend) or :bearish.
+      def supertrend_trends(candles, period:, multiplier:)
+        n = candles.size
+        return Array.new(n, nil) if n < 2
+
+        p = Integer(period)
+        mult = BigDecimal(multiplier.to_s)
+        atr = atr_wilder_series(candles, p)
+        trends = Array.new(n, nil)
+        final_upper = Array.new(n, nil)
+        final_lower = Array.new(n, nil)
+
+        p.upto(n - 1) do |i|
+          next unless atr[i]
+
+          hl2 = (candles[i].high + candles[i].low) / 2
+          upper_basic = hl2 + (mult * atr[i])
+          lower_basic = hl2 - (mult * atr[i])
+
+          if i == p
+            final_upper[i] = upper_basic
+            final_lower[i] = lower_basic
+            trends[i] = candles[i].close <= final_upper[i] ? :bearish : :bullish
+            next
+          end
+
+          prev_close = candles[i - 1].close
+          fu_prev = final_upper[i - 1]
+          fl_prev = final_lower[i - 1]
+
+          final_upper[i] =
+            if upper_basic < fu_prev || prev_close > fu_prev
+              upper_basic
+            else
+              fu_prev
+            end
+
+          final_lower[i] =
+            if lower_basic > fl_prev || prev_close < fl_prev
+              lower_basic
+            else
+              fl_prev
+            end
+
+          prev_trend = trends[i - 1]
+          trends[i] =
+            if prev_trend == :bearish && candles[i].close > final_upper[i]
+              :bullish
+            elsif prev_trend == :bullish && candles[i].close < final_lower[i]
+              :bearish
+            else
+              prev_trend
+            end
+        end
+
+        trends
+      end
+
       def adx_last(candles, period: 14)
         n = Integer(period)
         return nil if candles.size < (2 * n) + 2

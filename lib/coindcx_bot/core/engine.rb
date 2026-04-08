@@ -25,7 +25,7 @@ module CoindcxBot
         )
         @exposure = Risk::ExposureGuard.new(config: config)
         @risk = Risk::Manager.new(config: config, journal: @journal, exposure_guard: @exposure)
-        @strategy = Strategy::TrendContinuation.new(config.strategy)
+        @strategy = build_strategy(config.strategy)
 
         configure_coin_dcx
         @client = CoinDCX.client
@@ -134,6 +134,16 @@ module CoindcxBot
       end
 
       private
+
+      def build_strategy(strategy_cfg)
+        name = (strategy_cfg[:name] || 'trend_continuation').to_s
+        case name
+        when 'supertrend_profit'
+          Strategy::SupertrendProfit.new(strategy_cfg)
+        else
+          Strategy::TrendContinuation.new(strategy_cfg)
+        end
+      end
 
       def forward_tick_to_store(tick)
         return unless @tick_store

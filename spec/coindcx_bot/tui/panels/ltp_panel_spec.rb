@@ -34,7 +34,7 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
         panel.render
 
         expect(output.string).to include("\e[32m")
-        expect(output.string).to include('142.5000')
+        expect(output.string).to include('142.50')
       end
 
       it 'renders the change percentage' do
@@ -53,7 +53,7 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
         panel.render
 
         expect(output.string).to include("\e[31m")
-        expect(output.string).to include('3200.0000')
+        expect(output.string).to include('3200.00')
       end
     end
 

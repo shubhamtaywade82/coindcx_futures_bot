@@ -57,7 +57,7 @@ module CoindcxBot
           age   = (now - tick.updated_at).round(1)
           stale = age > @stale_tick_seconds
           chg_str = tick.change_pct ? format('%+.2f%%', tick.change_pct) : 'n/a'
-          ltp_str = format('%12.4f', tick.ltp)
+          ltp_str = format('%12.2f', tick.ltp)
           ltp_colored = colorize_ltp(ltp_str, tick, stale)
 
           line = format('  %-16s %s %10s %7.1fs  ', symbol, ltp_colored, chg_str, age)

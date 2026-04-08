@@ -33,6 +33,20 @@ RSpec.describe CoindcxBot::Strategy::Indicators do
     end
   end
 
+  describe '.supertrend_trends' do
+    it 'returns nil prefix then bullish or bearish symbols through the series tail' do
+      candles = 50.times.map do |i|
+        base = BigDecimal(i)
+        c(i, base, base + 2, base - 0.5, base + 1.2, 1000)
+      end
+      trends = described_class.supertrend_trends(candles, period: 10, multiplier: 3)
+      expect(trends.first(10)).to all(be_nil)
+      compact = trends.compact
+      expect(compact).not_to be_empty
+      expect(compact.uniq - %i[bullish bearish]).to be_empty
+    end
+  end
+
   describe '.adx_last' do
     it 'returns a positive number on a long directional series' do
       candles = 60.times.map do |i|
