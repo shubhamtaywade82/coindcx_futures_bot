@@ -1,0 +1,8 @@
+/.bundle/
+/vendor/bundle
+*.sqlite3
+*.db
+/config/bot.yml
+.env
+.env.*
+!.env.example

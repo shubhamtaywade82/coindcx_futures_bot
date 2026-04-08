@@ -1,0 +1,50 @@
+# Copy to config/bot.yml and adjust. Env overrides: COINDCX_BOT_CONFIG path.
+
+margin_currency_short_name: USDT
+
+# REST + WS instrument pair codes (e.g. B-SOL_USDT). Run `bin/bot doctor` to list matches.
+pairs:
+  - B-SOL_USDT
+  - B-ETH_USDT
+
+# Approximate INR per USDT for position sizing from INR risk budget
+inr_per_usdt: 83.0
+
+# Capital reference (INR) — used with risk_per_trade_inr for sizing hints in logs
+capital_inr: 50_000
+
+risk:
+  per_trade_inr_min: 250
+  per_trade_inr_max: 500
+  max_daily_loss_inr: 1500
+  max_open_positions: 2
+  max_leverage: 5
+
+strategy:
+  execution_resolution: 15m
+  higher_timeframe_resolution: 1h
+  ema_fast: 12
+  ema_slow: 26
+  atr_period: 14
+  # |EMA_fast - EMA_slow| / ATR on execution timeframe; higher => stronger trend tape
+  trend_strength_min: 0.12
+  compression_lookback: 8
+  compression_ratio: 0.65
+  breakout_lookback: 4
+  pullback_ema_tolerance_pct: 0.0025
+
+execution:
+  # Merged into every futures `order:` hash; required keys depend on CoinDCX API.
+  # See https://docs.coindcx.com/ — adjust for your account (order_type, leverage, etc.).
+  order_defaults:
+    order_type: market_order
+    margin_currency_short_name: USDT
+
+runtime:
+  journal_path: ./data/bot_journal.sqlite3
+  candle_lookback: 120
+  refresh_candles_seconds: 60
+  stale_tick_seconds: 45
+  # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
+  ws_shutdown_join_seconds: 45
+  dry_run: true
