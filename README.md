@@ -15,6 +15,8 @@ The engine subscribes to the private **order update** Socket.io stream when runn
    - `COINDCX_API_KEY`
    - `COINDCX_API_SECRET`
 
+   For local runs, copy [`.env.example`](.env.example) to **`.env`** in the **repository root** (same folder as `Gemfile`). `bin/bot` loads `.env` then `.env.local` automatically. You can still export the variables in your shell instead.
+
 3. **Config**
 
    ```bash

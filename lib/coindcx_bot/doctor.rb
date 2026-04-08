@@ -7,6 +7,17 @@ module CoindcxBot
   module Doctor
     module_function
 
+    PAIR_KEYS = %i[
+      pair instrument symbol market ticker contract_code product_id
+      underlying pair_name instrument_name short_name name
+      instrument_pair display_name
+    ].freeze
+
+    ARRAY_KEYS = %w[instruments data pairs active_instruments markets results items list].freeze
+
+    # Highlight only native SOL / ETH USDT perps (avoids B-SOLV_USDT, B-ETHFI_USDT, etc.).
+    CORE_SOL_ETH_PAIRS = %w[B-SOL_USDT B-ETH_USDT].freeze
+
     def run(stdout: $stdout)
       api_key = ENV['COINDCX_API_KEY']
       secret = ENV['COINDCX_API_SECRET']
@@ -38,37 +49,119 @@ module CoindcxBot
       end
 
       rows = normalize_instruments(res.value)
-      stdout.puts "Active USDT-margin instruments: #{rows.size} (showing SOL/ETH matches)"
+      stdout.puts "Active USDT-margin instruments: #{rows.size} (highlight: #{CORE_SOL_ETH_PAIRS.join(', ')})"
       matches = rows.select { |r| match_sol_eth?(r) }
       if matches.empty?
-        stdout.puts 'No rows matched "SOL" or "ETH" in raw payload — inspect full list below.'
+        stdout.puts "No #{CORE_SOL_ETH_PAIRS.join(' / ')} in list — inspect sample rows below."
       end
-      (matches.empty? ? rows.first(30) : matches).each { |r| stdout.puts format_row(r) }
+      sample = matches.empty? ? rows.first(30) : matches
+      sample.each { |r| stdout.puts format_row(r) }
       stdout.puts "\nCopy exact `pair` values into config/bot.yml under `pairs:`."
       true
     end
 
     def match_sol_eth?(row)
-      s = row.values.join(' ').upcase
-      s.include?('SOL') || s.include?('ETH')
+      p = pair_from_row(row).to_s.strip.upcase
+      CORE_SOL_ETH_PAIRS.include?(p)
     end
 
     def normalize_instruments(value)
-      list =
-        case value
-        when Array then value
-        when Hash
-          value[:instruments] || value['instruments'] || value[:data] || value.values.find { |v| v.is_a?(Array) } || []
+      extract_list(value).map { |el| normalize_element(el) }
+    end
+
+    def normalize_element(el)
+      case el
+      when String
+        { pair: el.strip }
+      when Hash
+        CoinDCX::Utils::Payload.symbolize_keys(el)
+      else
+        {}
+      end
+    end
+
+    def extract_list(value)
+      case value
+      when nil
+        []
+      when Array
+        return [] if value.empty?
+
+        first = value.first
+        if first.is_a?(Hash) || first.is_a?(String)
+          value
+        elsif first.is_a?(Array)
+          value.flat_map { |x| extract_list(x) }
         else
-          []
+          value.filter_map { |x| x if x.is_a?(Hash) || x.is_a?(String) }
         end
-      Array(list).map { |h| h.is_a?(Hash) ? h.transform_keys(&:to_sym) : {} }
+      when Hash
+        ARRAY_KEYS.each do |key|
+          sym = key.to_sym
+          next unless value.key?(sym) || value.key?(key)
+
+          inner = value[sym] || value[key]
+          got = extract_list(inner)
+          return got if got.any?
+        end
+        return [value] if value.key?(:pair) || value.key?('pair')
+
+        if value.all? { |k, v| (k.is_a?(String) || k.is_a?(Symbol)) && v.is_a?(Hash) }
+          return value.map { |k, meta| CoinDCX::Utils::Payload.symbolize_keys(meta).merge(pair: k.to_s) }
+        end
+
+        value.values.flat_map do |v|
+          case v
+          when Array, Hash
+            extract_list(v)
+          else
+            []
+          end
+        end
+      else
+        []
+      end
+    end
+
+    def pair_from_row(row)
+      case row
+      when String
+        row.strip
+      when Hash
+        PAIR_KEYS.each do |k|
+          v = row[k]
+          next if v.nil?
+
+          s = v.to_s.strip
+          return s unless s.empty?
+        end
+        row.each_value do |v|
+          s = v.to_s.strip
+          next if s.empty?
+
+          return s if s.match?(/\A[A-Z]\-[A-Z0-9_.]+\z/i)
+        end
+        row.values.find { |v| v.is_a?(String) && v.match?(/_USDT|_INR|FUTURES|PERP/i) }&.to_s&.strip || '?'
+      else
+        '?'
+      end
     end
 
     def format_row(row)
-      pair = row[:pair] || row[:instrument] || row[:symbol] || '?'
-      name = row[:name] || row[:short_name] || ''
-      "#{pair}  #{name}"
+      pair = pair_from_row(row)
+      return pair if row.is_a?(String)
+
+      extras =
+        if row.is_a?(Hash)
+          row
+            .reject { |k, _| PAIR_KEYS.include?(k) }
+            .first(4)
+            .map { |k, v| "#{k}=#{v}" }
+            .join(' ')
+        else
+          ''
+        end
+      extras.empty? ? pair : "#{pair}  #{extras}"
     end
   end
 end

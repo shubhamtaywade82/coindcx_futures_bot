@@ -45,7 +45,7 @@ module CoindcxBot
           doctor  — verify credentials and list SOL/ETH futures instruments
           help    — this message
 
-        Environment: COINDCX_API_KEY, COINDCX_API_SECRET
+        Environment: COINDCX_API_KEY, COINDCX_API_SECRET (optional: .env / .env.local in repo root)
         Config: config/bot.yml (see config/bot.yml.example)
       HELP
     end

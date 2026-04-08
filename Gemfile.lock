@@ -11,6 +11,7 @@ GEM
     bigdecimal (4.1.1)
     csv (3.3.5)
     diff-lcs (1.6.2)
+    dotenv (3.2.0)
     event_emitter (0.2.6)
     faraday (2.14.1)
       faraday-net_http (>= 2.0, < 3.5)
@@ -115,6 +116,7 @@ PLATFORMS
 DEPENDENCIES
   bigdecimal
   coindcx-client!
+  dotenv (~> 3.1)
   pastel
   rspec (~> 3.13)
   sqlite3 (~> 2.1)
@@ -132,6 +134,7 @@ CHECKSUMS
   coindcx-client (0.1.0)
   csv (3.3.5) sha256=6e5134ac3383ef728b7f02725d9872934f523cb40b961479f69cf3afa6c8e73f
   diff-lcs (1.6.2) sha256=9ae0d2cba7d4df3075fe8cd8602a8604993efc0dfa934cff568969efb1909962
+  dotenv (3.2.0) sha256=e375b83121ea7ca4ce20f214740076129ab8514cd81378161f11c03853fe619d
   event_emitter (0.2.6) sha256=c72697bd5cce9d36594be1972c17f1c9a573236f44303a4d1d548080364e1391
   faraday (2.14.1) sha256=a43cceedc1e39d188f4d2cdd360a8aaa6a11da0c407052e426ba8d3fb42ef61c
   faraday-net_http (3.4.2) sha256=f147758260d3526939bf57ecf911682f94926a3666502e24c69992765875906c

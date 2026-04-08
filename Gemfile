@@ -12,6 +12,7 @@ else
 end
 
 gem 'bigdecimal'
+gem 'dotenv', '~> 3.1'
 gem 'sqlite3', '~> 2.1'
 
 gem 'pastel'
