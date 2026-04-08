@@ -43,7 +43,7 @@ The engine subscribes to the private **order update** Socket.io stream when runn
 
 ```bash
 bundle exec bin/bot run    # blocking engine (WS + REST candles + strategy loop)
-bundle exec bin/bot tui    # same engine + terminal dashboard (refreshes every 2s; keys: q/p/r/k/o/f)
+bundle exec bin/bot tui    # engine + terminal dashboard (see TUI notes below)
 bundle exec bin/bot doctor # REST check + list active instruments (SOL/ETH hints)
 bundle exec bin/bot help
 ```
@@ -55,6 +55,12 @@ COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 ```
 
 Keep `runtime.dry_run: true` until order payloads are validated for your account.
+
+## TUI (`bin/bot tui`)
+
+The dashboard and the trading **engine share one Ruby process** — `engine.snapshot` reads live `PositionTracker` / journal state. **No Redis or separate cache** is required for the numbers to update.
+
+If the screen **never refreshes** (clock / LTP stuck) in **Cursor’s or another IDE’s embedded terminal**, stdin is often **not a real TTY**: `IO.select` can report stdin readable and the UI thread then **blocks on `getc`**, so the redraw loop never runs. The TUI detects non-TTY stdin and switches to **timer-only refresh** (about once per second). In that mode use **Ctrl+C** to exit; single-letter hotkeys may not work. For full keybindings, run `bin/bot tui` in a normal terminal (Windows Terminal, GNOME Terminal, iTerm, etc.). To **force** poll-only mode: `COINDCX_TUI_POLL_ONLY=1`.
 
 ## WebSocket (`SocketConnectionError`)
 

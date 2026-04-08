@@ -31,16 +31,27 @@ module CoindcxBot
 
         sleep 0.75
         quit_ui = false
+        @ui_frame = 0
 
+        interactive = stdin_interactive?
         begin
           until quit_ui
+            @ui_frame += 1
             print_dashboard(engine, pastel)
-            print_keybar(pastel, TTY::Screen.width)
-            ready = IO.select([$stdin], nil, nil, REFRESH_SECONDS)
-            next unless ready
+            print_keybar(pastel, TTY::Screen.width, interactive: interactive)
 
-            cmd = $stdin.getc
-            quit_ui = dispatch(engine, cmd)
+            # Cursor / some IDE terminals expose stdin as a pipe: IO.select says "readable" but
+            # getc blocks forever with no keys — the dashboard never redraws. Fall back to
+            # timer-only polling when stdin is not a real TTY (or COINDCX_TUI_POLL_ONLY=1).
+            if interactive
+              ready = IO.select([$stdin], nil, nil, REFRESH_SECONDS)
+              if ready&.first&.include?($stdin)
+                cmd = $stdin.getc
+                quit_ui = dispatch(engine, cmd) if cmd
+              end
+            else
+              sleep REFRESH_SECONDS
+            end
           end
         rescue Interrupt
           logger.info(pastel.dim('Interrupted — stopping engine…'))
@@ -55,6 +66,14 @@ module CoindcxBot
       end
 
       private
+
+      def stdin_interactive?
+        return false if ENV['COINDCX_TUI_POLL_ONLY'] == '1'
+
+        $stdin.tty? && $stdout.tty?
+      rescue StandardError
+        false
+      end
 
       def dispatch(engine, cmd)
         case cmd
@@ -99,11 +118,11 @@ module CoindcxBot
         body << metrics_line(pastel, snap)
         body << "\n"
         body << alerts_block(pastel, snap)
-        body << section_title(pastel, 'Markets', inner_w)
+        body << section_title(pastel, 'Markets (WebSocket LTP)', inner_w)
         body << markets_table(snap, inner_w)
         body << "\n"
         body << section_title(pastel, 'Journal positions', inner_w)
-        body << positions_block(snap, inner_w)
+        body << positions_block(pastel, snap, inner_w)
 
         begin
           framed = TTY::Box.frame(
@@ -127,8 +146,15 @@ module CoindcxBot
           else
             pastel.inverse.red.bold('  LIVE — real orders  ')
           end
-        sub = pastel.dim("Auto-refresh #{REFRESH_SECONDS}s · local #{Time.now.strftime('%Y-%m-%d %H:%M:%S')}")
-        "#{mode}\n#{sub}"
+        t = Time.now
+        sub = pastel.dim(
+          "TUI frame ##{@ui_frame} · redraw ~every #{REFRESH_SECONDS}s · #{t.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        hint = pastel.dim(
+          'LTP / Last tick change only when CoinDCX sends a WebSocket price event (often << 1/s). ' \
+          'Same Ruby process as the engine — no Redis. If frame # and clock advance but prices stick, the feed is quiet.'
+        )
+        "#{mode}\n#{sub}\n#{hint}"
       end
 
       def visible_length(str)
@@ -247,7 +273,7 @@ module CoindcxBot
         [pair_col, ltp_col, time_col, age_col]
       end
 
-      def positions_block(snap, width)
+      def positions_block(pastel, snap, width)
         return pastel.dim("  (none)\n") if snap.positions.empty?
 
         header = %w[ID Pair Side Qty Entry Stop P]
@@ -267,8 +293,15 @@ module CoindcxBot
         table.render(:unicode, multiline: true, width: width)
       end
 
-      def print_keybar(pastel, term_w)
+      def print_keybar(pastel, term_w, interactive: true)
         w = term_w || 80
+        unless interactive
+          puts
+          puts pastel.yellow('Non-interactive stdin (e.g. IDE terminal): auto-refresh only — Ctrl+C to quit.')
+          puts pastel.dim("Set COINDCX_TUI_POLL_ONLY=1 to force this mode. For hotkeys, run in a full TTY (gnome-terminal, Windows Terminal, iTerm).")
+          return
+        end
+
         keys = [
           [pastel.bold('q'), 'quit'],
           [pastel.bold('p'), 'pause'],
