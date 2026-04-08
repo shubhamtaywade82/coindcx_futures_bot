@@ -1,23 +1,23 @@
 # frozen_string_literal: true
 
 require 'pastel'
-require 'tty-prompt'
-require 'tty-table'
-require 'tty-screen'
 require 'tty-box'
-require 'logger'
+require 'tty-logger'
+require 'tty-screen'
+require 'tty-table'
 
 module CoindcxBot
   module Tui
     class App
+      REFRESH_SECONDS = 2
+
       def self.start
         new.run
       end
 
       def run
         pastel = Pastel.new
-        prompt = TTY::Prompt.new
-        logger = Logger.new($stdout)
+        logger = TTY::Logger.new($stdout)
         config = CoindcxBot::Config.load
         engine = CoindcxBot::Core::Engine.new(config: config, logger: logger)
 
@@ -28,30 +28,20 @@ module CoindcxBot
         end
 
         sleep 1.0
+        quit_ui = false
 
-        loop do
+        until quit_ui
           print_screen(engine.snapshot, pastel)
-          cmd = prompt.select('Command', %w[refresh pause resume kill_on kill_off flatten quit], cycle: true)
-          case cmd
-          when 'refresh'
-            next
-          when 'pause'
-            engine.pause!
-          when 'resume'
-            engine.resume!
-          when 'kill_on'
-            engine.kill_switch_on!
-          when 'kill_off'
-            engine.kill_switch_off!
-          when 'flatten'
-            engine.flatten_all!
-          when 'quit'
-            engine.request_stop!
-            break
-          end
+          puts pastel.dim("Keys: q quit | p pause | r resume | k kill on | o kill off | f flatten | . refresh (#{REFRESH_SECONDS}s)")
+          ready = IO.select([$stdin], nil, nil, REFRESH_SECONDS)
+          next unless ready
+
+          cmd = $stdin.getc
+          quit_ui = dispatch(engine, cmd)
         end
 
-        worker.join(60)
+        engine.request_stop!
+        worker.join(5)
       rescue CoindcxBot::Config::ConfigurationError => e
         warn e.message
         warn 'Copy config/bot.yml.example to config/bot.yml'
@@ -59,6 +49,30 @@ module CoindcxBot
       end
 
       private
+
+      def dispatch(engine, cmd)
+        case cmd
+        when 'q', 'Q', "\u0003" # Ctrl-C as char if raw
+          true
+        when 'p'
+          engine.pause!
+          false
+        when 'r'
+          engine.resume!
+          false
+        when 'k'
+          engine.kill_switch_on!
+          false
+        when 'o'
+          engine.kill_switch_off!
+          false
+        when 'f'
+          engine.flatten_all!
+          false
+        else
+          false
+        end
+      end
 
       def print_screen(snap, pastel)
         system('clear') || system('cls')

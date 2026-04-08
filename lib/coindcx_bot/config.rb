@@ -19,6 +19,7 @@ module CoindcxBot
     def initialize(hash)
       @raw = deep_symbolize(hash || {})
       validate_whitelist!
+      validate_risk_band!
     end
 
     def pairs
@@ -68,6 +69,15 @@ module CoindcxBot
       allowed.each do |p|
         raise ConfigurationError, "Invalid pair #{p.inspect}" unless p.match?(/\A[A-Z0-9._-]+\z/i)
       end
+    end
+
+    def validate_risk_band!
+      rk = raw[:risk] || {}
+      min_r = BigDecimal(rk.fetch(:per_trade_inr_min, 250).to_s)
+      max_r = BigDecimal(rk.fetch(:per_trade_inr_max, 500).to_s)
+      return if min_r <= max_r
+
+      raise ConfigurationError, 'risk.per_trade_inr_min must be <= risk.per_trade_inr_max'
     end
 
     def deep_symbolize(obj)

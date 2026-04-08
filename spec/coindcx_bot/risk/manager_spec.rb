@@ -43,4 +43,15 @@ RSpec.describe CoindcxBot::Risk::Manager do
     qty = manager.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
     expect(qty).to be > 0
   end
+
+  it 'uses midpoint of per_trade_inr min and max for risk budget' do
+    cfg = CoindcxBot::Config.new(
+      minimal_bot_config(risk: { per_trade_inr_min: 200, per_trade_inr_max: 400, max_daily_loss_inr: 1500 })
+    )
+    mid_manager = described_class.new(config: cfg, journal: journal, exposure_guard: guard)
+    qty = mid_manager.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
+    expected_risk_usdt = BigDecimal('300') / BigDecimal('83')
+    expected_qty = (expected_risk_usdt / BigDecimal('2')).round(6, BigDecimal::ROUND_DOWN)
+    expect(qty).to eq(expected_qty)
+  end
 end

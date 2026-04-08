@@ -122,6 +122,7 @@ DEPENDENCIES
   tty-logger
   tty-progressbar
   tty-prompt
+  tty-reader
   tty-screen
   tty-spinner
   tty-table

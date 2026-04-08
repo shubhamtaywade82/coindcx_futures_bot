@@ -9,7 +9,6 @@ module CoindcxBot
         @config = config
         @journal = journal
         @guard = exposure_guard
-        @max_risk = BigDecimal(config.risk.fetch(:per_trade_inr_max, 500).to_s)
         @max_daily_loss = BigDecimal(config.risk.fetch(:max_daily_loss_inr, 1500).to_s)
       end
 
@@ -28,12 +27,21 @@ module CoindcxBot
       end
 
       def size_quantity(entry_price:, stop_price:, side:)
-        risk_inr = @max_risk
+        risk_inr = per_trade_risk_inr
         risk_usdt = risk_inr / @config.inr_per_usdt
         dist = (entry_price - stop_price).abs
         return BigDecimal('0') if dist <= 0
 
         (risk_usdt / dist).round(6, BigDecimal::ROUND_DOWN)
+      end
+
+      private
+
+      def per_trade_risk_inr
+        rk = @config.risk
+        min_r = BigDecimal(rk.fetch(:per_trade_inr_min, 250).to_s)
+        max_r = BigDecimal(rk.fetch(:per_trade_inr_max, 500).to_s)
+        (min_r + max_r) / 2
       end
     end
   end

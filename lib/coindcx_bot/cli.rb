@@ -41,7 +41,7 @@ module CoindcxBot
         coindcx_futures_bot — usage: bin/bot <command>
 
           run     — start trading engine (blocking)
-          tui     — engine + interactive TTY dashboard
+          tui     — engine + TTY dashboard (auto-refresh + single-key commands)
           doctor  — verify credentials and list SOL/ETH futures instruments
           help    — this message
 

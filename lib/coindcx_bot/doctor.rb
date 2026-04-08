@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'logger'
+require 'tty-spinner'
 
 module CoindcxBot
   module Doctor
@@ -22,7 +23,15 @@ module CoindcxBot
 
       client = CoinDCX.client
       md = CoindcxBot::Gateways::MarketDataGateway.new(client: client, margin_currency_short_name: 'USDT')
-      res = md.list_active_instruments(margin_currency_short_names: ['USDT'])
+      spinner = TTY::Spinner.new(':spinner :title', hide_cursor: true)
+      spinner.update(title: 'Fetching instruments…')
+      spinner.auto_spin
+      res =
+        begin
+          md.list_active_instruments(margin_currency_short_names: ['USDT'])
+        ensure
+          spinner.stop
+        end
       unless res.ok?
         stdout.puts "REST failed: #{res.code} #{res.message}"
         return false

@@ -32,6 +32,13 @@ strategy:
   compression_ratio: 0.65
   breakout_lookback: 4
   pullback_ema_tolerance_pct: 0.0025
+  # Optional entry gates (defaults preserve original behavior)
+  volume_filter: false
+  volume_lookback: 20
+  volume_min_ratio: 1.0
+  structure_bars: 0
+  adx_period: 14
+  adx_min: 0
 
 execution:
   # Merged into every futures `order:` hash; required keys depend on CoinDCX API.

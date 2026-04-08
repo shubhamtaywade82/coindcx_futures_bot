@@ -40,6 +40,7 @@ module CoindcxBot
           account_gateway: @account,
           journal: @journal,
           config: config,
+          exposure_guard: @exposure,
           logger: @logger
         )
 
@@ -144,6 +145,13 @@ module CoindcxBot
           @last_error = "ws sub #{pair}: #{sub.message}" if sub.failure?
         end
 
+        ou = @ws.subscribe_order_updates do |payload|
+          @journal.log_event('ws_order_update', ws_order_snippet(payload))
+        rescue StandardError => e
+          @logger.warn("order ws: #{e.message}")
+        end
+        @last_error = "ws order sub: #{ou.message}" if ou.failure?
+
         until @stop
           sleep 0.1
         end
@@ -186,6 +194,18 @@ module CoindcxBot
         to = Time.now.to_i
         from = to - (bars * mult)
         [from, to]
+      end
+
+      def ws_order_snippet(payload)
+        h =
+          case payload
+          when Hash
+            payload.transform_keys(&:to_s)
+          else
+            { 'class' => payload.class.name }
+          end
+        keys = %w[event status id order_id client_order_id s p]
+        h.slice(*keys).transform_values { |v| v.nil? ? '' : v.to_s }
       end
 
       def self.resolution_seconds(resolution)

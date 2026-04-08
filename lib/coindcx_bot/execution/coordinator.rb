@@ -5,11 +5,12 @@ require 'bigdecimal'
 module CoindcxBot
   module Execution
     class Coordinator
-      def initialize(order_gateway:, account_gateway:, journal:, config:, logger:)
+      def initialize(order_gateway:, account_gateway:, journal:, config:, exposure_guard:, logger:)
         @orders = order_gateway
         @account = account_gateway
         @journal = journal
         @config = config
+        @exposure = exposure_guard
         @logger = logger
         @dry = config.dry_run?
       end
@@ -60,8 +61,15 @@ module CoindcxBot
           side: side,
           total_quantity: quantity.to_s('F')
         }
+        lev = effective_leverage
+        unless @exposure.leverage_allowed?(lev)
+          @logger&.warn("Skip open — leverage #{lev} exceeds max #{@exposure.max_leverage}")
+          return :rejected
+        end
+        body[:leverage] = lev
 
-        @journal.log_event('signal_open', action: signal.action.to_s, pair: signal.pair, reason: signal.reason)
+        @journal.log_event('signal_open', action: signal.action.to_s, pair: signal.pair, reason: signal.reason,
+                                          leverage: lev)
 
         if @dry
           @logger&.info("[dry_run] would create order: #{body}")
@@ -120,6 +128,11 @@ module CoindcxBot
         end
       end
 
+      # Records 1R partial in the journal so trailing logic can treat the position as scaled.
+      # CoinDCX reduce-only / close-partial payloads vary by account and product; the generic
+      # `Models::Order` in coindcx-client does not encode contract-specific fields. Until a
+      # verified `futures.orders.create` body exists for partial exits, we do not place a
+      # reduce order here — see README "Partial at 1R".
       def handle_partial(signal)
         id = signal.metadata[:position_id]
         @journal.log_event('signal_partial', pair: signal.pair, position_id: id)
@@ -135,6 +148,14 @@ module CoindcxBot
         @journal.update_position_stop(id, signal.stop_price)
         @journal.log_event('trail', position_id: id, stop: signal.stop_price.to_s('F'))
         :ok
+      end
+
+      def effective_leverage
+        defaults = @config.execution.fetch(:order_defaults, {})
+        raw = defaults[:leverage] || defaults['leverage'] || @config.risk.fetch(:max_leverage, 5)
+        requested = Integer(raw)
+        cap = @exposure.max_leverage
+        [[requested, 1].max, cap].min
       end
 
       def normalize_rows(value)

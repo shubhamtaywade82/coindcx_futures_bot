@@ -2,6 +2,8 @@
 /vendor/bundle
 *.sqlite3
 *.db
+/data/*
+!/data/.gitkeep
 /config/bot.yml
 .env
 .env.*

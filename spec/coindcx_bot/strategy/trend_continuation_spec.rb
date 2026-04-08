@@ -57,4 +57,42 @@ RSpec.describe CoindcxBot::Strategy::TrendContinuation do
 
     expect(%i[open_long hold]).to include(sig.action)
   end
+
+  it 'holds with volume_gate when volume_filter is on and last bar is not expanded' do
+    strat_cfg = minimal_bot_config[:strategy].merge(
+      trend_strength_min: 0.001,
+      ema_fast: 3,
+      ema_slow: 5,
+      atr_period: 5,
+      volume_filter: true,
+      volume_lookback: 5,
+      volume_min_ratio: 5.0
+    )
+    strat = described_class.new(strat_cfg)
+
+    uptrend = 50.times.map do |i|
+      base = BigDecimal(100) + BigDecimal(i) * BigDecimal('0.3')
+      candle(i, base, base + 2, base - 1, base + 1)
+    end
+
+    exec = uptrend.dup
+    exec[-6..-2] = exec[-6..-2].map.with_index do |c, idx|
+      t = c.time.to_i
+      candle(t, 115, 120, 110, 115 + idx)
+    end
+    last_t = exec.last.time.to_i + 1
+    exec[-1] = candle(last_t, 115, 115.5, 114.9, 115.2)
+    exec << candle(last_t + 1, 121, 125, 120, 124)
+
+    sig = strat.evaluate(
+      pair: 'B-SOL_USDT',
+      candles_htf: uptrend,
+      candles_exec: exec,
+      position: nil,
+      ltp: BigDecimal('124')
+    )
+
+    expect(sig.action).to eq(:hold)
+    expect(sig.reason).to eq('volume_gate')
+  end
 end

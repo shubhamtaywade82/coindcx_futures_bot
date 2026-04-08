@@ -33,6 +33,9 @@ module CoindcxBot
 
         return manage_open(pair, position, exec, price, trend) if position
 
+        gate = entry_filters(pair, exec, trend)
+        return gate if gate
+
         seek_entry(pair, exec, price, trend)
       end
 
@@ -64,6 +67,51 @@ module CoindcxBot
 
       def trend_strength_min
         BigDecimal(@cfg.fetch(:trend_strength_min, 0.12).to_s)
+      end
+
+      def entry_filters(pair, exec, trend)
+        if volume_filter_on?
+          ratio = Indicators.volume_ratio_last(exec, lookback: volume_lookback)
+          min_r = volume_min_ratio
+          return hold(pair, 'volume_gate') if ratio.nil? || ratio < min_r
+        end
+
+        bars = structure_bars
+        if bars.positive? && !Indicators.directional_structure?(exec, trend, bars: bars)
+          return hold(pair, 'structure_gate')
+        end
+
+        adx_min = adx_min_threshold
+        if adx_min.positive?
+          adx = Indicators.adx_last(exec, period: adx_period)
+          return hold(pair, 'adx_gate') if adx.nil? || adx < adx_min
+        end
+
+        nil
+      end
+
+      def volume_filter_on?
+        !!@cfg[:volume_filter]
+      end
+
+      def volume_lookback
+        @cfg.fetch(:volume_lookback, 20).to_i
+      end
+
+      def volume_min_ratio
+        BigDecimal(@cfg.fetch(:volume_min_ratio, 1.0).to_s)
+      end
+
+      def structure_bars
+        @cfg.fetch(:structure_bars, 0).to_i
+      end
+
+      def adx_period
+        @cfg.fetch(:adx_period, 14).to_i
+      end
+
+      def adx_min_threshold
+        BigDecimal(@cfg.fetch(:adx_min, 0).to_s)
       end
 
       def regime(htf, exec)
