@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'tty-cursor'
+require 'tty-logger'
 require 'tty-screen'
 
 module CoindcxBot
