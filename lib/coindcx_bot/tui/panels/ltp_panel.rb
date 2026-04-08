@@ -7,18 +7,18 @@ module CoindcxBot
   module Tui
     module Panels
       class LtpPanel
-        STALE_THRESHOLD = 5
         HEADER_FMT = '  %-16s %12s %10s %8s  '
         HEADER = format(HEADER_FMT, 'SYMBOL', 'LTP', 'CHG%', 'AGE')
         SEPARATOR = ('-' * HEADER.length).freeze
 
-        def initialize(tick_store:, symbols:, origin_row:, origin_col: 0, output: $stdout)
-          @store  = tick_store
+        def initialize(tick_store:, symbols:, origin_row:, stale_tick_seconds: 45, origin_col: 0, output: $stdout)
+          @store = tick_store
           @symbols = symbols
-          @row    = origin_row
-          @col    = origin_col
+          @row = origin_row
+          @col = origin_col
           @output = output
           @cursor = TTY::Cursor
+          @stale_tick_seconds = stale_tick_seconds.to_f
         end
 
         def render
@@ -46,15 +46,16 @@ module CoindcxBot
 
         private
 
+        # See StatusPanel#move — tty-cursor #move_to: pass column then row.
         def move(row)
-          @cursor.move_to(row, @col)
+          @cursor.move_to(@col, row)
         end
 
         def format_tick_row(tick, symbol, now)
           return dim(format(HEADER_FMT, symbol, '---', '---', '---')) if tick.nil?
 
-          age     = (now - tick.updated_at).round(1)
-          stale   = age > STALE_THRESHOLD
+          age   = (now - tick.updated_at).round(1)
+          stale = age > @stale_tick_seconds
           chg_str = tick.change_pct ? format('%+.2f%%', tick.change_pct) : 'n/a'
           ltp_str = format('%12.4f', tick.ltp)
           ltp_colored = colorize_ltp(ltp_str, tick, stale)

@@ -44,6 +44,13 @@ RSpec.describe CoindcxBot::Tui::TickStore do
 
       expect(store.snapshot['SOLUSDT'].change_pct).to be_nil
     end
+
+    it 'uses provided updated_at for age display' do
+      past = Time.utc(2024, 6, 1, 12, 0, 0)
+      store.update(symbol: 'SOLUSDT', ltp: '100.0', updated_at: past)
+
+      expect(store.snapshot['SOLUSDT'].updated_at).to eq(past)
+    end
   end
 
   describe '#stale?' do

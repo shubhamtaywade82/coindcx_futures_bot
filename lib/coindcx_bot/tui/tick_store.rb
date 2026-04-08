@@ -10,12 +10,13 @@ module CoindcxBot
         @ticks = {}
       end
 
-      def update(symbol:, ltp:, change_pct: nil)
+      def update(symbol:, ltp:, change_pct: nil, updated_at: nil)
+        at = updated_at || Time.now
         tick = Tick.new(
           symbol: symbol,
           ltp: ltp.to_f,
           change_pct: change_pct&.to_f,
-          updated_at: Time.now
+          updated_at: at
         )
         @mutex.synchronize { @ticks[symbol] = tick }
       end

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'fileutils'
+require 'stringio'
 require 'tty-cursor'
 require 'tty-logger'
 require 'tty-screen'
@@ -15,10 +17,12 @@ module CoindcxBot
       end
 
       def run
+        engine = nil
+        engine_thread = nil
+        config = CoindcxBot::Config.load
         setup_terminal
-        config     = CoindcxBot::Config.load
-        tick_store  = TickStore.new
-        engine     = CoindcxBot::Core::Engine.new(
+        tick_store = TickStore.new
+        engine = CoindcxBot::Core::Engine.new(
           config: config,
           logger: build_logger,
           tick_store: tick_store
@@ -30,7 +34,8 @@ module CoindcxBot
 
         engine_thread = start_engine(engine)
 
-        draw_chrome(symbols)
+        status_panel, ltp_panel = panels
+        draw_chrome(symbols, keybar_row: status_panel.row_count + ltp_panel.row_count)
         @render_loop.start
 
         keyboard_loop(engine)
@@ -49,38 +54,85 @@ module CoindcxBot
       def setup_terminal
         $stdout.sync = true
         $stderr.sync = true
+        redirect_stderr_for_tui!
         print TTY::Cursor.hide
         print "\e[2J\e[H"
       end
 
+      # Never write engine / gem logs to the real terminal while the TUI redraws on stdout — concurrent
+      # writes corrupt the screen (split escape codes and columns). Quiet: discard. Verbose: append to a file.
+      def redirect_stderr_for_tui!
+        @stderr_backup = $stderr.dup
+        target =
+          if tui_verbose?
+            path = tui_engine_log_path
+            FileUtils.mkdir_p(File.dirname(path))
+            path
+          else
+            File::NULL
+          end
+        $stderr.reopen(target, 'a')
+        $stderr.sync = true
+      rescue StandardError
+        $stderr.reopen(File::NULL, 'w')
+        $stderr.sync = true
+      end
+
+      def tui_engine_log_path
+        custom = ENV['COINDCX_TUI_LOG'].to_s.strip
+        return File.expand_path(custom) unless custom.empty?
+
+        File.expand_path('tmp/coindcx_tui.log')
+      end
+
+      def restore_stderr!
+        return unless @stderr_backup
+
+        $stderr.reopen(@stderr_backup)
+        @stderr_backup.close
+        @stderr_backup = nil
+      end
+
+      def tui_verbose?
+        ENV['COINDCX_TUI_VERBOSE'].to_s == '1'
+      end
+
       def build_logger
-        TTY::Logger.new(output: File.open(File::NULL, 'w'))
+        out =
+          if tui_verbose?
+            $stderr
+          else
+            @null_log_io ||= File.open(File::NULL, 'w')
+          end
+        TTY::Logger.new(output: out)
       end
 
       def build_panels(tick_store:, engine:, symbols:)
+        stale_sec = engine.config.runtime.fetch(:stale_tick_seconds, 45).to_i
         status = Panels::StatusPanel.new(engine: engine, origin_row: 0)
         ltp    = Panels::LtpPanel.new(
           tick_store: tick_store,
           symbols: symbols,
-          origin_row: status.row_count + 1
+          origin_row: status.row_count,
+          stale_tick_seconds: stale_sec
         )
         [status, ltp]
       end
 
       def start_engine(engine)
         Thread.new do
+          Thread.current.report_on_exception = false
           engine.run
         rescue StandardError => e
           warn "[Engine] #{e.class}: #{e.message}"
         end
       end
 
-      def draw_chrome(symbols)
+      def draw_chrome(symbols, keybar_row:)
         term_w = TTY::Screen.width || 80
-        keybar_row = 3 + 2 + symbols.length + 2
 
         buf = StringIO.new
-        buf << TTY::Cursor.move_to(keybar_row, 0)
+        buf << TTY::Cursor.move_to(0, keybar_row)
         buf << "\e[2m#{'─' * [term_w - 1, 40].min}\e[0m\n"
         buf << keybar_text
         buf << "\n\e[2mAuto-refresh #{(RENDER_INTERVAL * 1000).to_i}ms · ^C or q to exit\e[0m"
@@ -137,6 +189,9 @@ module CoindcxBot
         @render_loop&.stop
         engine&.request_stop!
         engine_thread&.join(60) if engine_thread&.alive?
+        @null_log_io&.close
+        @null_log_io = nil
+        restore_stderr!
         print TTY::Cursor.show
         print "\e[?25h"
       end

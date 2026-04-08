@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
 require 'logger'
 
 module CoindcxBot
@@ -140,8 +141,25 @@ module CoindcxBot
         @tick_store.update(
           symbol: tick.pair,
           ltp: tick.price,
-          change_pct: tick.change_pct
+          change_pct: tick.change_pct,
+          updated_at: tick.received_at
         )
+      end
+
+      def mirror_tracker_into_tick_store
+        return unless @tick_store
+
+        @config.pairs.each do |pair|
+          t = @tracker.last_tick(pair)
+          next unless t
+
+          @tick_store.update(
+            symbol: pair,
+            ltp: t.price,
+            change_pct: t.change_pct,
+            updated_at: t.received_at
+          )
+        end
       end
 
       def configure_coin_dcx
@@ -153,9 +171,11 @@ module CoindcxBot
           url = ENV['COINDCX_SOCKET_BASE_URL'].to_s.strip
           c.socket_base_url = url unless url.empty?
 
+          # Default backend (socket.io-client-simple) matches CoinDCX Engine.IO v3 only; forcing EIO 4
+          # breaks the handshake. Leave gem default unless COINDCX_SOCKET_EIO is set explicitly.
           if c.respond_to?(:socket_io_connect_options=)
             eio = ENV['COINDCX_SOCKET_EIO'].to_s.strip
-            c.socket_io_connect_options = eio.empty? ? { EIO: 4 } : { EIO: Integer(eio) }
+            c.socket_io_connect_options = { EIO: Integer(eio) } unless eio.empty?
           end
         end
       end
@@ -191,6 +211,8 @@ module CoindcxBot
         @journal.reset_daily_pnl_if_new_day!
         load_candles
         seed_tracker_from_last_candle_if_no_ltp
+        refresh_tracker_from_exec_candle_when_ws_stale
+        mirror_tracker_into_tick_store
         stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
         @last_error = 'stale_feed' if stale
 
@@ -200,8 +222,7 @@ module CoindcxBot
         @logger.error(e.full_message)
       end
 
-      # Only when we have never seen a price (WS slower than first REST load). Do not touch LTP when
-      # WS goes quiet — that would fake a fresh tick and hide `ws_feed_stale?` / unblock entries wrongly.
+      # Cold start when REST returns before any WebSocket parseable tick.
       def seed_tracker_from_last_candle_if_no_ltp
         @config.pairs.each do |pair|
           next if @tracker.ltp(pair)
@@ -214,6 +235,41 @@ module CoindcxBot
             Dto::Tick.new(pair: pair, price: candle.close, received_at: Time.now)
           )
         end
+      end
+
+      # While `ws_feed_stale?` is true, keep LTP/CHG in sync with the latest execution candle on each
+      # `tick_cycle` (does not set `@ws_tick_at`; entries stay blocked until real WS ticks).
+      def refresh_tracker_from_exec_candle_when_ws_stale
+        @config.pairs.each do |pair|
+          next unless ws_feed_stale?(pair)
+
+          exec = @candles_exec[pair] || []
+          candle = exec.last
+          next unless candle
+
+          chg = bar_change_pct_from_candle(candle)
+          @tracker.record_tick(
+            Dto::Tick.new(
+              pair: pair,
+              price: candle.close,
+              change_pct: chg,
+              received_at: Time.now
+            )
+          )
+        end
+      end
+
+      def bar_change_pct_from_candle(candle)
+        o = candle.open
+        c = candle.close
+        return nil if o.nil? || c.nil?
+
+        open_bd = BigDecimal(o.to_s)
+        return nil if open_bd.zero?
+
+        ((BigDecimal(c.to_s) - open_bd) / open_bd * 100).round(4)
+      rescue ArgumentError, TypeError
+        nil
       end
 
       def ws_feed_stale?(pair)

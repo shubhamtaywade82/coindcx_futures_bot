@@ -58,11 +58,21 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
     end
 
     context 'with a stale tick' do
-      it 'renders STALE marker and dims the LTP' do
-        tick_store.update(symbol: 'SOLUSDT', ltp: '100.0')
-        sleep 0.01
+      let(:panel) do
+        described_class.new(
+          tick_store: tick_store,
+          symbols: symbols,
+          origin_row: 0,
+          stale_tick_seconds: 30,
+          output: output
+        )
+      end
 
-        allow(Time).to receive(:now).and_return(Time.now + 10)
+      it 'renders STALE marker and dims the LTP when age exceeds stale_tick_seconds' do
+        base = Time.utc(2025, 6, 1, 12, 0, 0)
+        tick_store.update(symbol: 'SOLUSDT', ltp: '100.0', updated_at: base)
+        allow(Time).to receive(:now).and_return(base + 40)
+
         panel.render
 
         expect(output.string).to include('[STALE]')

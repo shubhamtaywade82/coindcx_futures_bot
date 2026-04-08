@@ -37,8 +37,9 @@ module CoindcxBot
 
         private
 
+        # tty-cursor #move_to emits CUP as "\e[column+1;row+1H" (see gem source); pass column then row.
         def move(row)
-          @cursor.move_to(row, @col)
+          @cursor.move_to(@col, row)
         end
 
         def mode_line(snap)
