@@ -72,7 +72,15 @@ module CoindcxBot
                                           leverage: lev)
 
         if @dry
-          @logger&.info("[dry_run] would create order: #{body}")
+          @journal.insert_position(
+            pair: signal.pair,
+            side: signal.side.to_s,
+            entry_price: ep,
+            quantity: quantity,
+            stop_price: signal.stop_price,
+            trail_price: nil
+          )
+          @logger&.info("[dry_run] journal open (no exchange): #{body}")
           return :dry_run
         end
 

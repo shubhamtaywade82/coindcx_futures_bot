@@ -64,13 +64,10 @@ RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
       end
     end
 
-    it 'increments frame counter on each render' do
+    it 'redraws the mode line on each render' do
       3.times { panel.render }
-      rendered = output.string
 
-      expect(rendered).to include('frame #1')
-      expect(rendered).to include('frame #2')
-      expect(rendered).to include('frame #3')
+      expect(output.string.scan('DRY RUN').size).to eq(3)
     end
   end
 

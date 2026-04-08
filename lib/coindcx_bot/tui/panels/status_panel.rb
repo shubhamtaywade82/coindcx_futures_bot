@@ -13,11 +13,9 @@ module CoindcxBot
           @col    = origin_col
           @output = output
           @cursor = TTY::Cursor
-          @frame  = 0
         end
 
         def render
-          @frame += 1
           snap = @engine.snapshot
 
           buf = StringIO.new
@@ -45,8 +43,7 @@ module CoindcxBot
         def mode_line(snap)
           mode = snap.dry_run ? inverse_magenta('  DRY RUN  ') : inverse_red('  LIVE  ')
           time = dim(Time.now.strftime('%Y-%m-%d %H:%M:%S'))
-          frame_info = dim("frame ##{@frame}")
-          clear_line("#{mode}  #{time}  #{frame_info}")
+          clear_line("#{mode}  #{time}")
         end
 
         def status_line(snap)

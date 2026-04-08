@@ -54,7 +54,7 @@ Override config path:
 COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 ```
 
-Keep `runtime.dry_run: true` until order payloads are validated for your account.
+Keep `runtime.dry_run: true` until order payloads are validated for your account. In dry mode the bot still **opens and closes rows in the local SQLite journal** so strategy state and exits stay consistent; it skips exchange order and account exit calls.
 
 ## TUI (`bin/bot tui`)
 
