@@ -1,5 +1,7 @@
-PATH
-  remote: /home/nemesis/project/trading-workspace/coindcx-client
+GIT
+  remote: https://github.com/shubhamtaywade82/coindcx-client.git
+  revision: 8ab760ee1f5f4877b9e4939174f6e0a34168456f
+  branch: main
   specs:
     coindcx-client (0.1.0)
       faraday (~> 2.14)

@@ -4,12 +4,8 @@ source 'https://rubygems.org'
 
 ruby '>= 3.1'
 
-coindcx_path = File.expand_path('../coindcx-client', __dir__)
-if File.directory?(coindcx_path)
-  gem 'coindcx-client', path: coindcx_path
-else
-  gem 'coindcx-client', git: 'https://github.com/shubhamtaywade82/coindcx-client.git'
-end
+# Latest from GitHub (override with `bundle config local.coindcx-client ../coindcx-client` for local dev)
+gem 'coindcx-client', git: 'https://github.com/shubhamtaywade82/coindcx-client.git', branch: 'main'
 
 gem 'bigdecimal'
 gem 'dotenv', '~> 3.1'
