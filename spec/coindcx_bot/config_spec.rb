@@ -1,6 +1,13 @@
 # frozen_string_literal: true
 
 RSpec.describe CoindcxBot::Config do
+  it 'treats runtime.paper as dry_run (paper trading mode)' do
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { journal_path: '/tmp/x.sqlite3', paper: true, dry_run: false })
+    )
+    expect(cfg.dry_run?).to be(true)
+  end
+
   it 'rejects per_trade_inr_min greater than max' do
     bad = minimal_bot_config(risk: { per_trade_inr_min: 600, per_trade_inr_max: 500 })
     expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /per_trade_inr_min/)

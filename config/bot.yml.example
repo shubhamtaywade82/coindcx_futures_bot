@@ -67,4 +67,6 @@ runtime:
   stale_recovery_sleep_seconds: 5
   # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
   ws_shutdown_join_seconds: 45
+  # Paper trading: no futures orders / account exits. Same effect as dry_run (either key is enough).
   dry_run: true
+  # paper: true

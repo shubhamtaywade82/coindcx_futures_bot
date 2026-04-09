@@ -47,6 +47,7 @@ module CoindcxBot
 
         Environment: COINDCX_API_KEY, COINDCX_API_SECRET (optional: .env / .env.local in repo root)
         Config: config/bot.yml (see config/bot.yml.example)
+        Paper trading: runtime.dry_run or runtime.paper — journals positions, no exchange orders
       HELP
     end
   end
