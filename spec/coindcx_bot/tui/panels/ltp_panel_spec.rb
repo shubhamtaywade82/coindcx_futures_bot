@@ -57,6 +57,33 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
       end
     end
 
+    context 'with engine WS clock (AGE matches header STALE, not candle mirror)' do
+      let(:base) { Time.utc(2025, 6, 1, 12, 0, 0) }
+      let(:engine) { instance_double(CoindcxBot::Core::Engine) }
+      let(:panel) do
+        described_class.new(
+          tick_store: tick_store,
+          symbols: %w[B-SOL_USDT],
+          origin_row: 0,
+          stale_tick_seconds: 45,
+          engine: engine,
+          output: output
+        )
+      end
+
+      before do
+        tick_store.update(symbol: 'B-SOL_USDT', ltp: '100.0', change_pct: '0.1', updated_at: base + 2)
+        allow(engine).to receive(:last_ws_tick_at).with('B-SOL_USDT').and_return(base)
+        allow(Time).to receive(:now).and_return(base + 50)
+      end
+
+      it 'marks STALE from last WS time even when tick_store was just updated' do
+        panel.render
+        expect(output.string).to include('[STALE]')
+        expect(output.string).to match(/50\.00s/)
+      end
+    end
+
     context 'with a stale tick' do
       let(:panel) do
         described_class.new(

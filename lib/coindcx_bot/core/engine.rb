@@ -38,7 +38,7 @@ module CoindcxBot
           order_defaults: config.execution.fetch(:order_defaults, {})
         )
         @account = Gateways::AccountGateway.new(client: @client)
-        @ws = Gateways::WsGateway.new(client: @client)
+        @ws = Gateways::WsGateway.new(client: @client, logger: @logger)
         @broker = build_broker(config)
         @coord = Execution::Coordinator.new(
           broker: @broker,
@@ -62,6 +62,7 @@ module CoindcxBot
           @ws_tick_at[tick.pair] = Time.now
           @tracker.record_tick(tick)
           forward_tick_to_store(tick)
+          @logger&.info("[ws] tick #{tick.pair} #{tick.price}") if ENV['COINDCX_WS_TRACE'].to_s == '1'
         end
 
         @ws_shutdown_timeout = config.runtime.fetch(:ws_shutdown_join_seconds, 45).to_f
@@ -69,6 +70,12 @@ module CoindcxBot
       end
 
       attr_reader :config, :logger, :journal, :broker
+
+      # Wall-clock time of the last **WebSocket** tick for this pair (not REST candle mirrors).
+      # Used by the TUI so "AGE" matches `STALE` / entry gating (`@ws_tick_at` only updates from WS).
+      def last_ws_tick_at(pair)
+        @ws_tick_at[pair]
+      end
 
       def snapshot
         ticks = @config.pairs.to_h do |p|
@@ -271,6 +278,9 @@ module CoindcxBot
           @last_error = "ws sub #{pair}: #{sub.message}" if sub.failure?
         end
 
+        rt = @ws.subscribe_futures_current_prices_rt(pairs: @config.pairs) { |tick| @bus.publish(:tick, tick) }
+        @last_error = "ws currentPrices@futures: #{rt.message}" if rt.failure?
+
         ou = @ws.subscribe_order_updates do |payload|
           @journal.log_event('ws_order_update', ws_order_snippet(payload))
         rescue StandardError => e
@@ -313,6 +323,7 @@ module CoindcxBot
           @tracker.record_tick(
             Dto::Tick.new(pair: pair, price: candle.close, received_at: Time.now)
           )
+          touch_ws_staleness_clock_for_paper(pair)
         end
       end
 
@@ -335,6 +346,7 @@ module CoindcxBot
               received_at: Time.now
             )
           )
+          touch_ws_staleness_clock_for_paper(pair)
         end
       end
 
@@ -356,6 +368,20 @@ module CoindcxBot
         return true unless at
 
         Time.now - at > @stale_seconds
+      end
+
+      # Paper only: advancing the WS clock when we mirror REST candles keeps STALE/TUI AGE aligned with
+      # the LTP you see. Live trading never does this — entries still require real socket ticks unless dry_run.
+      def touch_ws_staleness_clock_for_paper(pair)
+        return unless paper_rest_advances_ws_stale_clock?
+
+        @ws_tick_at[pair] = Time.now
+      end
+
+      def paper_rest_advances_ws_stale_clock?
+        return false unless @config.dry_run?
+
+        @config.runtime.fetch(:paper_rest_advances_ws_stale_clock, true)
       end
 
       def sleep_seconds_after_tick_cycle

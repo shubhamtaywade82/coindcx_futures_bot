@@ -72,6 +72,8 @@ runtime:
   # paper: true
   # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.
   # log_strategy_signals: true
+  # Paper only: when true (default), mirroring REST candles into LTP also refreshes the WS staleness clock so STALE/AGE match the UI. Live ignores this.
+  # paper_rest_advances_ws_stale_clock: true
   # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
   # log_strategy_signals: true
 

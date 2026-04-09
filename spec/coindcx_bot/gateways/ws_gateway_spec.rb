@@ -20,6 +20,18 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
       expect(tick.price).to eq(BigDecimal('99'))
     end
 
+    it 'accepts hyphenated symbol hints (SOL-USDT vs B-SOL_USDT)' do
+      tick = gateway.send(:normalize_tick, 'B-SOL_USDT', { 'p' => '99', 's' => 'SOL-USDT' })
+      expect(tick).not_to be_nil
+      expect(tick.price).to eq(BigDecimal('99'))
+    end
+
+    it 'reads uppercase S instrument key' do
+      tick = gateway.send(:normalize_tick, 'B-ETH_USDT', { 'p' => '2200', 'S' => 'ETHUSDT' })
+      expect(tick).not_to be_nil
+      expect(tick.price).to eq(BigDecimal('2200'))
+    end
+
     it 'unwraps nested data hashes from the wire' do
       tick = gateway.send(:normalize_tick, 'B-ETH_USDT', { 'data' => { 'p' => '2100.5' } })
       expect(tick.price).to eq(BigDecimal('2100.5'))
@@ -65,6 +77,52 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
     it 'uses first hash in an array payload' do
       tick = gateway.send(:normalize_tick, 'B-SOL_USDT', [{ 'p' => '84.5' }])
       expect(tick.price).to eq(BigDecimal('84.5'))
+    end
+  end
+
+  describe 'currentPrices@futures fan-out (private helpers)' do
+    let(:client) { instance_double(CoinDCX::Client, ws: nil) }
+    let(:gateway) { described_class.new(client: client) }
+
+    it 'builds ticks from a flat prices map' do
+      payload = { 'prices' => { 'B-SOL_USDT' => '83.4', 'B-ETH_USDT' => '2204.9' } }
+      ticks = gateway.send(:ticks_from_current_prices_payload, payload, %w[B-SOL_USDT B-ETH_USDT])
+      expect(ticks.map(&:pair)).to contain_exactly('B-SOL_USDT', 'B-ETH_USDT')
+      expect(ticks.find { |t| t.pair == 'B-SOL_USDT' }.price).to eq(BigDecimal('83.4'))
+    end
+
+    it 'reads nested ltp/pc per instrument' do
+      payload = {
+        'prices' => {
+          'B-SOL_USDT' => { 'ltp' => '100.5', 'pc' => '-0.25' }
+        }
+      }
+      ticks = gateway.send(:ticks_from_current_prices_payload, payload, ['B-SOL_USDT'])
+      expect(ticks.size).to eq(1)
+      expect(ticks.first.price).to eq(BigDecimal('100.5'))
+      expect(ticks.first.change_pct).to eq(BigDecimal('-0.25'))
+    end
+
+    it 'finds prices nested under channelData-style wrappers' do
+      payload = {
+        'channelData' => {
+          'prices' => { 'B-ETH_USDT' => '2100.1' }
+        }
+      }
+      ticks = gateway.send(:ticks_from_current_prices_payload, payload, ['B-ETH_USDT'])
+      expect(ticks.size).to eq(1)
+      expect(ticks.first.price).to eq(BigDecimal('2100.1'))
+    end
+
+    it 'reads array-of-row instrument quotes' do
+      payload = {
+        'prices' => [
+          { 'pair' => 'B-SOL_USDT', 'ltp' => '50.25' },
+          { 'symbol' => 'B-ETH_USDT', 'p' => '2000' }
+        ]
+      }
+      ticks = gateway.send(:ticks_from_current_prices_payload, payload, %w[B-SOL_USDT B-ETH_USDT])
+      expect(ticks.size).to eq(2)
     end
   end
 end
