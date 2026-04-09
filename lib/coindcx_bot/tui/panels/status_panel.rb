@@ -87,7 +87,7 @@ module CoindcxBot
           side = p[:side] || p['side']
           qty = p[:quantity] || p['quantity']
           entry = p[:entry_price] || p['entry_price']
-          "#{green("##{id}")} #{pair} #{yellow(side.to_s)} #{dim('qty')}=#{qty} #{dim('@')} #{entry}"
+          "#{green("##{id}")} #{pair} #{yellow(side.to_s)} #{dim('qty')}=#{fmt_dec(qty)} #{dim('@')} #{fmt_dec(entry)}"
         end
 
         def metrics_line(snap)
@@ -98,20 +98,26 @@ module CoindcxBot
 
         def paper_metrics_line(snap)
           pm = snap.paper_metrics
-          realized = format('%.4f', pm[:total_realized_pnl] || 0)
-          unrealized = format('%.4f', pm[:unrealized_pnl] || 0)
-          fees = format('%.4f', pm[:total_fees] || 0)
-          slip = format('%.4f', pm[:total_slippage] || 0)
-          fills = pm[:fill_count] || 0
+          realized = fmt_dec(pm[:total_realized_pnl] || 0)
+          unrealized = fmt_dec(pm[:unrealized_pnl] || 0)
+          fees = fmt_dec(pm[:total_fees] || 0)
+          slip = fmt_dec(pm[:total_slippage] || 0)
+          fills = fmt_dec(pm[:fill_count] || 0)
 
           parts = [
             "#{bold('Realized')} #{bold_cyan(realized)}",
             "#{bold('Unreal')} #{yellow(unrealized)}",
             "#{bold('Fees')} #{dim(fees)}",
             "#{bold('Slip')} #{dim(slip)}",
-            "#{bold('Fills')} #{dim(fills.to_s)}"
+            "#{bold('Fills')} #{dim(fills)}"
           ]
           clear_line(parts.join(dim('  ·  ')))
+        end
+
+        def fmt_dec(value)
+          format('%.2f', BigDecimal(value.to_s))
+        rescue ArgumentError, TypeError
+          '0.00'
         end
 
         def clear_line(content)

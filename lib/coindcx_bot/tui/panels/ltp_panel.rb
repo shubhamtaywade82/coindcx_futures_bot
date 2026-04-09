@@ -7,7 +7,7 @@ module CoindcxBot
   module Tui
     module Panels
       class LtpPanel
-        HEADER_FMT = '  %-16s %12s %10s %8s  '
+        HEADER_FMT = '  %-16s %12s %10s %9s  '
         HEADER = format(HEADER_FMT, 'SYMBOL', 'LTP', 'CHG%', 'AGE')
         SEPARATOR = ('-' * HEADER.length).freeze
 
@@ -54,13 +54,14 @@ module CoindcxBot
         def format_tick_row(tick, symbol, now)
           return dim(format(HEADER_FMT, symbol, '---', '---', '---')) if tick.nil?
 
-          age   = (now - tick.updated_at).round(1)
-          stale = age > @stale_tick_seconds
+          age_sec = (now - tick.updated_at).to_f
+          stale = age_sec > @stale_tick_seconds
           chg_str = tick.change_pct ? format('%+.2f%%', tick.change_pct) : 'n/a'
           ltp_str = format('%12.2f', tick.ltp)
           ltp_colored = colorize_ltp(ltp_str, tick, stale)
+          age_str = format('%.2fs', age_sec)
 
-          line = format('  %-16s %s %10s %7.1fs  ', symbol, ltp_colored, chg_str, age)
+          line = format('  %-16s %s %10s %9s  ', symbol, ltp_colored, chg_str, age_str)
           stale ? "#{line}  [STALE]" : line
         end
 

@@ -66,7 +66,7 @@ RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
         expect(rendered).to include('B-SOL_USDT')
         expect(rendered).to include('long')
         expect(rendered).to include('0.02')
-        expect(rendered).to include('142.5')
+        expect(rendered).to include('142.50')
       end
     end
 
@@ -136,10 +136,10 @@ RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
         rendered = output.string
 
         expect(rendered).to include('Realized')
-        expect(rendered).to include('15.5')
+        expect(rendered).to include('15.50')
         expect(rendered).to include('Fees')
         expect(rendered).to include('Fills')
-        expect(rendered).to include('4')
+        expect(rendered).to include('4.00')
       end
     end
   end
