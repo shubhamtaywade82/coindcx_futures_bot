@@ -14,18 +14,8 @@ module CoindcxBot
         @dry = config.dry_run?
       end
 
-      def flatten_all(pairs)
-        pairs.each { |pair| flatten_pair(pair) }
-      end
-
-      def flatten_pair(pair)
-        @journal.log_event('flatten', pair: pair)
-        @broker.close_position(pair: pair, side: nil, quantity: 0, ltp: 0) unless @broker.paper?
-
-        @journal.open_positions.select { |row| row[:pair] == pair }.each do |row|
-          @journal.close_position(row[:id])
-        end
-        :ok
+      def flatten_all(pairs, ltps: {})
+        pairs.each { |pair| flatten_pair(pair, ltp: ltps[pair] || ltps[pair.to_s] || ltps[pair.to_sym]) }
       end
 
       def apply(signal, quantity: nil, entry_price: nil, exit_price: nil)
@@ -47,6 +37,22 @@ module CoindcxBot
       end
 
       private
+
+      def flatten_pair(pair, ltp: nil)
+        pair_s = pair.to_s
+        @journal.log_event('flatten', pair: pair_s)
+
+        if @broker.paper?
+          paper_flatten_pair(pair_s, ltp)
+        else
+          @broker.close_position(pair: pair_s, side: nil, quantity: 0, ltp: 0)
+        end
+
+        @journal.open_positions.select { |row| row[:pair] == pair_s }.each do |row|
+          @journal.close_position(row[:id])
+        end
+        :ok
+      end
 
       def open_position(signal, quantity, entry_price)
         return :rejected if quantity.nil? || quantity <= 0
@@ -75,7 +81,8 @@ module CoindcxBot
           leverage: leverage
         )
 
-        journal_open(signal, quantity, entry_price)
+        journal_id = journal_open(signal, quantity, entry_price)
+        sync_journal_entry_from_paper_fill(signal.pair.to_s, journal_id) if result == :ok
         @logger&.info("[paper] opened #{signal.side} #{signal.pair} qty=#{quantity}")
         result == :ok ? :paper : :failed
       end
@@ -133,14 +140,14 @@ module CoindcxBot
         if row && exit_price
           ltp = BigDecimal(exit_price.to_s)
           qty = BigDecimal(row[:quantity].to_s)
-          @broker.close_position(
-            pair: signal.pair,
+          res = @broker.close_position(
+            pair: signal.pair.to_s,
             side: row[:side],
             quantity: qty,
             ltp: ltp,
             position_id: nil
           )
-          record_paper_realized_pnl(row, exit_price)
+          book_inr_from_paper_close(res, row: row, pair: signal.pair.to_s, source: :strategy_close)
         end
 
         @journal.close_position(close_id)
@@ -150,7 +157,7 @@ module CoindcxBot
 
       def close_via_live_broker(signal, close_id, exit_price)
         @broker.close_position(
-          pair: signal.pair,
+          pair: signal.pair.to_s,
           side: nil,
           quantity: 0,
           ltp: exit_price || 0
@@ -218,31 +225,62 @@ module CoindcxBot
         end
       end
 
-      def record_paper_realized_pnl(row, exit_price)
-        return if exit_price.nil?
+      def paper_flatten_pair(pair, ltp)
+        pos = @broker.open_position_for(pair)
+        return if pos.nil?
 
-        entry = BigDecimal(row[:entry_price].to_s)
-        qty = BigDecimal(row[:quantity].to_s)
-        ex = BigDecimal(exit_price.to_s)
+        ltp_bd = coerce_ltp(ltp)
+        unless ltp_bd
+          @logger&.warn("paper flatten: no LTP for #{pair}, skipping PaperStore close")
+          return
+        end
 
-        usdt_pnl =
-          case row[:side].to_s
-          when 'long' then (ex - entry) * qty
-          when 'short' then (entry - ex) * qty
-          else return
-          end
+        qty = BigDecimal(pos[:quantity].to_s)
+        res = @broker.close_position(
+          pair: pair,
+          side: pos[:side],
+          quantity: qty,
+          ltp: ltp_bd,
+          position_id: pos[:id]
+        )
+        book_inr_from_paper_close(res, row: nil, pair: pair, source: :flatten)
+      end
 
-        inr = usdt_pnl * @config.inr_per_usdt
+      def coerce_ltp(ltp)
+        return nil if ltp.nil?
+
+        BigDecimal(ltp.to_s)
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def book_inr_from_paper_close(result, row:, pair:, source:)
+        return unless paper_broker_close_result?(result) && result[:ok] && result[:realized_pnl_usdt]
+
+        usdt = BigDecimal(result[:realized_pnl_usdt].to_s)
+        inr = usdt * @config.inr_per_usdt
         @journal.add_daily_pnl_inr(inr)
         @journal.log_event(
           'paper_realized',
-          position_id: row[:id],
-          pair: row[:pair],
-          pnl_usdt: usdt_pnl.to_s('F'),
+          position_id: row&.dig(:id) || result[:position_id],
+          pair: pair,
+          pnl_usdt: usdt.to_s('F'),
           pnl_inr: inr.to_s('F'),
-          exit_price: ex.to_s('F')
+          exit_price: BigDecimal(result[:fill_price].to_s).to_s('F'),
+          source: source.to_s
         )
-        @logger&.info("[paper] PnL ~₹#{inr.to_s('F')} (#{usdt_pnl.to_s('F')} USDT) #{row[:pair]} ##{row[:id]}")
+        @logger&.info("[paper] PnL ~₹#{inr.to_s('F')} (#{usdt.to_s('F')} USDT) #{pair}")
+      end
+
+      def paper_broker_close_result?(result)
+        result.is_a?(Hash) && result.key?(:ok)
+      end
+
+      def sync_journal_entry_from_paper_fill(pair, journal_id)
+        paper_pos = @broker.open_position_for(pair)
+        return unless paper_pos && paper_pos[:entry_price]
+
+        @journal.update_position_entry_price(journal_id, paper_pos[:entry_price])
       end
 
       def effective_leverage

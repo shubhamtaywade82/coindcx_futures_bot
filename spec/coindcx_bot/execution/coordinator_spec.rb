@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
+require 'securerandom'
+
 RSpec.describe CoindcxBot::Execution::Coordinator do
-  let(:journal_path) { Tempfile.new(['coord', '.sqlite3']).path }
+  let(:journal_path) { File.join(Dir.tmpdir, "coindcx_coord_journal_#{SecureRandom.hex(12)}.sqlite3") }
   let(:journal) { CoindcxBot::Persistence::Journal.new(journal_path) }
   let(:orders) { instance_double(CoindcxBot::Gateways::OrderGateway) }
   let(:account) { instance_double(CoindcxBot::Gateways::AccountGateway) }
@@ -64,7 +66,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
   end
 
   context 'when paper mode' do
-    let(:paper_store_path) { Tempfile.new(['paper', '.sqlite3']).path }
+    let(:paper_store_path) { File.join(Dir.tmpdir, "coindcx_coord_paper_#{SecureRandom.hex(12)}.sqlite3") }
     let(:paper_store) { CoindcxBot::Persistence::PaperStore.new(paper_store_path) }
     let(:fill_engine) { CoindcxBot::Execution::FillEngine.new(slippage_bps: 5, fee_bps: 4) }
 
@@ -104,7 +106,9 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(rows.size).to eq(1)
       expect(rows.first[:pair]).to eq('B-SOL_USDT')
       expect(rows.first[:side]).to eq('long')
-      expect(rows.first[:entry_price]).to eq('100.0')
+      paper_entry = BigDecimal(broker.open_position_for('B-SOL_USDT')[:entry_price].to_s)
+      expect(BigDecimal(rows.first[:entry_price])).to eq(paper_entry)
+      expect(paper_entry).to be > BigDecimal('100')
       expect(rows.first[:state]).to eq('open')
     end
 
@@ -153,7 +157,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(journal.open_positions).to be_empty
     end
 
-    it 'records approximate realized PnL in INR when closing with exit_price' do
+    it 'books daily INR from paper broker realized USDT on close' do
       open_signal = CoindcxBot::Strategy::Signal.new(
         action: :open_long,
         pair: 'B-SOL_USDT',
@@ -176,7 +180,44 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
 
       coordinator.apply(close_signal, exit_price: BigDecimal('110'))
 
-      expect(journal.daily_pnl_inr).to eq(BigDecimal('415'))
+      closed = paper_store.all_positions.find { |p| p[:pair] == 'B-SOL_USDT' && p[:status] == 'closed' }
+      usdt = BigDecimal(closed[:realized_pnl])
+      expect(journal.daily_pnl_inr).to eq(usdt * config.inr_per_usdt)
+    end
+
+    it 'closes PaperStore and journal on flatten when LTP is provided' do
+      open_signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: {}
+      )
+      coordinator.apply(open_signal, quantity: BigDecimal('0.1'), entry_price: BigDecimal('100'))
+
+      expect(paper_store.open_positions.size).to eq(1)
+      coordinator.flatten_all(['B-SOL_USDT'], ltps: { 'B-SOL_USDT' => BigDecimal('102') })
+
+      expect(journal.open_positions).to be_empty
+      expect(paper_store.open_positions).to be_empty
+    end
+
+    it 'skips PaperStore close on flatten when LTP is missing but still closes journal' do
+      open_signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: {}
+      )
+      coordinator.apply(open_signal, quantity: BigDecimal('0.1'), entry_price: BigDecimal('100'))
+
+      coordinator.flatten_all(['B-SOL_USDT'], ltps: {})
+
+      expect(journal.open_positions).to be_empty
+      expect(paper_store.open_positions.size).to eq(1)
     end
 
     it 'returns failed when position_id does not match an open row' do

@@ -86,7 +86,8 @@ RSpec.describe CoindcxBot::Execution::PaperBroker do
         pair: 'B-SOL_USDT', side: 'long', quantity: BigDecimal('1'), ltp: BigDecimal('110')
       )
 
-      expect(result).to eq(:ok)
+      expect(result[:ok]).to be true
+      expect(result[:realized_pnl_usdt]).to be_a(BigDecimal)
       expect(store.open_positions).to be_empty
 
       closed = store.all_positions.find { |p| p[:status] == 'closed' }
@@ -109,7 +110,8 @@ RSpec.describe CoindcxBot::Execution::PaperBroker do
       result = broker.close_position(
         pair: 'B-ETH_USDT', side: 'long', quantity: BigDecimal('1'), ltp: BigDecimal('2000')
       )
-      expect(result).to eq(:no_position)
+      expect(result[:ok]).to be false
+      expect(result[:reason]).to eq(:no_position)
     end
   end
 

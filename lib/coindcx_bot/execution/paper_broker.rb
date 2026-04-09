@@ -78,7 +78,7 @@ module CoindcxBot
 
       def close_position(pair:, side:, quantity:, ltp:, position_id: nil)
         pos = resolve_position(pair, position_id)
-        return :no_position unless pos
+        return { ok: false, reason: :no_position } unless pos
 
         exit_side = opposite_side(pos[:side])
         fill = @fill_engine.fill_market_order(side: exit_side, quantity: quantity, ltp: ltp)
@@ -127,7 +127,12 @@ module CoindcxBot
         )
 
         @logger&.info("[paper] closed #{pair} pnl=#{pnl.to_s('F')} exit=#{fill[:fill_price].to_s('F')}")
-        :ok
+        {
+          ok: true,
+          realized_pnl_usdt: pnl,
+          fill_price: fill[:fill_price],
+          position_id: pos[:id]
+        }
       end
 
       def paper?

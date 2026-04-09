@@ -115,7 +115,8 @@ module CoindcxBot
       end
 
       def flatten_all!
-        @coord.flatten_all(@config.pairs)
+        ltps = flatten_ltps_for_pairs
+        @coord.flatten_all(@config.pairs, ltps: ltps)
       end
 
       def run
@@ -138,6 +139,14 @@ module CoindcxBot
       end
 
       private
+
+      def flatten_ltps_for_pairs
+        @config.pairs.to_h do |p|
+          ltp = @tracker.ltp(p)
+          ltp ||= @candles_exec[p]&.last&.close
+          [p, ltp]
+        end
+      end
 
       def build_broker(config)
         if config.dry_run?
@@ -261,7 +270,10 @@ module CoindcxBot
         refresh_tracker_from_exec_candle_when_ws_stale
         mirror_tracker_into_tick_store
         stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
-        @last_error = 'stale_feed' if stale
+        # Stale WS is already `snapshot.stale` + TUI "STALE" badge. Do not write `last_error`:
+        # it was never cleared when the socket recovered, so `stale_feed` stuck forever. LTP
+        # "age" can look low because candle-mirrored ticks use `Time.now` each cycle while
+        # `@ws_tick_at` (real WS) stays old.
 
         @config.pairs.each { |pair| process_pair(pair, stale) }
       rescue StandardError => e
