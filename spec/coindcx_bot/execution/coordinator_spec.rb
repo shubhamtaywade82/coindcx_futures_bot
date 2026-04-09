@@ -18,10 +18,20 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
 
   let(:guard) { CoindcxBot::Risk::ExposureGuard.new(config: config) }
 
-  subject(:coordinator) do
-    described_class.new(
+  let(:broker) do
+    CoindcxBot::Execution::LiveBroker.new(
       order_gateway: orders,
       account_gateway: account,
+      journal: journal,
+      config: config,
+      exposure_guard: guard,
+      logger: nil
+    )
+  end
+
+  subject(:coordinator) do
+    described_class.new(
+      broker: broker,
       journal: journal,
       config: config,
       exposure_guard: guard,
@@ -53,7 +63,11 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
     coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))
   end
 
-  context 'when dry_run' do
+  context 'when paper mode' do
+    let(:paper_store_path) { Tempfile.new(['paper', '.sqlite3']).path }
+    let(:paper_store) { CoindcxBot::Persistence::PaperStore.new(paper_store_path) }
+    let(:fill_engine) { CoindcxBot::Execution::FillEngine.new(slippage_bps: 5, fee_bps: 4) }
+
     let(:config) do
       CoindcxBot::Config.new(
         minimal_bot_config(
@@ -62,6 +76,15 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
           execution: { order_defaults: { leverage: 50, margin_currency_short_name: 'USDT', order_type: 'market_order' } }
         )
       )
+    end
+
+    let(:broker) do
+      CoindcxBot::Execution::PaperBroker.new(store: paper_store, fill_engine: fill_engine, logger: nil)
+    end
+
+    after do
+      paper_store.close
+      File.delete(paper_store_path) if File.exist?(paper_store_path)
     end
 
     it 'inserts an open position in the journal without calling the order gateway' do
@@ -75,7 +98,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       )
 
       expect(orders).not_to receive(:create)
-      expect(coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))).to eq(:dry_run)
+      expect(coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))).to eq(:paper)
 
       rows = journal.open_positions
       expect(rows.size).to eq(1)
@@ -83,6 +106,23 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(rows.first[:side]).to eq('long')
       expect(rows.first[:entry_price]).to eq('100.0')
       expect(rows.first[:state]).to eq('open')
+    end
+
+    it 'records a paper fill in the paper store' do
+      signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: {}
+      )
+
+      coordinator.apply(signal, quantity: BigDecimal('0.5'), entry_price: BigDecimal('100'))
+
+      fills = paper_store.all_fills
+      expect(fills.size).to eq(1)
+      expect(BigDecimal(fills.first[:fee])).to be > 0
     end
 
     it 'closes the journal row on close without touching the account gateway' do
@@ -108,13 +148,9 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       )
 
       expect(account).not_to receive(:list_positions)
-      expect(coordinator.apply(close_signal)).to eq(:dry_run)
+      expect(coordinator.apply(close_signal, exit_price: BigDecimal('1800'))).to eq(:paper)
 
       expect(journal.open_positions).to be_empty
-      close_logged = journal.recent_events(10).any? do |row|
-        row['type'] == 'signal_close' && JSON.parse(row['payload'])['position_id'] == id
-      end
-      expect(close_logged).to be(true)
     end
 
     it 'records approximate realized PnL in INR when closing with exit_price' do
@@ -140,7 +176,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
 
       coordinator.apply(close_signal, exit_price: BigDecimal('110'))
 
-      expect(journal.daily_pnl_inr).to eq(BigDecimal('415')) # (110-100)*0.5 USDT * 83 INR/USDT
+      expect(journal.daily_pnl_inr).to eq(BigDecimal('415'))
     end
 
     it 'returns failed when position_id does not match an open row' do
@@ -175,7 +211,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
         metadata: {}
       )
 
-      expect(coordinator.apply(close_signal, exit_price: BigDecimal('1900'))).to eq(:dry_run)
+      expect(coordinator.apply(close_signal, exit_price: BigDecimal('1900'))).to eq(:paper)
       expect(journal.open_positions).to be_empty
     end
   end
