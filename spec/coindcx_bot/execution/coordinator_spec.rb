@@ -116,5 +116,67 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       end
       expect(close_logged).to be(true)
     end
+
+    it 'records approximate realized PnL in INR when closing with exit_price' do
+      open_signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: {}
+      )
+      coordinator.apply(open_signal, quantity: BigDecimal('0.5'), entry_price: BigDecimal('100'))
+
+      id = journal.open_positions.first[:id]
+      close_signal = CoindcxBot::Strategy::Signal.new(
+        action: :close,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: nil,
+        reason: 'tp',
+        metadata: { position_id: id }
+      )
+
+      coordinator.apply(close_signal, exit_price: BigDecimal('110'))
+
+      expect(journal.daily_pnl_inr).to eq(BigDecimal('415')) # (110-100)*0.5 USDT * 83 INR/USDT
+    end
+
+    it 'returns failed when position_id does not match an open row' do
+      close_signal = CoindcxBot::Strategy::Signal.new(
+        action: :close,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: nil,
+        reason: 'x',
+        metadata: { position_id: 99_999 }
+      )
+      expect(coordinator.apply(close_signal)).to eq(:failed)
+    end
+
+    it 'closes the open row by pair when position_id is missing (paper only)' do
+      open_signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_short,
+        pair: 'B-ETH_USDT',
+        side: :short,
+        stop_price: BigDecimal('2100'),
+        reason: 'test',
+        metadata: {}
+      )
+      coordinator.apply(open_signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('2000'))
+
+      close_signal = CoindcxBot::Strategy::Signal.new(
+        action: :close,
+        pair: 'B-ETH_USDT',
+        side: :short,
+        stop_price: nil,
+        reason: 'manual',
+        metadata: {}
+      )
+
+      expect(coordinator.apply(close_signal, exit_price: BigDecimal('1900'))).to eq(:dry_run)
+      expect(journal.open_positions).to be_empty
+    end
   end
 end

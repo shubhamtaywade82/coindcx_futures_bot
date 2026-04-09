@@ -27,6 +27,19 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(journal.meta_get('pnl_current_day')).to eq(today)
   end
 
+  it 'ignores close_position when id is nil' do
+    journal = described_class.new(path)
+    journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil
+    )
+    expect { journal.close_position(nil) }.not_to(change { journal.open_positions.size })
+  end
+
   it 'records open positions and closes them' do
     journal = described_class.new(path)
     id = journal.insert_position(

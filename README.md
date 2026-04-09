@@ -54,7 +54,16 @@ Override config path:
 COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 ```
 
-Keep `runtime.dry_run: true` until order payloads are validated for your account. In dry mode the bot still **opens and closes rows in the local SQLite journal** so strategy state and exits stay consistent; it skips exchange order and account exit calls.
+### Paper mode (`dry_run` / `paper`)
+
+Use **`runtime.dry_run: true`** or **`runtime.paper: true`** (alias) until order payloads are validated. In paper mode the bot:
+
+- **Journals opens and closes** in SQLite (`positions` + `event_log`) so strategy state matches a live run.
+- **Does not** call `futures.orders.create` or account exit APIs; **`f` flatten** only closes journal rows.
+- **Approximates realized PnL** on each close: for longs, USDT PnL ≈ `(exit − entry) × qty` (shorts invert the price difference), then multiplies by **`inr_per_usdt`** into the journal **daily INR** total. Exit price is the **LTP** passed from the engine at close time, not an exchange fill.
+- **Resolves closes** by `position_id` when present; if it is missing in paper mode, uses the **single open row for that pair** (still requires a matching row or the close returns **`:failed`**).
+
+REST candles and WebSocket ticks still require valid API credentials for market data.
 
 ## TUI (`bin/bot tui`)
 

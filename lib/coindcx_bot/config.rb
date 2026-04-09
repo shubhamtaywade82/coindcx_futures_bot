@@ -50,8 +50,10 @@ module CoindcxBot
       raw.fetch(:runtime, {})
     end
 
+    # Paper trading: no exchange orders or account exits. `runtime.paper` is an alias for `runtime.dry_run`.
     def dry_run?
-      !!runtime[:dry_run]
+      r = runtime
+      !!(r[:dry_run] || r[:paper])
     end
 
     def journal_path

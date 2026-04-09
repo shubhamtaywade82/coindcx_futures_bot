@@ -376,7 +376,8 @@ module CoindcxBot
           qty = @risk.size_quantity(entry_price: entry, stop_price: sig.stop_price, side: sig.side)
           @coord.apply(sig, quantity: qty, entry_price: entry)
         else
-          @coord.apply(sig)
+          exit_for_close = sig.action == :close ? ltp : nil
+          @coord.apply(sig, exit_price: exit_for_close)
         end
       end
     end

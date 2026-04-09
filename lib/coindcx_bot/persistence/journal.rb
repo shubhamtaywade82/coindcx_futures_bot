@@ -104,6 +104,8 @@ module CoindcxBot
       end
 
       def close_position(id)
+        return if id.nil?
+
         @db.execute("UPDATE positions SET state = 'closed' WHERE id = ?", id)
       end
 
