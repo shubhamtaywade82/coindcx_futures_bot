@@ -42,9 +42,10 @@ The engine subscribes to the private **order update** Socket.io stream when runn
 ## Commands
 
 ```bash
-bundle exec bin/bot run    # blocking engine (WS + REST candles + strategy loop)
-bundle exec bin/bot tui    # engine + terminal dashboard (see TUI notes below)
-bundle exec bin/bot doctor # REST check + list active instruments (SOL/ETH hints)
+bundle exec bin/bot run           # blocking engine (WS + REST candles + strategy loop)
+bundle exec bin/bot tui           # engine + terminal dashboard (see TUI notes below)
+bundle exec bin/bot doctor        # REST check + list active instruments (SOL/ETH hints)
+bundle exec bin/bot paper-status  # journal snapshot: open rows, today's INR PnL, paper_realized
 bundle exec bin/bot help
 ```
 
@@ -68,6 +69,8 @@ Use **`runtime.dry_run: true`** or **`runtime.paper: true`** (alias) until order
 - **Resolves closes** by `position_id` when present; if it is missing in paper mode, uses the **single open row for that pair** (still requires a matching row or the close returns **`:failed`**).
 
 REST candles and WebSocket ticks still require valid API credentials for market data.
+
+**Strategy signals:** the engine calls `strategy.evaluate` on every pair every `tick_cycle`. Most cycles return **`hold`** with a reason (e.g. `no_regime`, `no_entry_setup`). **`hold` is silent in logs by default**, so it can look like “no signals”. To see them, set **`runtime.log_strategy_signals: true`** in `bot.yml` or **`COINDCX_STRATEGY_SIGNALS=1`** in the environment. That prints `[strategy] <pair> <action> reason=<…>` and, when the strategy asks to open but the engine blocks it, `[engine] … blocked: stale_feed|daily_loss_limit|max_positions|…`.
 
 ## TUI (`bin/bot tui`)
 

@@ -65,6 +65,7 @@ module CoindcxBot
         end
 
         @ws_shutdown_timeout = config.runtime.fetch(:ws_shutdown_join_seconds, 45).to_f
+        @strategy_signal_trace = strategy_signal_trace_enabled?(config)
       end
 
       attr_reader :config, :logger, :journal, :broker
@@ -139,6 +140,16 @@ module CoindcxBot
       end
 
       private
+
+      def strategy_signal_trace_enabled?(config)
+        return true if ENV['COINDCX_STRATEGY_SIGNALS'].to_s == '1'
+
+        !!config.runtime[:log_strategy_signals]
+      end
+
+      def log_strategy_signal(pair, sig)
+        @logger&.info("[strategy] #{pair} #{sig.action} reason=#{sig.reason}")
+      end
 
       def flatten_ltps_for_pairs
         @config.pairs.to_h do |p|
@@ -422,20 +433,39 @@ module CoindcxBot
           ltp: ltp
         )
 
+        log_strategy_signal(pair, sig) if @strategy_signal_trace
+
         case sig.action
         when :hold
           return
         when :open_long, :open_short
-          return if stale
-          return if @risk.daily_loss_breached?
+          if stale
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: stale_feed (no WS tick within window)") if @strategy_signal_trace
+            return
+          end
+          if @risk.daily_loss_breached?
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: daily_loss_limit") if @strategy_signal_trace
+            return
+          end
 
           gate = @risk.allow_new_entry?(open_positions: @journal.open_positions, pair: pair)
-          return unless gate.first == :ok
+          unless gate.first == :ok
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: #{gate.last}") if @strategy_signal_trace
+            return
+          end
 
           entry = ltp || exec.last&.close
-          return unless entry
+          unless entry
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: no_entry_price") if @strategy_signal_trace
+            return
+          end
 
           qty = @risk.size_quantity(entry_price: entry, stop_price: sig.stop_price, side: sig.side)
+          if qty.nil? || qty <= 0
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: zero_quantity (check stop distance vs risk)") if @strategy_signal_trace
+            return
+          end
+
           @coord.apply(sig, quantity: qty, entry_price: entry)
         else
           exit_for_close = sig.action == :close ? ltp : nil

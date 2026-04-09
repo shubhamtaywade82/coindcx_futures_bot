@@ -70,6 +70,10 @@ runtime:
   # Paper trading: no futures orders / account exits. Same effect as dry_run (either key is enough).
   dry_run: true
   # paper: true
+  # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.
+  # log_strategy_signals: true
+  # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
+  # log_strategy_signals: true
 
 # Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
