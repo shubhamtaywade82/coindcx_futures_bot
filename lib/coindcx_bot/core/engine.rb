@@ -293,13 +293,9 @@ module CoindcxBot
         refresh_tracker_from_exec_candle_when_ws_stale
         mirror_tracker_into_tick_store
         run_paper_process_tick if @broker.paper?
-        stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
-        # Stale WS is already `snapshot.stale` + TUI "STALE" badge. Do not write `last_error`:
-        # it was never cleared when the socket recovered, so `stale_feed` stuck forever. LTP
-        # "age" can look low because candle-mirrored ticks use `Time.now` each cycle while
-        # `@ws_tick_at` (real WS) stays old.
-
-        @config.pairs.each { |pair| process_pair(pair, stale) }
+        # Entry gating must be **per pair**: if ETH has no WS ticks, SOL must still be allowed to open.
+        # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
+        @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
