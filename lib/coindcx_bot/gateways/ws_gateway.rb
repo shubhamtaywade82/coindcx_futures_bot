@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require 'json'
 
 module CoindcxBot
   module Gateways
@@ -57,28 +58,84 @@ module CoindcxBot
         h = normalize_payload_hash(payload)
         return nil if h.empty?
 
+        unless payload_instrument_matches?(instrument, h)
+          return nil
+        end
+
         price_raw = h[:p] || h[:last_price] || h[:ltp] || h[:price] || h[:trade_price] || h[:rate] || h[:px]
         return nil if price_raw.nil?
 
-        # Always key by the subscribed instrument so PositionTracker matches config.pairs
-        # (payload `s` often differs from REST / bot.yml codes).
+        change_raw = h[:pc] || h[:change_pct]
+        change_pct = change_raw.nil? ? nil : BigDecimal(change_raw.to_s)
+
         Dto::Tick.new(
           pair: instrument,
           price: BigDecimal(price_raw.to_s),
+          change_pct: change_pct,
           received_at: Time.now
         )
       end
 
       def normalize_payload_hash(payload)
+        h = coerce_payload_to_hash(payload)
+        return {} if h.nil? || h.empty?
+
+        merge_nested_quote_fields!(h)
+        h
+      end
+
+      def coerce_payload_to_hash(payload)
         case payload
+        when nil
+          nil
+        when String
+          begin
+            coerce_payload_to_hash(JSON.parse(payload))
+          rescue JSON::ParserError
+            {}
+          end
         when Hash
           payload.transform_keys { |k| k.to_sym }
         when Array
-          first = payload.find { |el| el.is_a?(Hash) }
-          first ? first.transform_keys { |k| k.to_sym } : {}
+          hashes = payload.select { |el| el.is_a?(Hash) }
+          return {} if hashes.empty?
+
+          hashes.map { |el| el.transform_keys { |k| k.to_sym } }.reduce { |acc, el| acc.merge(el) }
         else
           {}
         end
+      end
+
+      def merge_nested_quote_fields!(h)
+        %i[data payload message d result].each do |key|
+          inner = h[key]
+          if inner.is_a?(String) && !inner.strip.empty?
+            inner = begin
+              parsed = JSON.parse(inner)
+              parsed if parsed.is_a?(Hash)
+            rescue JSON::ParserError
+              nil
+            end
+          end
+          next unless inner.is_a?(Hash)
+
+          h.merge!(inner.transform_keys { |k| k.to_sym })
+        end
+        h
+      end
+
+      # CoinDCX broadcasts one Socket.IO event to all listeners; filter using payload instrument hints.
+      def payload_instrument_matches?(instrument, h)
+        hint = h[:s] || h[:pair] || h[:market] || h[:instrument] || h[:symbol]
+        return true if hint.nil? || hint.to_s.strip.empty?
+
+        compact_instrument_code(hint) == compact_instrument_code(instrument)
+      end
+
+      def compact_instrument_code(code)
+        s = code.to_s.strip.upcase
+        s = s.sub(/\A[A-Z]+-/, '')
+        s.delete('_')
       end
     end
   end

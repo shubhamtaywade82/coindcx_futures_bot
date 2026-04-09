@@ -2,7 +2,6 @@
 
 require_relative 'coindcx_bot/socket_io_uri_compat'
 require 'coindcx'
-require_relative 'coindcx_bot/coindcx_socket_eio_patch'
 
 require_relative 'coindcx_bot/version'
 require_relative 'coindcx_bot/gateways/result'
@@ -21,10 +20,15 @@ require_relative 'coindcx_bot/risk/exposure_guard'
 require_relative 'coindcx_bot/risk/manager'
 require_relative 'coindcx_bot/strategy/indicators'
 require_relative 'coindcx_bot/strategy/trend_continuation'
+require_relative 'coindcx_bot/strategy/supertrend_profit'
 require_relative 'coindcx_bot/execution/coordinator'
 require_relative 'coindcx_bot/core/engine'
 require_relative 'coindcx_bot/doctor'
 require_relative 'coindcx_bot/cli'
+require_relative 'coindcx_bot/tui/tick_store'
+require_relative 'coindcx_bot/tui/render_loop'
+require_relative 'coindcx_bot/tui/panels/ltp_panel'
+require_relative 'coindcx_bot/tui/panels/status_panel'
 require_relative 'coindcx_bot/tui/app'
 
 module CoindcxBot

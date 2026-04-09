@@ -40,6 +40,16 @@ strategy:
   adx_period: 14
   adx_min: 0
 
+  # Optional: switch engine strategy (default = trend_continuation when omitted).
+  # Supertrend on execution_resolution (use 5m below); exits only at take_profit_pct — no Supertrend-based exit.
+  # name: supertrend_profit
+  # execution_resolution: 5m
+  # higher_timeframe_resolution: 5m
+  # supertrend_atr_period: 10
+  # supertrend_multiplier: 3
+  # take_profit_pct: 0.10
+  # stop_distance_pct_for_sizing: 0.02
+
 execution:
   # Merged into every futures `order:` hash; required keys depend on CoinDCX API.
   # See https://docs.coindcx.com/ — adjust for your account (order_type, leverage, etc.).

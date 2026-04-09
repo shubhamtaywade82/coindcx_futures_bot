@@ -54,7 +54,7 @@ Override config path:
 COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 ```
 
-Keep `runtime.dry_run: true` until order payloads are validated for your account.
+Keep `runtime.dry_run: true` until order payloads are validated for your account. In dry mode the bot still **opens and closes rows in the local SQLite journal** so strategy state and exits stay consistent; it skips exchange order and account exit calls.
 
 ## TUI (`bin/bot tui`)
 
@@ -64,15 +64,15 @@ If the screen **never refreshes** (clock / LTP stuck) in **Cursor’s or another
 
 ## WebSocket (`SocketConnectionError`)
 
-The stream uses **Socket.IO** over `wss://stream.coindcx.com`. The bot loads **`socket_io_uri_compat`** (Ruby 3 removed `URI.encode`, which `socket.io-client-simple` still uses) and **prepends** **`coindcx_socket_eio_patch`** so `connect` sends **`{ EIO: … }`** (default **4** if `COINDCX_SOCKET_EIO` is unset). Try **`COINDCX_SOCKET_EIO=3`** if v4 still fails. If your `coindcx-client` defines `Configuration#socket_io_connect_options`, the engine sets that too.
+The stream uses **Socket.IO** over `wss://stream.coindcx.com`. The bot loads **`socket_io_uri_compat`** (Ruby 3 removed `URI.encode`, which `socket.io-client-simple` still uses). **`coindcx-client`** defaults to **Engine.IO v3** (`EIO=3`), which matches CoinDCX’s current stream and the bundled `socket.io-client-simple` parser. Set **`COINDCX_SOCKET_EIO`** only when you intentionally override that (e.g. a custom backend); **`EIO=4` is not supported** by the default gem backend.
 
 If `bin/bot run` logs `CoinDCX::Errors::SocketConnectionError` with retries:
 
-1. **Try the other Engine.IO version** in `.env`: `COINDCX_SOCKET_EIO=3` or `COINDCX_SOCKET_EIO=4`, then run again.
+1. **Confirm you are not forcing `EIO=4`** in `.env` unless you know the stream and client both support it. Remove `COINDCX_SOCKET_EIO` to use the gem default, or set `COINDCX_SOCKET_EIO=3` explicitly.
 2. **Optional URL override:** `COINDCX_SOCKET_BASE_URL=wss://stream.coindcx.com` (only if CoinDCX documents a different host).
 3. **Network:** VPN, corporate firewall, or WSL DNS can block WebSockets — test from another network or `openssl s_client -connect stream.coindcx.com:443`.
 
-**Stale feed:** `stale=true` means **no WebSocket `price-change` for that symbol** within `runtime.stale_tick_seconds`. **New entries are blocked** until ticks resume; exits/strategy logic still run on REST candles. The dashboard `tick_at` / `age` reflect the **last WS tick**, not a fake refresh. If CoinDCX only pushes every minute or so, **raise `stale_tick_seconds`** in `config/bot.yml`. While stale, the engine sleeps `stale_recovery_sleep_seconds` (default 5) between cycles instead of `refresh_candles_seconds` so candles/strategy do not stall for a full minute.
+**Stale feed:** `stale=true` means **no WebSocket tick** for that pair within `runtime.stale_tick_seconds` (the engine tracks WS time separately from REST). **New entries are blocked** while stale; exits/strategy still use REST candles. The LTP column is **mirrored from `PositionTracker`**. With a live socket, WS ticks update it immediately. While **`ws_feed_stale?`** (no recent parseable WS tick), the engine reapplies the **latest execution candle close** on every `tick_cycle` (~`stale_recovery_sleep_seconds`), so the number moves with REST without clearing the stale banner or `@ws_tick_at`. If CoinDCX only pushes occasionally, **raise `stale_tick_seconds`** in `config/bot.yml`. While stale, the engine sleeps `stale_recovery_sleep_seconds` (default 5) between cycles instead of `refresh_candles_seconds`.
 
 **REST bootstrap:** Before the first WS tick, LTP may be seeded once from the **last closed candle** only when there is no price yet — it does **not** reset timestamps when WS goes quiet (that would hide a dead feed).
 

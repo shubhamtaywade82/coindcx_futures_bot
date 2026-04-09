@@ -21,6 +21,10 @@ module CoindcxBot
       @mutex.synchronize { @ticks[pair]&.received_at }
     end
 
+    def last_tick(pair)
+      @mutex.synchronize { @ticks[pair] }
+    end
+
     def feed_stale?(pair)
       at = last_tick_at(pair)
       return true unless at
