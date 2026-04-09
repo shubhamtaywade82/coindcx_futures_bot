@@ -2,7 +2,7 @@
 
 This document is the **source of truth** for turning the current **immediate-fill** paper broker into a **working-order, tick-driven** simulator. Implement **one phase at a time**; update the **status** lines below as you complete each phase.
 
-**Next step:** Phase B — `FillEngine#evaluate`, `PaperBroker#process_tick`, and `Broker#process_tick`.
+**Next step:** Phase C — `Coordinator` journal sync on paper tick fills (`handle_paper_fill`) and optional `paper.fill_timing` config.
 
 **Related code today:** [`PaperBroker`](../lib/coindcx_bot/execution/paper_broker.rb), [`FillEngine`](../lib/coindcx_bot/execution/fill_engine.rb), [`PaperStore`](../lib/coindcx_bot/persistence/paper_store.rb), [`Coordinator`](../lib/coindcx_bot/execution/coordinator.rb), [`Engine`](../lib/coindcx_bot/core/engine.rb).
 
@@ -13,8 +13,8 @@ This document is the **source of truth** for turning the current **immediate-fil
 | Phase | Description | Status |
 |-------|-------------|--------|
 | **A** | Schema migrations, `paper_order_groups`, extended `insert_order` / `insert_fill`, `OrderBook`, reconcile on `PaperBroker` boot | **Done** |
-| **B** | `FillEngine#evaluate`, `PaperBroker#process_tick`, `Broker#process_tick` (live returns `[]`) | Planned |
-| **C** | Engine `tick_cycle` calls `process_tick`; `Coordinator#handle_paper_fill`; journal-on-fill + `paper.fill_timing` config | Planned |
+| **B** | `FillEngine#evaluate`, `PaperBroker#process_tick`, `Broker#process_tick` (live returns `[]`) | **Done** |
+| **C** | Engine `tick_cycle` calls `process_tick`; `Coordinator#handle_paper_fill`; journal-on-fill + `paper.fill_timing` config | **Partial** — `Engine#tick_cycle` calls `process_tick` when paper; coordinator/journal wiring still planned |
 | **D** | Limit / stop / take-profit touch rules + RSpec matrix | Planned |
 | **E** | OCO / `paper_order_groups` API, cancel sibling on fill | Planned |
 | **F** | Trailing → `OrderBook#update_stop` + store persist | Planned |
@@ -49,19 +49,19 @@ This document is the **source of truth** for turning the current **immediate-fil
 
 ---
 
-## Phase B — Fill engine + `process_tick`
+## Phase B — Fill engine + `process_tick` (**done**)
 
-- Add `FillEngine#evaluate(working_order, ltp:, high:, low:)` returning fill hash or `nil`.
-- `PaperBroker#process_tick(pair:, ltp:, high:, low:)` iterates `OrderBook.working_for(pair)`, applies engine, persists fills, updates positions.
-- `Broker#process_tick` → `[]`; `LiveBroker` inherits default.
+- `FillEngine#evaluate(working_order, ltp:, high:, low:)` returns a fill hash or `nil` (market, limit, stop / take-profit).
+- `PaperBroker#process_tick` iterates `OrderBook.working_for(pair)`, persists fills, updates positions; returns result rows for coordinator use later.
+- `Broker#process_tick` → `[]`; live path unchanged.
 
 ---
 
-## Phase C — Engine + coordinator
+## Phase C — Engine + coordinator (**partial**)
 
-- Before `process_pair`, for each pair: if paper, call `process_tick` with tracker LTP and execution candle high/low (when `paper.use_bar_range` or default on).
-- New `Coordinator#handle_paper_fill` to sync journal with each fill event.
-- Config e.g. `paper.fill_timing: instant_market | next_tick` for backward compatibility during migration.
+- **Done:** `Engine#tick_cycle` runs `run_paper_process_tick` after mirroring the tracker into the tick store: for each pair with an LTP, calls `@broker.process_tick` with execution candle high/low when available.
+- **Todo:** `Coordinator#handle_paper_fill` (or equivalent) so journal rows stay aligned when working orders fill on a later tick; config e.g. `paper.fill_timing: instant_market | next_tick` if we split immediate vs deferred market behavior.
+- **Caveat:** Until journal sync exists, deferred **entry** fills from `process_tick` update the paper store only — strategy journal can drift if you seed working entry orders manually.
 
 ---
 

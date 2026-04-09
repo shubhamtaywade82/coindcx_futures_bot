@@ -15,6 +15,52 @@ module CoindcxBot
 
       attr_reader :store, :order_book
 
+      def sync_order_book!
+        reconcile_order_book
+      end
+
+      # Runs FillEngine against each working order for the pair. Returns an array of result hashes
+      # (`:kind` => `:entry` | `:exit`, plus fill / PnL fields). Engine/coordinator wiring (Phase C)
+      # should consume these to keep the journal aligned when using deferred working orders.
+      def process_tick(pair:, ltp:, high: nil, low: nil)
+        return [] if ltp.nil?
+
+        pair_s = pair.to_s
+        high_v = coerce_optional_decimal(high)
+        low_v = coerce_optional_decimal(low)
+
+        results = []
+        @order_book.working_for(pair_s).dup.each do |wo|
+          fill = @fill_engine.evaluate(wo, ltp: ltp, high: high_v, low: low_v)
+          next unless fill
+
+          order_id = wo.id
+          fill_id = @store.insert_fill(
+            order_id: order_id,
+            price: fill[:fill_price],
+            quantity: fill[:quantity],
+            fee: fill[:fee],
+            slippage: fill[:slippage],
+            trigger: fill[:trigger].to_s
+          )
+          @store.update_order_status(order_id, 'filled')
+          @order_book.remove(order_id)
+
+          pos = @store.open_position_for(pair_s)
+          if pos && exiting_working_order?(pos, wo)
+            summary = finalize_exit_fill(pos: pos, pair: pair_s, fill: fill)
+            results << summary.merge(kind: :exit, order_id: order_id, pair: pair_s)
+          else
+            update_position_from_fill(pair_s, wo.side, fill)
+            log_order_filled_event(order_id, pair_s, wo.side, fill, fill_id: fill_id)
+            results << { kind: :entry, order_id: order_id, pair: pair_s, side: wo.side, fill: fill }
+          end
+
+          @logger&.info("[paper] tick fill #{fill[:trigger]} #{pair_s} order_id=#{order_id}")
+        end
+        results
+      end
+
       def place_order(order)
         pair = order[:pair]
         side = order[:side].to_s
@@ -37,26 +83,15 @@ module CoindcxBot
           price: fill[:fill_price],
           quantity: fill[:quantity],
           fee: fill[:fee],
-          slippage: fill[:slippage]
+          slippage: fill[:slippage],
+          trigger: 'market_order'
         )
 
         @store.update_order_status(order_id, 'filled')
 
         update_position_from_fill(pair, side, fill)
 
-        @store.insert_event(
-          event_type: 'order_filled',
-          payload: {
-            order_id: order_id,
-            fill_id: fill_id,
-            pair: pair,
-            side: side,
-            fill_price: fill[:fill_price].to_s('F'),
-            quantity: fill[:quantity].to_s('F'),
-            fee: fill[:fee].to_s('F'),
-            slippage: fill[:slippage].to_s('F')
-          }
-        )
+        log_order_filled_event(order_id, pair, side, fill, fill_id: fill_id)
 
         @logger&.info("[paper] filled #{side} #{pair} qty=#{fill[:quantity].to_s('F')} @ #{fill[:fill_price].to_s('F')} fee=#{fill[:fee].to_s('F')}")
         :ok
@@ -100,13 +135,74 @@ module CoindcxBot
           price: fill[:fill_price],
           quantity: fill[:quantity],
           fee: fill[:fee],
-          slippage: fill[:slippage]
+          slippage: fill[:slippage],
+          trigger: 'market_order'
         )
 
         @store.update_order_status(order_id, 'filled')
 
-        pnl = compute_pnl(pos, fill[:fill_price], fill[:quantity], fill[:fee])
+        summary = finalize_exit_fill(pos: pos, pair: pair, fill: fill.merge(trigger: :market_order))
 
+        @logger&.info("[paper] closed #{pair} pnl=#{summary[:realized_pnl_usdt].to_s('F')} exit=#{fill[:fill_price].to_s('F')}")
+        {
+          ok: true,
+          realized_pnl_usdt: summary[:realized_pnl_usdt],
+          fill_price: fill[:fill_price],
+          position_id: pos[:id]
+        }
+      end
+
+      def paper?
+        true
+      end
+
+      def metrics
+        {
+          total_fees: @store.total_fees,
+          total_slippage: @store.total_slippage,
+          total_realized_pnl: @store.total_realized_pnl,
+          fill_count: @store.fill_count,
+          open_positions: @store.open_positions.size,
+          order_count: @store.order_count,
+          rejected_count: @store.order_count(status: 'rejected'),
+          working_orders: @order_book.size
+        }
+      end
+
+      def unrealized_pnl(ltp_map)
+        @store.open_positions.sum(BigDecimal('0')) do |pos|
+          pair_ltp = ltp_map[pos[:pair].to_s] || ltp_map[pos[:pair].to_sym]
+          next BigDecimal('0') unless pair_ltp
+
+          compute_unrealized(pos, BigDecimal(pair_ltp.to_s))
+        end
+      end
+
+      private
+
+      def coerce_optional_decimal(v)
+        return nil if v.nil?
+
+        BigDecimal(v.to_s)
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def exiting_working_order?(pos, wo)
+        return false unless pos
+
+        case pos[:side].to_s
+        when 'long', 'buy'
+          wo.side.to_s.casecmp('sell').zero?
+        when 'short', 'sell'
+          wo.side.to_s.casecmp('buy').zero?
+        else
+          false
+        end
+      end
+
+      def finalize_exit_fill(pos:, pair:, fill:)
+        pnl = compute_pnl(pos, fill[:fill_price], fill[:quantity], fill[:fee])
         pos_quantity = BigDecimal(pos[:quantity].to_s)
         close_quantity = fill[:quantity]
 
@@ -125,45 +221,30 @@ module CoindcxBot
             side: pos[:side],
             realized_pnl: pnl.to_s('F'),
             exit_price: fill[:fill_price].to_s('F'),
-            fee: fill[:fee].to_s('F')
+            fee: fill[:fee].to_s('F'),
+            trigger: fill[:trigger].to_s
           }
         )
 
-        @logger&.info("[paper] closed #{pair} pnl=#{pnl.to_s('F')} exit=#{fill[:fill_price].to_s('F')}")
-        {
-          ok: true,
-          realized_pnl_usdt: pnl,
-          fill_price: fill[:fill_price],
-          position_id: pos[:id]
-        }
+        { realized_pnl_usdt: pnl, fill_price: fill[:fill_price], position_id: pos[:id] }
       end
 
-      def paper?
-        true
+      def log_order_filled_event(order_id, pair, side, fill, fill_id:)
+        @store.insert_event(
+          event_type: 'order_filled',
+          payload: {
+            order_id: order_id,
+            fill_id: fill_id,
+            pair: pair,
+            side: side.to_s,
+            fill_price: fill[:fill_price].to_s('F'),
+            quantity: fill[:quantity].to_s('F'),
+            fee: fill[:fee].to_s('F'),
+            slippage: fill[:slippage].to_s('F'),
+            trigger: fill[:trigger].to_s
+          }
+        )
       end
-
-      def metrics
-        {
-          total_fees: @store.total_fees,
-          total_slippage: @store.total_slippage,
-          total_realized_pnl: @store.total_realized_pnl,
-          fill_count: @store.fill_count,
-          open_positions: @store.open_positions.size,
-          order_count: @store.order_count,
-          rejected_count: @store.order_count(status: 'rejected')
-        }
-      end
-
-      def unrealized_pnl(ltp_map)
-        @store.open_positions.sum(BigDecimal('0')) do |pos|
-          pair_ltp = ltp_map[pos[:pair].to_s] || ltp_map[pos[:pair].to_sym]
-          next BigDecimal('0') unless pair_ltp
-
-          compute_unrealized(pos, BigDecimal(pair_ltp.to_s))
-        end
-      end
-
-      private
 
       def reconcile_order_book
         @order_book.reconcile_from_store(@store)

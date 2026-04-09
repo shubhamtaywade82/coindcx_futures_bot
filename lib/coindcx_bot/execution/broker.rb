@@ -23,6 +23,11 @@ module CoindcxBot
         raise NotImplementedError
       end
 
+      # Paper: evaluate working orders against the latest tick. Live: no-op.
+      def process_tick(pair:, ltp:, high: nil, low: nil)
+        []
+      end
+
       def paper?
         false
       end

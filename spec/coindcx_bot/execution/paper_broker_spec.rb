@@ -225,4 +225,54 @@ RSpec.describe CoindcxBot::Execution::PaperBroker do
       expect(store.find_order(order_id)[:status]).to eq('canceled')
     end
   end
+
+  describe '#process_tick' do
+    let(:zero_engine) { CoindcxBot::Execution::FillEngine.new(slippage_bps: 0, fee_bps: 0) }
+
+    it 'fills a working limit entry, opens a position, and removes the order from the book' do
+      store.insert_order(
+        pair: 'B-SOL_USDT', side: 'long', order_type: 'limit', price: '100', quantity: '1', status: 'working',
+        limit_price: '98'
+      )
+      tick_broker = described_class.new(store: store, fill_engine: zero_engine, logger: nil)
+      expect(tick_broker.order_book.size).to eq(1)
+
+      results = tick_broker.process_tick(pair: 'B-SOL_USDT', ltp: BigDecimal('98'))
+
+      expect(results.size).to eq(1)
+      expect(results.first[:kind]).to eq(:entry)
+      expect(store.open_positions.size).to eq(1)
+      expect(tick_broker.order_book.size).to eq(0)
+      expect(store.find_order(results.first[:order_id])[:status]).to eq('filled')
+      expect(store.recent_events(20).any? { |e| e[:event_type] == 'order_filled' }).to be true
+    end
+
+    it 'fills a stop exit and closes the position when sync_order_book! picks up a working exit' do
+      tick_broker = described_class.new(store: store, fill_engine: zero_engine, logger: nil)
+      tick_broker.place_order(
+        pair: 'B-SOL_USDT', side: 'long', quantity: BigDecimal('1'),
+        ltp: BigDecimal('100'), order_type: :market
+      )
+
+      store.insert_order(
+        pair: 'B-SOL_USDT', side: 'sell', order_type: 'stop_market', price: '100', quantity: '1', status: 'working',
+        stop_price: '95'
+      )
+      tick_broker.sync_order_book!
+      expect(tick_broker.order_book.size).to eq(1)
+
+      results = tick_broker.process_tick(pair: 'B-SOL_USDT', ltp: BigDecimal('95'))
+
+      expect(results.size).to eq(1)
+      expect(results.first[:kind]).to eq(:exit)
+      expect(results.first[:realized_pnl_usdt]).to be_a(BigDecimal)
+      expect(store.open_positions).to be_empty
+      expect(tick_broker.order_book.size).to eq(0)
+      expect(store.recent_events(30).any? { |e| e[:event_type] == 'position_closed' }).to be true
+    end
+
+    it 'returns an empty array when there are no working orders' do
+      expect(broker.process_tick(pair: 'B-SOL_USDT', ltp: BigDecimal('100'))).to eq([])
+    end
+  end
 end

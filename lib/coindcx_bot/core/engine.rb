@@ -148,6 +148,18 @@ module CoindcxBot
         end
       end
 
+      def run_paper_process_tick
+        @config.pairs.each do |pair|
+          ltp = @tracker.ltp(pair)
+          next unless ltp
+
+          candle = (@candles_exec[pair] || []).last
+          high = candle&.high
+          low = candle&.low
+          @broker.process_tick(pair: pair, ltp: ltp, high: high, low: low)
+        end
+      end
+
       def build_broker(config)
         if config.dry_run?
           paper_cfg = config.raw.fetch(:paper, {})
@@ -269,6 +281,7 @@ module CoindcxBot
         seed_tracker_from_last_candle_if_no_ltp
         refresh_tracker_from_exec_candle_when_ws_stale
         mirror_tracker_into_tick_store
+        run_paper_process_tick if @broker.paper?
         stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
         # Stale WS is already `snapshot.stale` + TUI "STALE" badge. Do not write `last_error`:
         # it was never cleared when the socket recovered, so `stale_feed` stuck forever. LTP
