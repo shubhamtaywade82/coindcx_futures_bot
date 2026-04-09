@@ -70,3 +70,10 @@ runtime:
   # Paper trading: no futures orders / account exits. Same effect as dry_run (either key is enough).
   dry_run: true
   # paper: true
+
+# Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
+# The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
+paper:
+  slippage_bps: 5
+  fee_bps: 4
+  db_path: ./data/paper_trading.sqlite3
