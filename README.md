@@ -42,9 +42,10 @@ The engine subscribes to the private **order update** Socket.io stream when runn
 ## Commands
 
 ```bash
-bundle exec bin/bot run    # blocking engine (WS + REST candles + strategy loop)
-bundle exec bin/bot tui    # engine + terminal dashboard (see TUI notes below)
-bundle exec bin/bot doctor # REST check + list active instruments (SOL/ETH hints)
+bundle exec bin/bot run           # blocking engine (WS + REST candles + strategy loop)
+bundle exec bin/bot tui           # engine + terminal dashboard (see TUI notes below)
+bundle exec bin/bot doctor        # REST check + list active instruments (SOL/ETH hints)
+bundle exec bin/bot paper-status  # journal snapshot: open rows, today's INR PnL, paper_realized
 bundle exec bin/bot help
 ```
 
@@ -56,14 +57,20 @@ COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 
 ### Paper mode (`dry_run` / `paper`)
 
+**Roadmap** for a fuller simulated exchange (working orders, `process_tick`, limits/stops, OCO): [`docs/paper_broker_simulation.md`](docs/paper_broker_simulation.md).
+
 Use **`runtime.dry_run: true`** or **`runtime.paper: true`** (alias) until order payloads are validated. In paper mode the bot:
 
 - **Journals opens and closes** in SQLite (`positions` + `event_log`) so strategy state matches a live run.
-- **Does not** call `futures.orders.create` or account exit APIs; **`f` flatten** only closes journal rows.
-- **Approximates realized PnL** on each close: for longs, USDT PnL ≈ `(exit − entry) × qty` (shorts invert the price difference), then multiplies by **`inr_per_usdt`** into the journal **daily INR** total. Exit price is the **LTP** passed from the engine at close time, not an exchange fill.
+- **Does not** call `futures.orders.create` or account exit APIs.
+- **Simulated fills** go to a separate **`paper:`** SQLite file (`paper_orders`, `paper_fills`, `paper_positions`, …). On a paper **open**, the journal row’s **`entry_price`** is updated to the **slipped fill** from the paper broker so sizing and display track the simulator.
+- **`f` flatten (paper):** the engine passes per-pair **LTP** from the last WebSocket tick, else the **latest execution candle close**. The coordinator closes the **paper position** at that price (fees/slippage in the paper DB), books **daily INR** from the paper position’s **realized USDT** × **`inr_per_usdt`**, then closes journal rows. If no LTP is available for a pair, the journal is still flattened but the paper row may stay open (check logs).
+- **Strategy closes (paper):** same rule — daily INR comes from **`PaperBroker`** realized USDT on the close fill, not a separate journal-only formula.
 - **Resolves closes** by `position_id` when present; if it is missing in paper mode, uses the **single open row for that pair** (still requires a matching row or the close returns **`:failed`**).
 
 REST candles and WebSocket ticks still require valid API credentials for market data.
+
+**Strategy signals:** the engine calls `strategy.evaluate` on every pair every `tick_cycle`. Most cycles return **`hold`** with a reason (e.g. `no_regime`, `no_entry_setup`). **`hold` is silent in logs by default**, so it can look like “no signals”. To see them, set **`runtime.log_strategy_signals: true`** in `bot.yml` or **`COINDCX_STRATEGY_SIGNALS=1`** in the environment. That prints `[strategy] <pair> <action> reason=<…>` and, when the strategy asks to open but the engine blocks it, `[engine] … blocked: stale_feed|daily_loss_limit|max_positions|…`.
 
 ## TUI (`bin/bot tui`)
 
@@ -81,7 +88,9 @@ If `bin/bot run` logs `CoinDCX::Errors::SocketConnectionError` with retries:
 2. **Optional URL override:** `COINDCX_SOCKET_BASE_URL=wss://stream.coindcx.com` (only if CoinDCX documents a different host).
 3. **Network:** VPN, corporate firewall, or WSL DNS can block WebSockets — test from another network or `openssl s_client -connect stream.coindcx.com:443`.
 
-**Stale feed:** `stale=true` means **no WebSocket tick** for that pair within `runtime.stale_tick_seconds` (the engine tracks WS time separately from REST). **New entries are blocked** while stale; exits/strategy still use REST candles. The LTP column is **mirrored from `PositionTracker`**. With a live socket, WS ticks update it immediately. While **`ws_feed_stale?`** (no recent parseable WS tick), the engine reapplies the **latest execution candle close** on every `tick_cycle` (~`stale_recovery_sleep_seconds`), so the number moves with REST without clearing the stale banner or `@ws_tick_at`. If CoinDCX only pushes occasionally, **raise `stale_tick_seconds`** in `config/bot.yml`. While stale, the engine sleeps `stale_recovery_sleep_seconds` (default 5) between cycles instead of `refresh_candles_seconds`.
+**TUI “no WS” / STALE with moving LTP:** **LTP** can move from **REST candles** while **`@ws_tick_at`** (real WebSocket) stayed empty — so you saw **no WS** and **STALE** even though the number updated. The bot subscribes to **`currentPrices@futures#update`** and parses nested `prices` shapes when possible; if that still yields nothing, check logs for a one-time **`[ws] currentPrices@futures: no ticks matched…`** (pass `logger` via the engine — already wired). **Paper / `dry_run`:** by default **`paper_rest_advances_ws_stale_clock: true`** advances the same clock when REST mirrors a candle, so STALE/AGE match the LTP you see (set **`runtime.paper_rest_advances_ws_stale_clock: false`** to keep strict “real WS only” behaviour in paper). **Live** never uses the REST clock for `@ws_tick_at`. **`COINDCX_WS_TRACE=1`** prints each tick that hits the bus.
+
+**Stale feed:** `stale=true` on the snapshot means **at least one** pair has no WebSocket tick within `runtime.stale_tick_seconds`. **New entries are blocked only for pairs that are stale** (others can still open). Exits/strategy still use REST candles. In the TUI, **LTP “AGE” uses the same WebSocket clock** as that banner (not the time the row was last updated from a REST candle mirror), so it should not disagree with **STALE** when the header shows stale. The LTP column is **mirrored from `PositionTracker`**. With a live socket, WS ticks update it immediately. While **`ws_feed_stale?`** (no recent parseable WS tick), the engine reapplies the **latest execution candle close** on every `tick_cycle` (~`stale_recovery_sleep_seconds`), so the number moves with REST without clearing the stale banner or `@ws_tick_at` — so the TUI **LTP age** can look like a few seconds even though the **STALE** badge is correct (that age is “last candle mirror”, not “last raw WS tick”). **`snapshot.last_error`** is reserved for real failures (e.g. WS connect); it is **not** set to `stale_feed`. If CoinDCX only pushes occasionally, **raise `stale_tick_seconds`** in `config/bot.yml`. While stale, the engine sleeps `stale_recovery_sleep_seconds` (default 5) between cycles instead of `refresh_candles_seconds`.
 
 **REST bootstrap:** Before the first WS tick, LTP may be seeded once from the **last closed candle** only when there is no price yet — it does **not** reset timestamps when WS goes quiet (that would hide a dead feed).
 

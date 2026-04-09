@@ -7,11 +7,12 @@ module CoindcxBot
   module Tui
     module Panels
       class LtpPanel
-        HEADER_FMT = '  %-16s %12s %10s %8s  '
+        HEADER_FMT = '  %-16s %12s %10s %9s  '
         HEADER = format(HEADER_FMT, 'SYMBOL', 'LTP', 'CHG%', 'AGE')
         SEPARATOR = ('-' * HEADER.length).freeze
 
-        def initialize(tick_store:, symbols:, origin_row:, stale_tick_seconds: 45, origin_col: 0, output: $stdout)
+        def initialize(tick_store:, symbols:, origin_row:, stale_tick_seconds: 45, engine: nil, origin_col: 0,
+                       output: $stdout)
           @store = tick_store
           @symbols = symbols
           @row = origin_row
@@ -19,6 +20,7 @@ module CoindcxBot
           @output = output
           @cursor = TTY::Cursor
           @stale_tick_seconds = stale_tick_seconds.to_f
+          @engine = engine
         end
 
         def render
@@ -54,13 +56,26 @@ module CoindcxBot
         def format_tick_row(tick, symbol, now)
           return dim(format(HEADER_FMT, symbol, '---', '---', '---')) if tick.nil?
 
-          age   = (now - tick.updated_at).round(1)
-          stale = age > @stale_tick_seconds
+          ws_at = @engine&.last_ws_tick_at(symbol)
+          age_sec, stale, age_str =
+            if ws_at
+              sec = (now - ws_at).to_f
+              st = sec > @stale_tick_seconds
+              [sec, st, format('%.2fs', sec)]
+            elsif @engine
+              # Engine present but no WS tick yet: same as entry gating (blocked until real WS).
+              [0, true, 'no WS']
+            else
+              sec = (now - tick.updated_at).to_f
+              st = sec > @stale_tick_seconds
+              [sec, st, format('%.2fs', sec)]
+            end
+
           chg_str = tick.change_pct ? format('%+.2f%%', tick.change_pct) : 'n/a'
           ltp_str = format('%12.2f', tick.ltp)
           ltp_colored = colorize_ltp(ltp_str, tick, stale)
 
-          line = format('  %-16s %s %10s %7.1fs  ', symbol, ltp_colored, chg_str, age)
+          line = format('  %-16s %s %10s %9s  ', symbol, ltp_colored, chg_str, age_str)
           stale ? "#{line}  [STALE]" : line
         end
 

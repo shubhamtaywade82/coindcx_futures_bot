@@ -114,7 +114,8 @@ module CoindcxBot
           tick_store: tick_store,
           symbols: symbols,
           origin_row: status.row_count,
-          stale_tick_seconds: stale_sec
+          stale_tick_seconds: stale_sec,
+          engine: engine
         )
         [status, ltp]
       end

@@ -24,6 +24,7 @@ module CoindcxBot
           buf << move(@row + 1) << status_line(snap)
           buf << move(@row + 2) << positions_line(snap)
           buf << move(@row + 3) << metrics_line(snap)
+          buf << move(@row + 4) << paper_metrics_line(snap) if paper_mode?(snap)
           buf << @cursor.restore
 
           @output.print buf.string
@@ -31,18 +32,22 @@ module CoindcxBot
         end
 
         def row_count
-          4
+          4 + (@engine.broker&.paper? ? 1 : 0)
         end
 
         private
 
-        # tty-cursor #move_to emits CUP as "\e[column+1;row+1H" (see gem source); pass column then row.
         def move(row)
           @cursor.move_to(@col, row)
         end
 
+        def paper_mode?(snap)
+          snap.paper_metrics.is_a?(Hash) && !snap.paper_metrics.empty?
+        end
+
         def mode_line(snap)
-          mode = snap.dry_run ? inverse_magenta('  DRY RUN  ') : inverse_red('  LIVE  ')
+          label = snap.dry_run ? '  PAPER  ' : '  LIVE  '
+          mode = snap.dry_run ? inverse_magenta(label) : inverse_red(label)
           time = dim(Time.now.strftime('%Y-%m-%d %H:%M:%S'))
           clear_line("#{mode}  #{time}")
         end
@@ -82,13 +87,37 @@ module CoindcxBot
           side = p[:side] || p['side']
           qty = p[:quantity] || p['quantity']
           entry = p[:entry_price] || p['entry_price']
-          "#{green("##{id}")} #{pair} #{yellow(side.to_s)} #{dim('qty')}=#{qty} #{dim('@')} #{entry}"
+          "#{green("##{id}")} #{pair} #{yellow(side.to_s)} #{dim('qty')}=#{fmt_dec(qty)} #{dim('@')} #{fmt_dec(entry)}"
         end
 
         def metrics_line(snap)
           pnl = bold_cyan(format('₹%.2f', snap.daily_pnl))
           err = snap.last_error ? red(snap.last_error.to_s[0, 60]) : dim('none')
           clear_line("#{bold('PnL today')} #{pnl}  #{dim('·')}  #{bold('last_error')} #{err}")
+        end
+
+        def paper_metrics_line(snap)
+          pm = snap.paper_metrics
+          realized = fmt_dec(pm[:total_realized_pnl] || 0)
+          unrealized = fmt_dec(pm[:unrealized_pnl] || 0)
+          fees = fmt_dec(pm[:total_fees] || 0)
+          slip = fmt_dec(pm[:total_slippage] || 0)
+          fills = fmt_dec(pm[:fill_count] || 0)
+
+          parts = [
+            "#{bold('Realized')} #{bold_cyan(realized)}",
+            "#{bold('Unreal')} #{yellow(unrealized)}",
+            "#{bold('Fees')} #{dim(fees)}",
+            "#{bold('Slip')} #{dim(slip)}",
+            "#{bold('Fills')} #{dim(fills)}"
+          ]
+          clear_line(parts.join(dim('  ·  ')))
+        end
+
+        def fmt_dec(value)
+          format('%.2f', BigDecimal(value.to_s))
+        rescue ArgumentError, TypeError
+          '0.00'
         end
 
         def clear_line(content)

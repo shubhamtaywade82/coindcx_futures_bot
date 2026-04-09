@@ -13,6 +13,8 @@ module CoindcxBot
         Tui::App.start
       when 'doctor'
         exit(Doctor.run ? 0 : 1)
+      when 'paper-status'
+        exit(PaperStatus.run ? 0 : 1)
       when 'help', '--help', '-h'
         help
       else
@@ -42,8 +44,9 @@ module CoindcxBot
 
           run     — start trading engine (blocking)
           tui     — engine + TTY dashboard (auto-refresh + single-key commands)
-          doctor  — verify credentials and list SOL/ETH futures instruments
-          help    — this message
+          doctor        — verify credentials and list SOL/ETH futures instruments
+          paper-status  — print journal open positions + today's INR PnL + recent paper_realized events
+          help          — this message
 
         Environment: COINDCX_API_KEY, COINDCX_API_SECRET (optional: .env / .env.local in repo root)
         Config: config/bot.yml (see config/bot.yml.example)

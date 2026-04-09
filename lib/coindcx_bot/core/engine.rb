@@ -8,7 +8,7 @@ module CoindcxBot
     class Engine
       Snapshot = Struct.new(
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
-        :running, :dry_run, :stale_tick_seconds, keyword_init: true
+        :running, :dry_run, :stale_tick_seconds, :paper_metrics, keyword_init: true
       )
 
       def initialize(config:, logger: nil, tick_store: nil)
@@ -38,10 +38,10 @@ module CoindcxBot
           order_defaults: config.execution.fetch(:order_defaults, {})
         )
         @account = Gateways::AccountGateway.new(client: @client)
-        @ws = Gateways::WsGateway.new(client: @client)
+        @ws = Gateways::WsGateway.new(client: @client, logger: @logger)
+        @broker = build_broker(config)
         @coord = Execution::Coordinator.new(
-          order_gateway: @orders,
-          account_gateway: @account,
+          broker: @broker,
           journal: @journal,
           config: config,
           exposure_guard: @exposure,
@@ -62,12 +62,20 @@ module CoindcxBot
           @ws_tick_at[tick.pair] = Time.now
           @tracker.record_tick(tick)
           forward_tick_to_store(tick)
+          @logger&.info("[ws] tick #{tick.pair} #{tick.price}") if ENV['COINDCX_WS_TRACE'].to_s == '1'
         end
 
         @ws_shutdown_timeout = config.runtime.fetch(:ws_shutdown_join_seconds, 45).to_f
+        @strategy_signal_trace = strategy_signal_trace_enabled?(config)
       end
 
-      attr_reader :config, :logger, :journal
+      attr_reader :config, :logger, :journal, :broker
+
+      # Wall-clock time of the last **WebSocket** tick for this pair (not REST candle mirrors).
+      # Used by the TUI so "AGE" matches `STALE` / entry gating (`@ws_tick_at` only updates from WS).
+      def last_ws_tick_at(pair)
+        @ws_tick_at[pair]
+      end
 
       def snapshot
         ticks = @config.pairs.to_h do |p|
@@ -75,6 +83,9 @@ module CoindcxBot
           [p, { price: @tracker.ltp(p), at: tick_at }]
         end
         stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
+
+        pm = @broker.paper? ? paper_snapshot_metrics(ticks) : {}
+
         Snapshot.new(
           pairs: @config.pairs,
           ticks: ticks,
@@ -86,7 +97,8 @@ module CoindcxBot
           daily_pnl: @journal.daily_pnl_inr,
           running: !@stop,
           dry_run: @config.dry_run?,
-          stale_tick_seconds: @stale_seconds
+          stale_tick_seconds: @stale_seconds,
+          paper_metrics: pm
         )
       end
 
@@ -111,7 +123,8 @@ module CoindcxBot
       end
 
       def flatten_all!
-        @coord.flatten_all(@config.pairs)
+        ltps = flatten_ltps_for_pairs
+        @coord.flatten_all(@config.pairs, ltps: ltps)
       end
 
       def run
@@ -134,6 +147,69 @@ module CoindcxBot
       end
 
       private
+
+      def strategy_signal_trace_enabled?(config)
+        return true if ENV['COINDCX_STRATEGY_SIGNALS'].to_s == '1'
+
+        !!config.runtime[:log_strategy_signals]
+      end
+
+      def log_strategy_signal(pair, sig)
+        @logger&.info("[strategy] #{pair} #{sig.action} reason=#{sig.reason}")
+      end
+
+      def flatten_ltps_for_pairs
+        @config.pairs.to_h do |p|
+          ltp = @tracker.ltp(p)
+          ltp ||= @candles_exec[p]&.last&.close
+          [p, ltp]
+        end
+      end
+
+      def run_paper_process_tick
+        @config.pairs.each do |pair|
+          ltp = @tracker.ltp(pair)
+          next unless ltp
+
+          candle = (@candles_exec[pair] || []).last
+          high = candle&.high
+          low = candle&.low
+          @broker.process_tick(pair: pair, ltp: ltp, high: high, low: low)
+        end
+      end
+
+      def build_broker(config)
+        if config.dry_run?
+          paper_cfg = config.raw.fetch(:paper, {})
+          slippage = paper_cfg.fetch(:slippage_bps, 5)
+          fee = paper_cfg.fetch(:fee_bps, 4)
+          db_path = File.expand_path(
+            paper_cfg.fetch(:db_path, './data/paper_trading.sqlite3'),
+            Dir.pwd
+          )
+
+          fill_engine = Execution::FillEngine.new(slippage_bps: slippage, fee_bps: fee)
+          store = Persistence::PaperStore.new(db_path)
+
+          Execution::PaperBroker.new(store: store, fill_engine: fill_engine, logger: @logger)
+        else
+          Execution::LiveBroker.new(
+            order_gateway: @orders,
+            account_gateway: @account,
+            journal: @journal,
+            config: config,
+            exposure_guard: @exposure,
+            logger: @logger
+          )
+        end
+      end
+
+      def paper_snapshot_metrics(ticks)
+        ltp_map = ticks.transform_values { |t| t[:price] }
+        base = @broker.metrics
+        base[:unrealized_pnl] = @broker.unrealized_pnl(ltp_map)
+        base
+      end
 
       def build_strategy(strategy_cfg)
         name = (strategy_cfg[:name] || 'trend_continuation').to_s
@@ -202,6 +278,9 @@ module CoindcxBot
           @last_error = "ws sub #{pair}: #{sub.message}" if sub.failure?
         end
 
+        rt = @ws.subscribe_futures_current_prices_rt(pairs: @config.pairs) { |tick| @bus.publish(:tick, tick) }
+        @last_error = "ws currentPrices@futures: #{rt.message}" if rt.failure?
+
         ou = @ws.subscribe_order_updates do |payload|
           @journal.log_event('ws_order_update', ws_order_snippet(payload))
         rescue StandardError => e
@@ -223,10 +302,10 @@ module CoindcxBot
         seed_tracker_from_last_candle_if_no_ltp
         refresh_tracker_from_exec_candle_when_ws_stale
         mirror_tracker_into_tick_store
-        stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
-        @last_error = 'stale_feed' if stale
-
-        @config.pairs.each { |pair| process_pair(pair, stale) }
+        run_paper_process_tick if @broker.paper?
+        # Entry gating must be **per pair**: if ETH has no WS ticks, SOL must still be allowed to open.
+        # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
+        @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
@@ -244,6 +323,7 @@ module CoindcxBot
           @tracker.record_tick(
             Dto::Tick.new(pair: pair, price: candle.close, received_at: Time.now)
           )
+          touch_ws_staleness_clock_for_paper(pair)
         end
       end
 
@@ -266,6 +346,7 @@ module CoindcxBot
               received_at: Time.now
             )
           )
+          touch_ws_staleness_clock_for_paper(pair)
         end
       end
 
@@ -287,6 +368,20 @@ module CoindcxBot
         return true unless at
 
         Time.now - at > @stale_seconds
+      end
+
+      # Paper only: advancing the WS clock when we mirror REST candles keeps STALE/TUI AGE aligned with
+      # the LTP you see. Live trading never does this — entries still require real socket ticks unless dry_run.
+      def touch_ws_staleness_clock_for_paper(pair)
+        return unless paper_rest_advances_ws_stale_clock?
+
+        @ws_tick_at[pair] = Time.now
+      end
+
+      def paper_rest_advances_ws_stale_clock?
+        return false unless @config.dry_run?
+
+        @config.runtime.fetch(:paper_rest_advances_ws_stale_clock, true)
       end
 
       def sleep_seconds_after_tick_cycle
@@ -360,20 +455,39 @@ module CoindcxBot
           ltp: ltp
         )
 
+        log_strategy_signal(pair, sig) if @strategy_signal_trace
+
         case sig.action
         when :hold
           return
         when :open_long, :open_short
-          return if stale
-          return if @risk.daily_loss_breached?
+          if stale
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: stale_feed (no WS tick within window)") if @strategy_signal_trace
+            return
+          end
+          if @risk.daily_loss_breached?
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: daily_loss_limit") if @strategy_signal_trace
+            return
+          end
 
           gate = @risk.allow_new_entry?(open_positions: @journal.open_positions, pair: pair)
-          return unless gate.first == :ok
+          unless gate.first == :ok
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: #{gate.last}") if @strategy_signal_trace
+            return
+          end
 
           entry = ltp || exec.last&.close
-          return unless entry
+          unless entry
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: no_entry_price") if @strategy_signal_trace
+            return
+          end
 
           qty = @risk.size_quantity(entry_price: entry, stop_price: sig.stop_price, side: sig.side)
+          if qty.nil? || qty <= 0
+            @logger&.info("[engine] #{pair} #{sig.action} blocked: zero_quantity (check stop distance vs risk)") if @strategy_signal_trace
+            return
+          end
+
           @coord.apply(sig, quantity: qty, entry_price: entry)
         else
           exit_for_close = sig.action == :close ? ltp : nil

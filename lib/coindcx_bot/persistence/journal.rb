@@ -99,6 +99,13 @@ module CoindcxBot
         @db.execute('UPDATE positions SET stop_price = ? WHERE id = ?', [stop_price.to_s('F'), id])
       end
 
+      def update_position_entry_price(id, fill_price)
+        @db.execute(
+          'UPDATE positions SET entry_price = ? WHERE id = ?',
+          [BigDecimal(fill_price.to_s).to_s('F'), id]
+        )
+      end
+
       def mark_partial(id)
         @db.execute('UPDATE positions SET partial_done = 1 WHERE id = ?', id)
       end

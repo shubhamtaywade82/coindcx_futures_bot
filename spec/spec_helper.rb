@@ -41,6 +41,11 @@ def minimal_bot_config(overrides = {})
       stale_tick_seconds: 45,
       stale_recovery_sleep_seconds: 5,
       dry_run: true
+    },
+    paper: {
+      slippage_bps: 5,
+      fee_bps: 4,
+      db_path: File.join(Dir.tmpdir, "coindcx_bot_paper_#{Process.pid}.sqlite3")
     }
   }
   deep_merge(base, overrides)

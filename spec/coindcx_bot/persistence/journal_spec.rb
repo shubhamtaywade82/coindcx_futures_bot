@@ -54,4 +54,19 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     journal.close_position(id)
     expect(journal.open_positions).to be_empty
   end
+
+  it 'updates entry_price for an open position' do
+    journal = described_class.new(path)
+    id = journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil
+    )
+    journal.update_position_entry_price(id, BigDecimal('100.05'))
+    row = journal.open_positions.first
+    expect(BigDecimal(row[:entry_price])).to eq(BigDecimal('100.05'))
+  end
 end
