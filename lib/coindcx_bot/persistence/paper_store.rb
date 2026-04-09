@@ -8,6 +8,9 @@ require 'bigdecimal'
 module CoindcxBot
   module Persistence
     class PaperStore
+      WORKING_ORDER_STATUSES = %w[new working accepted].freeze
+      MIGRATE_TABLE_ALLOWLIST = %w[paper_orders paper_fills].freeze
+
       def initialize(path)
         FileUtils.mkdir_p(File.dirname(path))
         @db = SQLite3::Database.new(path)
@@ -21,13 +24,31 @@ module CoindcxBot
 
       # --- Orders ---
 
-      def insert_order(pair:, side:, order_type:, price:, quantity:, status: 'new')
+      def insert_order(pair:, side:, order_type:, price:, quantity:, status: 'new',
+                     limit_price: nil, stop_price: nil, group_id: nil, group_role: nil, metadata: nil)
+        meta =
+          case metadata
+          when nil then '{}'
+          when String then metadata
+          else JSON.generate(metadata)
+          end
         @db.execute(
           <<~SQL,
-            INSERT INTO paper_orders (pair, side, order_type, price, quantity, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO paper_orders (
+              pair, side, order_type, price, quantity, status, created_at, updated_at,
+              limit_price, stop_price, group_id, group_role, metadata
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           SQL
-          [pair, side.to_s, order_type.to_s, bd_str(price), bd_str(quantity), status, now_iso, now_iso]
+          [
+            pair, side.to_s, order_type.to_s, bd_str(price), bd_str(quantity), status,
+            now_iso, now_iso,
+            (limit_price ? bd_str(limit_price) : nil),
+            (stop_price ? bd_str(stop_price) : nil),
+            group_id,
+            group_role&.to_s,
+            meta
+          ]
         )
         @db.last_insert_row_id
       end
@@ -60,15 +81,27 @@ module CoindcxBot
         rows.map { |r| symbolize(r) }
       end
 
+      def working_orders(pair: nil)
+        placeholders = WORKING_ORDER_STATUSES.map { '?' }.join(', ')
+        sql = "SELECT * FROM paper_orders WHERE status IN (#{placeholders})"
+        args = WORKING_ORDER_STATUSES.dup
+        if pair
+          sql += ' AND pair = ?'
+          args << pair.to_s
+        end
+        sql += ' ORDER BY id'
+        @db.execute(sql, args).map { |r| symbolize(r) }
+      end
+
       # --- Fills ---
 
-      def insert_fill(order_id:, price:, quantity:, fee:, slippage:)
+      def insert_fill(order_id:, price:, quantity:, fee:, slippage:, trigger: 'market_order')
         @db.execute(
           <<~SQL,
-            INSERT INTO paper_fills (order_id, price, quantity, fee, slippage, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO paper_fills (order_id, price, quantity, fee, slippage, trigger, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
           SQL
-          [order_id, bd_str(price), bd_str(quantity), bd_str(fee), bd_str(slippage), now_iso]
+          [order_id, bd_str(price), bd_str(quantity), bd_str(fee), bd_str(slippage), trigger.to_s, now_iso]
         )
         @db.last_insert_row_id
       end
@@ -227,7 +260,12 @@ module CoindcxBot
             quantity TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'new',
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            limit_price TEXT,
+            stop_price TEXT,
+            group_id INTEGER,
+            group_role TEXT,
+            metadata TEXT DEFAULT '{}'
           );
 
           CREATE TABLE IF NOT EXISTS paper_fills (
@@ -237,6 +275,7 @@ module CoindcxBot
             quantity TEXT NOT NULL,
             fee TEXT NOT NULL DEFAULT '0',
             slippage TEXT NOT NULL DEFAULT '0',
+            trigger TEXT NOT NULL DEFAULT 'market_order',
             created_at TEXT NOT NULL,
             FOREIGN KEY (order_id) REFERENCES paper_orders(id)
           );
@@ -270,10 +309,43 @@ module CoindcxBot
             created_at TEXT NOT NULL
           );
 
+          CREATE TABLE IF NOT EXISTS paper_order_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pair TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            entry_order_id INTEGER,
+            sl_order_id INTEGER,
+            tp_order_id INTEGER,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+          );
+
           CREATE INDEX IF NOT EXISTS idx_paper_orders_pair_status ON paper_orders(pair, status);
           CREATE INDEX IF NOT EXISTS idx_paper_positions_pair_status ON paper_positions(pair, status);
           CREATE INDEX IF NOT EXISTS idx_paper_fills_order_id ON paper_fills(order_id);
+          CREATE INDEX IF NOT EXISTS idx_paper_order_groups_pair_status ON paper_order_groups(pair, status);
         SQL
+
+        migrate_legacy_columns
+      end
+
+      def migrate_legacy_columns
+        add_column_if_missing('paper_orders', 'limit_price', 'TEXT')
+        add_column_if_missing('paper_orders', 'stop_price', 'TEXT')
+        add_column_if_missing('paper_orders', 'group_id', 'INTEGER')
+        add_column_if_missing('paper_orders', 'group_role', 'TEXT')
+        add_column_if_missing('paper_orders', 'metadata', "TEXT DEFAULT '{}'")
+        add_column_if_missing('paper_fills', 'trigger', "TEXT NOT NULL DEFAULT 'market_order'")
+      end
+
+      def add_column_if_missing(table, column, sql_type)
+        raise ArgumentError, "invalid table #{table}" unless MIGRATE_TABLE_ALLOWLIST.include?(table)
+        raise ArgumentError, "invalid column #{column}" unless column.match?(/\A[a-z_][a-z0-9_]*\z/)
+
+        cols = @db.table_info(table).map { |row| row['name'] }
+        return if cols.include?(column)
+
+        @db.execute("ALTER TABLE #{table} ADD COLUMN #{column} #{sql_type}")
       end
     end
   end

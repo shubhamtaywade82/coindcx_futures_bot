@@ -89,6 +89,7 @@ The TUI reads LTP from **`TickStore`**; the engine snapshot uses **`PositionTrac
 
 ## References
 
+- [`docs/paper_broker_simulation.md`](paper_broker_simulation.md) — phased plan for a full paper exchange simulator (Phase A onward).
 - `lib/coindcx_bot/core/engine.rb`
 - `lib/coindcx_bot/execution/coordinator.rb`
 - `lib/coindcx_bot/execution/paper_broker.rb`

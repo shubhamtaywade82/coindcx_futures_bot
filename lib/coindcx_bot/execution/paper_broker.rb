@@ -9,9 +9,11 @@ module CoindcxBot
         @store = store
         @fill_engine = fill_engine
         @logger = logger
+        @order_book = OrderBook.new
+        reconcile_order_book
       end
 
-      attr_reader :store
+      attr_reader :store, :order_book
 
       def place_order(order)
         pair = order[:pair]
@@ -62,6 +64,7 @@ module CoindcxBot
 
       def cancel_order(order_id)
         @store.update_order_status(order_id, 'canceled')
+        @order_book.remove(order_id)
         :ok
       end
 
@@ -161,6 +164,12 @@ module CoindcxBot
       end
 
       private
+
+      def reconcile_order_book
+        @order_book.reconcile_from_store(@store)
+        n = @order_book.size
+        @logger&.info("[paper] reconciled #{n} working order(s) from store") if n.positive?
+      end
 
       def update_position_from_fill(pair, side, fill)
         existing = @store.open_position_for(pair)

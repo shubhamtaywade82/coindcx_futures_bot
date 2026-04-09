@@ -56,6 +56,8 @@ COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 
 ### Paper mode (`dry_run` / `paper`)
 
+**Roadmap** for a fuller simulated exchange (working orders, `process_tick`, limits/stops, OCO): [`docs/paper_broker_simulation.md`](docs/paper_broker_simulation.md).
+
 Use **`runtime.dry_run: true`** or **`runtime.paper: true`** (alias) until order payloads are validated. In paper mode the bot:
 
 - **Journals opens and closes** in SQLite (`positions` + `event_log`) so strategy state matches a live run.

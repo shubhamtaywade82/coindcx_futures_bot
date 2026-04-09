@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
+require 'securerandom'
+
 RSpec.describe CoindcxBot::Execution::PaperBroker do
-  let(:db_path) { Tempfile.new(['paper_broker', '.sqlite3']).path }
+  let(:db_path) { File.join(Dir.tmpdir, "coindcx_paper_broker_#{SecureRandom.hex(12)}.sqlite3") }
   let(:store) { CoindcxBot::Persistence::PaperStore.new(db_path) }
   let(:fill_engine) { CoindcxBot::Execution::FillEngine.new(slippage_bps: 5, fee_bps: 4) }
   subject(:broker) { described_class.new(store: store, fill_engine: fill_engine, logger: nil) }
@@ -14,6 +16,18 @@ RSpec.describe CoindcxBot::Execution::PaperBroker do
   describe '#paper?' do
     it 'returns true' do
       expect(broker.paper?).to be true
+    end
+  end
+
+  describe 'order book reconcile' do
+    it 'loads working orders from the store on boot' do
+      wid = store.insert_order(
+        pair: 'B-SOL_USDT', side: 'long', order_type: 'limit', price: '100', quantity: '0.5', status: 'working',
+        limit_price: '99'
+      )
+      broker2 = described_class.new(store: store, fill_engine: fill_engine, logger: nil)
+      expect(broker2.order_book.size).to eq(1)
+      expect(broker2.order_book.find(wid).limit_price).to eq(BigDecimal('99'))
     end
   end
 

@@ -2,6 +2,8 @@
 
 This document is the **source of truth** for turning the current **immediate-fill** paper broker into a **working-order, tick-driven** simulator. Implement **one phase at a time**; update the **status** lines below as you complete each phase.
 
+**Next step:** Phase B — `FillEngine#evaluate`, `PaperBroker#process_tick`, and `Broker#process_tick`.
+
 **Related code today:** [`PaperBroker`](../lib/coindcx_bot/execution/paper_broker.rb), [`FillEngine`](../lib/coindcx_bot/execution/fill_engine.rb), [`PaperStore`](../lib/coindcx_bot/persistence/paper_store.rb), [`Coordinator`](../lib/coindcx_bot/execution/coordinator.rb), [`Engine`](../lib/coindcx_bot/core/engine.rb).
 
 ---
