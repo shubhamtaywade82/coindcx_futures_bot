@@ -22,14 +22,16 @@ module CoindcxBot
         config = CoindcxBot::Config.load
         setup_terminal
         tick_store = TickStore.new
+        @render_loop = nil
         engine = CoindcxBot::Core::Engine.new(
           config: config,
           logger: build_logger,
-          tick_store: tick_store
+          tick_store: tick_store,
+          on_tick: ->(_tick) { @render_loop&.request_redraw }
         )
 
-        symbols    = config.pairs
-        panels     = build_panels(tick_store: tick_store, engine: engine, symbols: symbols)
+        symbols = config.pairs
+        panels  = build_panels(tick_store: tick_store, engine: engine, symbols: symbols)
         @render_loop = RenderLoop.new(panels: panels, interval: RENDER_INTERVAL)
 
         engine_thread = start_engine(engine)
@@ -136,7 +138,7 @@ module CoindcxBot
         buf << TTY::Cursor.move_to(0, keybar_row)
         buf << "\e[2m#{'─' * [term_w - 1, 40].min}\e[0m\n"
         buf << keybar_text
-        buf << "\n\e[2mAuto-refresh #{(RENDER_INTERVAL * 1000).to_i}ms · ^C or q to exit\e[0m"
+        buf << "\n\e[2mRedraw on each WS tick · max #{(RENDER_INTERVAL * 1000).to_i}ms if idle · ^C or q to exit\e[0m"
 
         $stdout.print buf.string
         $stdout.flush

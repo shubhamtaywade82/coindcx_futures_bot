@@ -11,12 +11,13 @@ module CoindcxBot
         :running, :dry_run, :stale_tick_seconds, :paper_metrics, keyword_init: true
       )
 
-      def initialize(config:, logger: nil, tick_store: nil)
+      def initialize(config:, logger: nil, tick_store: nil, on_tick: nil)
         @config = config
         @logger = logger || Logger.new($stdout)
         @journal = Persistence::Journal.new(config.journal_path)
         @bus = EventBus.new
         @tick_store = tick_store
+        @on_tick = on_tick
         @stale_seconds = config.runtime.fetch(:stale_tick_seconds, 45).to_i
         @stale_recovery_sleep = config.runtime.fetch(:stale_recovery_sleep_seconds, 5).to_f
         @tracker = PositionTracker.new(
@@ -63,6 +64,7 @@ module CoindcxBot
           @tracker.record_tick(tick)
           forward_tick_to_store(tick)
           @logger&.info("[ws] tick #{tick.pair} #{tick.price}") if ENV['COINDCX_WS_TRACE'].to_s == '1'
+          @on_tick&.call(tick)
         end
 
         @ws_shutdown_timeout = config.runtime.fetch(:ws_shutdown_join_seconds, 45).to_f
@@ -135,7 +137,7 @@ module CoindcxBot
           tick_cycle
           break if @stop
 
-          sleep sleep_seconds_after_tick_cycle
+          interruptible_sleep(sleep_seconds_after_tick_cycle)
         end
         finished = ws_thread.join(@ws_shutdown_timeout)
         @logger.warn('WebSocket thread did not finish within ws_shutdown_join_seconds') unless finished
@@ -230,6 +232,14 @@ module CoindcxBot
           change_pct: tick.change_pct,
           updated_at: tick.received_at
         )
+      end
+
+      def interruptible_sleep(total_seconds)
+        deadline = Time.now + total_seconds
+        until @stop || Time.now >= deadline
+          sleep [deadline - Time.now, 1].min
+          mirror_tracker_into_tick_store
+        end
       end
 
       def mirror_tracker_into_tick_store
