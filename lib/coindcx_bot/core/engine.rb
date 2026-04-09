@@ -8,7 +8,7 @@ module CoindcxBot
     class Engine
       Snapshot = Struct.new(
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
-        :running, :dry_run, :stale_tick_seconds, keyword_init: true
+        :running, :dry_run, :stale_tick_seconds, :paper_metrics, keyword_init: true
       )
 
       def initialize(config:, logger: nil, tick_store: nil)
@@ -39,9 +39,9 @@ module CoindcxBot
         )
         @account = Gateways::AccountGateway.new(client: @client)
         @ws = Gateways::WsGateway.new(client: @client)
+        @broker = build_broker(config)
         @coord = Execution::Coordinator.new(
-          order_gateway: @orders,
-          account_gateway: @account,
+          broker: @broker,
           journal: @journal,
           config: config,
           exposure_guard: @exposure,
@@ -67,7 +67,7 @@ module CoindcxBot
         @ws_shutdown_timeout = config.runtime.fetch(:ws_shutdown_join_seconds, 45).to_f
       end
 
-      attr_reader :config, :logger, :journal
+      attr_reader :config, :logger, :journal, :broker
 
       def snapshot
         ticks = @config.pairs.to_h do |p|
@@ -75,6 +75,9 @@ module CoindcxBot
           [p, { price: @tracker.ltp(p), at: tick_at }]
         end
         stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
+
+        pm = @broker.paper? ? paper_snapshot_metrics(ticks) : {}
+
         Snapshot.new(
           pairs: @config.pairs,
           ticks: ticks,
@@ -86,7 +89,8 @@ module CoindcxBot
           daily_pnl: @journal.daily_pnl_inr,
           running: !@stop,
           dry_run: @config.dry_run?,
-          stale_tick_seconds: @stale_seconds
+          stale_tick_seconds: @stale_seconds,
+          paper_metrics: pm
         )
       end
 
@@ -134,6 +138,39 @@ module CoindcxBot
       end
 
       private
+
+      def build_broker(config)
+        if config.dry_run?
+          paper_cfg = config.raw.fetch(:paper, {})
+          slippage = paper_cfg.fetch(:slippage_bps, 5)
+          fee = paper_cfg.fetch(:fee_bps, 4)
+          db_path = File.expand_path(
+            paper_cfg.fetch(:db_path, './data/paper_trading.sqlite3'),
+            Dir.pwd
+          )
+
+          fill_engine = Execution::FillEngine.new(slippage_bps: slippage, fee_bps: fee)
+          store = Persistence::PaperStore.new(db_path)
+
+          Execution::PaperBroker.new(store: store, fill_engine: fill_engine, logger: @logger)
+        else
+          Execution::LiveBroker.new(
+            order_gateway: @orders,
+            account_gateway: @account,
+            journal: @journal,
+            config: config,
+            exposure_guard: @exposure,
+            logger: @logger
+          )
+        end
+      end
+
+      def paper_snapshot_metrics(ticks)
+        ltp_map = ticks.transform_values { |t| t[:price] }
+        base = @broker.metrics
+        base[:unrealized_pnl] = @broker.unrealized_pnl(ltp_map)
+        base
+      end
 
       def build_strategy(strategy_cfg)
         name = (strategy_cfg[:name] || 'trend_continuation').to_s

@@ -56,6 +56,10 @@ module CoindcxBot
       !!(r[:dry_run] || r[:paper])
     end
 
+    def paper_config
+      raw.fetch(:paper, {})
+    end
+
     def journal_path
       File.expand_path(runtime.fetch(:journal_path, './data/bot_journal.sqlite3'), Dir.pwd)
     end

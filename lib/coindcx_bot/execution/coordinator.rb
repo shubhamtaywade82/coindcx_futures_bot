@@ -5,9 +5,8 @@ require 'bigdecimal'
 module CoindcxBot
   module Execution
     class Coordinator
-      def initialize(order_gateway:, account_gateway:, journal:, config:, exposure_guard:, logger:)
-        @orders = order_gateway
-        @account = account_gateway
+      def initialize(broker:, journal:, config:, exposure_guard:, logger:)
+        @broker = broker
         @journal = journal
         @config = config
         @exposure = exposure_guard
@@ -21,7 +20,8 @@ module CoindcxBot
 
       def flatten_pair(pair)
         @journal.log_event('flatten', pair: pair)
-        exit_exchange_for_pair(pair) unless @dry
+        @broker.close_position(pair: pair, side: nil, quantity: 0, ltp: 0) unless @broker.paper?
+
         @journal.open_positions.select { |row| row[:pair] == pair }.each do |row|
           @journal.close_position(row[:id])
         end
@@ -35,7 +35,7 @@ module CoindcxBot
         when :open_long, :open_short
           open_position(signal, quantity, entry_price)
         when :close
-          close_journal_and_exchange(signal, exit_price: exit_price)
+          close_position(signal, exit_price: exit_price)
         when :partial
           handle_partial(signal)
         when :trail
@@ -49,124 +49,121 @@ module CoindcxBot
       private
 
       def open_position(signal, quantity, entry_price)
-        if quantity.nil? || quantity <= 0
-          @logger&.warn("Skip open — zero quantity for #{signal.pair}")
-          return :rejected
-        end
+        return :rejected if quantity.nil? || quantity <= 0
 
         ep = entry_price || BigDecimal('0')
-        side = api_side(signal)
-        body = {
-          pair: signal.pair,
-          side: side,
-          total_quantity: quantity.to_s('F')
-        }
         lev = effective_leverage
-        unless @exposure.leverage_allowed?(lev)
-          @logger&.warn("Skip open — leverage #{lev} exceeds max #{@exposure.max_leverage}")
-          return :rejected
-        end
-        body[:leverage] = lev
+        return :rejected unless leverage_permitted?(lev)
 
         @journal.log_event('signal_open', action: signal.action.to_s, pair: signal.pair, reason: signal.reason,
                                           leverage: lev)
 
-        if @dry
-          @journal.insert_position(
-            pair: signal.pair,
-            side: signal.side.to_s,
-            entry_price: ep,
-            quantity: quantity,
-            stop_price: signal.stop_price,
-            trail_price: nil
-          )
-          @logger&.info("[dry_run] journal open (no exchange): #{body}")
-          return :dry_run
+        if @broker.paper?
+          open_via_paper_broker(signal, quantity, ep, lev)
+        else
+          open_via_live_broker(signal, quantity, ep, lev)
         end
+      end
 
-        result = @orders.create(order: body)
-        if result.failure?
-          @logger&.error("Order create failed: #{result.code} #{result.message}")
+      def open_via_paper_broker(signal, quantity, entry_price, leverage)
+        result = @broker.place_order(
+          pair: signal.pair,
+          side: signal.side.to_s,
+          quantity: quantity,
+          ltp: entry_price,
+          order_type: :market,
+          leverage: leverage
+        )
+
+        journal_open(signal, quantity, entry_price)
+        @logger&.info("[paper] opened #{signal.side} #{signal.pair} qty=#{quantity}")
+        result == :ok ? :paper : :failed
+      end
+
+      def open_via_live_broker(signal, quantity, entry_price, leverage)
+        body = {
+          pair: signal.pair,
+          side: api_side(signal),
+          total_quantity: quantity.to_s('F'),
+          leverage: leverage
+        }
+
+        result = @broker.place_order(body)
+        if result == :failed
+          @logger&.error("Live order failed for #{signal.pair}")
           return :failed
         end
 
-        @journal.insert_position(
-          pair: signal.pair,
-          side: signal.side.to_s,
-          entry_price: ep,
-          quantity: quantity,
-          stop_price: signal.stop_price,
-          trail_price: nil
-        )
+        journal_open(signal, quantity, entry_price)
         @logger&.info("Opened #{signal.side} #{signal.pair} qty=#{quantity}")
         :ok
       end
 
-      def api_side(signal)
-        signal.side == :long ? 'buy' : 'sell'
+      def journal_open(signal, quantity, entry_price)
+        @journal.insert_position(
+          pair: signal.pair,
+          side: signal.side.to_s,
+          entry_price: entry_price,
+          quantity: quantity,
+          stop_price: signal.stop_price,
+          trail_price: nil
+        )
       end
 
-      def close_journal_and_exchange(signal, exit_price: nil)
+      def close_position(signal, exit_price: nil)
         meta = metadata_symbols(signal)
         raw_id = meta[:position_id]
         id = normalize_position_id(raw_id)
         row, close_id = resolve_close_target(signal.pair.to_s, id)
 
-        if id && row.nil?
-          @logger&.warn("Close: no matching open journal row (position_id=#{id}, pair=#{signal.pair})")
-        elsif id.nil? && close_id && @dry
-          @logger&.info("[dry_run] close inferred id=#{close_id} for #{signal.pair} (metadata missing position_id)")
+        log_close_warnings(signal, id, close_id, row)
+        @journal.log_event('signal_close', pair: signal.pair, reason: signal.reason,
+                                           position_id: close_id || id)
+
+        if @broker.paper?
+          close_via_paper_broker(signal, row, close_id, exit_price)
+        else
+          close_via_live_broker(signal, close_id, exit_price)
+        end
+      end
+
+      def close_via_paper_broker(signal, row, close_id, exit_price)
+        return :failed if close_id.nil?
+
+        if row && exit_price
+          ltp = BigDecimal(exit_price.to_s)
+          qty = BigDecimal(row[:quantity].to_s)
+          @broker.close_position(
+            pair: signal.pair,
+            side: row[:side],
+            quantity: qty,
+            ltp: ltp,
+            position_id: nil
+          )
+          record_paper_realized_pnl(row, exit_price)
         end
 
-        @journal.log_event(
-          'signal_close',
+        @journal.close_position(close_id)
+        @logger&.info("[paper] closed #{signal.pair} id=#{close_id}")
+        :paper
+      end
+
+      def close_via_live_broker(signal, close_id, exit_price)
+        @broker.close_position(
           pair: signal.pair,
-          reason: signal.reason,
-          position_id: close_id || id
+          side: nil,
+          quantity: 0,
+          ltp: exit_price || 0
         )
-
-        if @dry
-          if close_id.nil?
-            @logger&.warn("[dry_run] close failed — no open row for #{signal.pair} position_id=#{id.inspect}")
-            return :failed
-          end
-
-          record_paper_realized_pnl(row, exit_price) if row
-          @journal.close_position(close_id)
-          @logger&.info("[dry_run] close #{signal.pair} id=#{close_id}")
-          return :dry_run
-        end
-
-        exit_exchange_for_pair(signal.pair)
         @journal.close_position(close_id)
         :ok
       end
 
-      def exit_exchange_for_pair(pair)
-        res = @account.list_positions
-        if res.failure?
-          @logger&.error("positions list failed: #{res.message}")
-          return
-        end
-
-        normalize_rows(res.value).each do |row|
-          next unless row[:pair].to_s == pair.to_s
-
-          x = @account.exit_position(row)
-          @logger&.warn("exit_position failed: #{x.message}") if x.failure?
-        end
-      end
-
-      # Records 1R partial in the journal so trailing logic can treat the position as scaled.
-      # CoinDCX reduce-only / close-partial payloads vary by account and product; the generic
-      # `Models::Order` in coindcx-client does not encode contract-specific fields. Until a
-      # verified `futures.orders.create` body exists for partial exits, we do not place a
-      # reduce order here — see README "Partial at 1R".
       def handle_partial(signal)
         id = signal.metadata[:position_id]
         @journal.log_event('signal_partial', pair: signal.pair, position_id: id)
         @journal.mark_partial(id) if id
-        @logger&.info("Partial at 1R recorded for position #{id} (reduce on exchange not auto-placed)")
+        @logger&.info("Partial at 1R recorded for position #{id}")
         :ok
       end
 
@@ -179,6 +176,10 @@ module CoindcxBot
         :ok
       end
 
+      def api_side(signal)
+        signal.side == :long ? 'buy' : 'sell'
+      end
+
       def metadata_symbols(signal)
         m = signal.metadata || {}
         m.transform_keys(&:to_sym)
@@ -186,7 +187,6 @@ module CoindcxBot
 
       def normalize_position_id(raw)
         return nil if raw.nil?
-
         return Integer(raw) if raw.is_a?(Integer)
 
         s = raw.to_s
@@ -197,7 +197,6 @@ module CoindcxBot
         nil
       end
 
-      # Live: requires explicit id. Paper: may fall back to the single open row for this pair.
       def resolve_close_target(pair, position_id)
         if position_id
           pid = Integer(position_id)
@@ -211,24 +210,26 @@ module CoindcxBot
         [row, row&.dig(:id)]
       end
 
-      # Mark-to LTP at close time; approximate contract PnL in USDT × inr_per_usdt for dashboard.
+      def log_close_warnings(signal, id, close_id, row)
+        if id && row.nil?
+          @logger&.warn("Close: no matching open journal row (position_id=#{id}, pair=#{signal.pair})")
+        elsif id.nil? && close_id && @dry
+          @logger&.info("[paper] close inferred id=#{close_id} for #{signal.pair}")
+        end
+      end
+
       def record_paper_realized_pnl(row, exit_price)
-        return unless @dry
         return if exit_price.nil?
 
         entry = BigDecimal(row[:entry_price].to_s)
         qty = BigDecimal(row[:quantity].to_s)
         ex = BigDecimal(exit_price.to_s)
-        side = row[:side].to_s
 
         usdt_pnl =
-          case side
-          when 'long'
-            (ex - entry) * qty
-          when 'short'
-            (entry - ex) * qty
-          else
-            return
+          case row[:side].to_s
+          when 'long' then (ex - entry) * qty
+          when 'short' then (entry - ex) * qty
+          else return
           end
 
         inr = usdt_pnl * @config.inr_per_usdt
@@ -241,7 +242,7 @@ module CoindcxBot
           pnl_inr: inr.to_s('F'),
           exit_price: ex.to_s('F')
         )
-        @logger&.info("[dry_run] paper PnL ~₹#{inr.to_s('F')} (est. #{usdt_pnl.to_s('F')} USDT) #{row[:pair]} ##{row[:id]}")
+        @logger&.info("[paper] PnL ~₹#{inr.to_s('F')} (#{usdt_pnl.to_s('F')} USDT) #{row[:pair]} ##{row[:id]}")
       end
 
       def effective_leverage
@@ -252,16 +253,11 @@ module CoindcxBot
         [[requested, 1].max, cap].min
       end
 
-      def normalize_rows(value)
-        list =
-          case value
-          when Array then value
-          when Hash
-            value[:positions] || value['positions'] || value[:data] || value.values.find { |v| v.is_a?(Array) } || []
-          else
-            []
-          end
-        Array(list).map { |h| h.is_a?(Hash) ? h.transform_keys(&:to_sym) : {} }
+      def leverage_permitted?(lev)
+        return true if @exposure.leverage_allowed?(lev)
+
+        @logger&.warn("Skip open — leverage #{lev} exceeds max #{@exposure.max_leverage}")
+        false
       end
     end
   end
