@@ -38,4 +38,65 @@ RSpec.describe CoindcxBot::Execution::GatewayPaperBroker do
       expect(u).to be_within(BigDecimal('0.001')).of(BigDecimal('1.10440278'))
     end
   end
+
+  describe '#close_position' do
+    it 'unwraps data.positions and matches B- pair to instrument without B- prefix' do
+      allow(account).to receive(:list_positions).and_return(
+        CoindcxBot::Gateways::Result.ok(
+          'data' => {
+            'positions' => [
+              {
+                'id' => '7',
+                'instrument' => 'SOL_USDT',
+                'side' => 'long',
+                'quantity' => '0.1'
+              }
+            ]
+          }
+        )
+      )
+      allow(account).to receive(:exit_position).and_return(
+        CoindcxBot::Gateways::Result.ok('realized_pnl_usdt' => '1.5', 'fill_price' => '84')
+      )
+
+      r = broker.close_position(
+        pair: 'B-SOL_USDT',
+        side: 'long',
+        quantity: BigDecimal('0.1'),
+        ltp: BigDecimal('84')
+      )
+
+      expect(r[:ok]).to be true
+      expect(r[:realized_pnl_usdt]).to eq(BigDecimal('1.5'))
+      expect(account).to have_received(:exit_position).with(hash_including(id: '7'))
+    end
+
+    it 'matches hyphenated instrument codes to bot pair spelling' do
+      allow(account).to receive(:list_positions).and_return(
+        CoindcxBot::Gateways::Result.ok(
+          'positions' => [
+            {
+              'id' => '9',
+              'pair' => 'SOL-USDT',
+              'side' => 'short',
+              'quantity' => '0.2'
+            }
+          ]
+        )
+      )
+      allow(account).to receive(:exit_position).and_return(
+        CoindcxBot::Gateways::Result.ok('realized_pnl_usdt' => '0', 'fill_price' => '80')
+      )
+
+      r = broker.close_position(
+        pair: 'B-SOL_USDT',
+        side: 'short',
+        quantity: BigDecimal('0.2'),
+        ltp: BigDecimal('80')
+      )
+
+      expect(r[:ok]).to be true
+      expect(account).to have_received(:exit_position).with(hash_including(id: '9'))
+    end
+  end
 end

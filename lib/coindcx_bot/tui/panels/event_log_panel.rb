@@ -67,7 +67,15 @@ module CoindcxBot
 
           pair = pl[:pair] || pl['pair']
           side = pl[:side] || pl['side']
-          [pair, side].compact.map(&:to_s).join(' ')
+          bits = [pair, side].compact.map(&:to_s)
+          oc = pl[:outcome] || pl['outcome']
+          bits << oc.to_s if oc.to_s.strip != ''
+          if pl[:pnl_booked] == true || pl['pnl_booked'] == true
+            bits << 'pnl'
+          elsif pl.key?(:pnl_booked) || pl.key?('pnl_booked')
+            bits << 'no_pnl'
+          end
+          bits.join(' ')
         end
 
         def clear_line(content)

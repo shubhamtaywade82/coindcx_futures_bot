@@ -9,14 +9,27 @@ module CoindcxBot
   module PaperExchange
     # SQLite persistence for the paper exchange (separate from legacy PaperStore).
     class Store
+      # CoinDCX keys are ASCII; HTTP/env may use BINARY encoding. Normalize before compare or SQL bind.
+      def self.normalize_api_key(value)
+        k = value.to_s.dup
+        k = k.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: '') unless k.encoding == Encoding::UTF_8
+        k.sub(/\A\uFEFF/, '').strip
+      end
+
       def initialize(path)
-        FileUtils.mkdir_p(File.dirname(path))
-        @db = SQLite3::Database.new(path)
+        @db_path = File.expand_path(path)
+        FileUtils.mkdir_p(File.dirname(@db_path))
+        @db = SQLite3::Database.new(@db_path)
         @db.results_as_hash = true
+        @sql_mutex = Mutex.new
         migrate
       end
 
-      attr_reader :db
+      attr_reader :db, :db_path
+
+      def synchronize_sql
+        @sql_mutex.synchronize { yield }
+      end
 
       def close
         @db.close

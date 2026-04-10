@@ -110,13 +110,15 @@ module CoindcxBot
           join_compact(w, [bal, net, rest])
         end
 
-        # Paper: config capital (INR) + cumulative realized USDT × inr_per_usdt. Live: config capital only.
+        # Paper: config capital (INR) + (realized + unrealized) USDT × inr_per_usdt (mark-to-market equity).
+        # Live: config capital only.
         def balance_line(snap)
           if paper_metrics?(snap)
             base = snap.capital_inr || BigDecimal('0')
             realized_usdt = BigDecimal((snap.paper_metrics[:total_realized_pnl] || 0).to_s)
+            unreal_usdt = BigDecimal((snap.paper_metrics[:unrealized_pnl] || 0).to_s)
             fx = @engine.config.inr_per_usdt
-            total = base + (realized_usdt * fx)
+            total = base + ((realized_usdt + unreal_usdt) * fx)
             bold('BAL: ') + fmt_inr(total)
           elsif snap.capital_inr
             bold('BAL: ') + fmt_inr(snap.capital_inr)

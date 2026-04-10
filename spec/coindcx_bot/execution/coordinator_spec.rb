@@ -283,6 +283,83 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       )
     end
 
+    it 'sends a CoinDCX-shaped create payload on open (buy/sell, client_order_id, total_quantity)' do
+      signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: {}
+      )
+
+      expect(orders).to receive(:create) do |args|
+        o = args[:order]
+        expect(o[:side] || o['side']).to eq('buy')
+        expect(o[:order_type] || o['order_type']).to eq('market_order')
+        expect(o[:total_quantity] || o['total_quantity']).to eq('0.01')
+        cid = o[:client_order_id] || o['client_order_id']
+        expect(cid.to_s).to start_with('coindcx-bot-')
+        CoindcxBot::Gateways::Result.ok({})
+      end
+
+      expect(coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))).to eq(:paper)
+      expect(journal.open_positions.size).to eq(1)
+    end
+
+    it 'does not open a journal row and logs open_failed when the order gateway rejects the create' do
+      signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: {}
+      )
+
+      allow(orders).to receive(:create).and_return(CoindcxBot::Gateways::Result.fail(:rejected, 'gateway error'))
+
+      expect(coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))).to eq(:failed)
+      expect(journal.open_positions).to be_empty
+
+      types = journal.recent_events(10).map { |e| e['type'] }
+      expect(types).to include('open_failed')
+      expect(types).not_to include('signal_open')
+    end
+
+    it 'logs signal_close with exchange_failed when the paper exchange lists no position' do
+      jid = journal.insert_position(
+        pair: 'B-ETH_USDT',
+        side: 'long',
+        entry_price: BigDecimal('2100'),
+        quantity: BigDecimal('0.01'),
+        stop_price: BigDecimal('2000'),
+        trail_price: nil
+      )
+
+      allow(account).to receive(:list_positions).and_return(
+        CoindcxBot::Gateways::Result.ok('positions' => [])
+      )
+
+      close_signal = CoindcxBot::Strategy::Signal.new(
+        action: :close,
+        pair: 'B-ETH_USDT',
+        side: :long,
+        stop_price: nil,
+        reason: 'test',
+        metadata: { position_id: jid }
+      )
+
+      coordinator.apply(close_signal, exit_price: BigDecimal('2100'))
+
+      expect(journal.open_positions).to be_empty
+      close_ev = journal.recent_events(10).find { |e| e['type'] == 'signal_close' }
+      expect(close_ev).not_to be_nil
+      payload = JSON.parse(close_ev['payload'], symbolize_names: true)
+      expect(payload[:outcome]).to eq('exchange_failed')
+      expect(payload[:pnl_booked]).to be false
+    end
+
     it 'exits on the paper exchange when LTP is nil and books INR from the API payload' do
       jid = journal.insert_position(
         pair: 'B-ETH_USDT',

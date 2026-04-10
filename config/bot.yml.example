@@ -6,6 +6,8 @@ margin_currency_short_name: USDT
 pairs:
   - B-SOL_USDT
   - B-ETH_USDT
+  - B-XRP_USDT
+  - B-BTC_USDT
 
 # Approximate INR per USDT for position sizing from INR risk budget
 inr_per_usdt: 83.0

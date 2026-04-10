@@ -82,9 +82,6 @@ module CoindcxBot
         lev = effective_leverage
         return :rejected unless leverage_permitted?(lev)
 
-        @journal.log_event('signal_open', action: signal.action.to_s, pair: signal.pair, reason: signal.reason,
-                                          leverage: lev)
-
         if @broker.paper?
           open_via_paper_broker(signal, quantity, ep, lev)
         else
@@ -93,51 +90,83 @@ module CoindcxBot
       end
 
       def open_via_paper_broker(signal, quantity, entry_price, leverage)
-        order_params = {
-          pair: signal.pair,
-          side: signal.side.to_s,
-          quantity: quantity,
-          ltp: entry_price,
-          order_type: :market,
-          leverage: leverage
-        }
-
-        if signal.stop_price && @broker.respond_to?(:place_bracket_order)
-          tp_price = compute_take_profit(signal.side, entry_price, signal.stop_price)
-          result = @broker.place_bracket_order(
-            order_params,
-            sl_price: signal.stop_price,
-            tp_price: tp_price
-          )
-          ok = result.is_a?(Hash) && result[:ok]
-        else
-          result = @broker.place_order(order_params)
+        # In-process {PaperBroker} expects duck-typed fills; {GatewayPaperBroker} uses {LiveBroker#place_order}
+        # and the CoinDCX client (buy/sell, client_order_id, total_quantity, market_order).
+        if @broker.is_a?(GatewayPaperBroker)
+          result = @broker.place_order(rest_futures_open_order(signal, quantity, leverage))
           ok = result == :ok
+        else
+          order_params = {
+            pair: signal.pair,
+            side: signal.side.to_s,
+            quantity: quantity,
+            ltp: entry_price,
+            order_type: :market,
+            leverage: leverage
+          }
+
+          if signal.stop_price && @broker.respond_to?(:place_bracket_order)
+            tp_price = compute_take_profit(signal.side, entry_price, signal.stop_price)
+            result = @broker.place_bracket_order(
+              order_params,
+              sl_price: signal.stop_price,
+              tp_price: tp_price
+            )
+            ok = result.is_a?(Hash) && result[:ok]
+          else
+            result = @broker.place_order(order_params)
+            ok = result == :ok
+          end
+        end
+
+        unless ok
+          @journal.log_event(
+            'open_failed',
+            pair: signal.pair,
+            action: signal.action.to_s,
+            reason: signal.reason.to_s,
+            leverage: leverage,
+            detail: 'broker_rejected'
+          )
+          return :failed
         end
 
         journal_id = journal_open(signal, quantity, entry_price)
-        sync_journal_entry_from_paper_fill(signal.pair.to_s, journal_id) if ok
+        sync_journal_entry_from_paper_fill(signal.pair.to_s, journal_id)
+        @journal.log_event(
+          'signal_open',
+          action: signal.action.to_s,
+          pair: signal.pair,
+          reason: signal.reason.to_s,
+          leverage: leverage
+        )
         @logger&.info("[paper] opened #{signal.side} #{signal.pair} qty=#{quantity}")
-        ok ? :paper : :failed
+        :paper
       end
 
       def open_via_live_broker(signal, quantity, entry_price, leverage)
-        body = {
-          pair: signal.pair,
-          side: api_side(signal),
-          total_quantity: quantity.to_s('F'),
-          leverage: leverage,
-          order_type: 'market_order',
-          client_order_id: "coindcx-bot-#{SecureRandom.uuid}"
-        }
-
-        result = @broker.place_order(body)
+        result = @broker.place_order(rest_futures_open_order(signal, quantity, leverage))
         if result == :failed
+          @journal.log_event(
+            'open_failed',
+            pair: signal.pair,
+            action: signal.action.to_s,
+            reason: signal.reason.to_s,
+            leverage: leverage,
+            detail: 'broker_rejected'
+          )
           @logger&.error("Live order failed for #{signal.pair}")
           return :failed
         end
 
         journal_open(signal, quantity, entry_price)
+        @journal.log_event(
+          'signal_open',
+          action: signal.action.to_s,
+          pair: signal.pair,
+          reason: signal.reason.to_s,
+          leverage: leverage
+        )
         @logger&.info("Opened #{signal.side} #{signal.pair} qty=#{quantity}")
         :ok
       end
@@ -160,8 +189,18 @@ module CoindcxBot
         row, close_id = resolve_close_target(signal.pair.to_s, id)
 
         log_close_warnings(signal, id, close_id, row)
-        @journal.log_event('signal_close', pair: signal.pair, reason: signal.reason,
-                                           position_id: close_id || id)
+
+        if close_id.nil?
+          @journal.log_event(
+            'signal_close',
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            position_id: id,
+            outcome: 'no_open_target',
+            pnl_booked: false
+          )
+          return :failed
+        end
 
         if @broker.paper?
           close_via_paper_broker(signal, row, close_id, exit_price)
@@ -171,20 +210,24 @@ module CoindcxBot
       end
 
       def close_via_paper_broker(signal, row, close_id, exit_price)
-        return :failed if close_id.nil?
+        skipped_no_ltp = false
+        broker_res = nil
+        exchange_attempted = false
 
         if row && paper_close_allowed?(exit_price)
+          exchange_attempted = true
           ltp = paper_close_ltp(exit_price)
           qty = BigDecimal(row[:quantity].to_s)
-          res = @broker.close_position(
+          broker_res = @broker.close_position(
             pair: signal.pair.to_s,
             side: row[:side],
             quantity: qty,
             ltp: ltp,
             position_id: nil
           )
-          book_inr_from_paper_close(res, row: row, pair: signal.pair.to_s, source: :strategy_close)
+          book_inr_from_paper_close(broker_res, row: row, pair: signal.pair.to_s, source: :strategy_close)
         elsif row && exit_price.nil?
+          skipped_no_ltp = true
           @logger&.warn(
             "[paper] close skipped for #{signal.pair}: no LTP (journal row #{close_id} still closed — sync flatten if needed)"
           )
@@ -192,6 +235,16 @@ module CoindcxBot
 
         @journal.close_position(close_id)
         @logger&.info("[paper] closed #{signal.pair} id=#{close_id}")
+
+        outcome, pnl_flag = summarize_paper_close_outcome(broker_res, exchange_attempted, skipped_no_ltp)
+        @journal.log_event(
+          'signal_close',
+          pair: signal.pair,
+          reason: signal.reason.to_s,
+          position_id: close_id,
+          outcome: outcome,
+          pnl_booked: pnl_flag
+        )
         :paper
       end
 
@@ -203,7 +256,8 @@ module CoindcxBot
           ltp: exit_price || 0
         )
         row = @journal.open_positions.find { |r| r[:id] == close_id }
-        if paper_broker_close_result?(result) && result[:ok] && result[:realized_pnl_usdt]
+        pnl_path = paper_broker_close_result?(result) && result[:ok]
+        if pnl_path
           book_inr_from_paper_close(
             result,
             row: row,
@@ -212,6 +266,14 @@ module CoindcxBot
           )
         end
         @journal.close_position(close_id)
+        @journal.log_event(
+          'signal_close',
+          pair: signal.pair,
+          reason: signal.reason.to_s,
+          position_id: close_id,
+          outcome: 'live_closed',
+          pnl_booked: pnl_path
+        )
         :ok
       end
 
@@ -240,6 +302,17 @@ module CoindcxBot
 
       def api_side(signal)
         signal.side == :long ? 'buy' : 'sell'
+      end
+
+      def rest_futures_open_order(signal, quantity, leverage)
+        {
+          pair: signal.pair,
+          side: api_side(signal),
+          total_quantity: quantity.to_s('F'),
+          leverage: leverage,
+          order_type: 'market_order',
+          client_order_id: "coindcx-bot-#{SecureRandom.uuid}"
+        }
       end
 
       def metadata_symbols(signal)
@@ -335,6 +408,20 @@ module CoindcxBot
 
       def paper_broker_close_result?(result)
         result.is_a?(Hash) && result.key?(:ok)
+      end
+
+      # After paper close: aligns TUI/event log with whether the exchange close + INR booking ran.
+      def summarize_paper_close_outcome(broker_res, exchange_attempted, skipped_no_ltp)
+        return ['skipped_no_ltp', false] if skipped_no_ltp
+        return ['journal_closed_no_exchange', false] unless exchange_attempted
+
+        unless paper_broker_close_result?(broker_res)
+          return ['closed', false]
+        end
+
+        return ['exchange_failed', false] unless broker_res[:ok]
+
+        ['closed', true]
       end
 
       # Local {PaperBroker} needs an LTP for fill simulation. {GatewayPaperBroker} exits via the

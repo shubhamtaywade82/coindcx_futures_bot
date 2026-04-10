@@ -133,14 +133,15 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         )
       end
 
-      it 'renders USDT realized/unrealized, BAL from capital plus realized at inr_per_usdt, DD and risk tier' do
+      it 'renders USDT realized/unrealized, BAL from capital plus (realized+unrealized) at inr_per_usdt, DD and risk' do
         panel.render
         rendered = output.string
 
         expect(rendered).to include('REAL USDT:')
         expect(rendered).to include('15.50')
         expect(rendered).to include('UNREAL USDT:')
-        expect(rendered).to include('101286.50')
+        # 100_000 + (15.5 + 3.2) * 83 = 101_552.10
+        expect(rendered).to include('101552.10')
         expect(rendered).to include('DD:')
         expect(rendered).to include('RISK:')
       end

@@ -69,4 +69,23 @@ RSpec.describe CoindcxBot::Config do
     )
     expect(cfg.paper_exchange_enabled?).to be(false)
   end
+
+  it 'accepts up to Config::MAX_PAIRS instruments' do
+    many = (1..CoindcxBot::Config::MAX_PAIRS).map { |i| "B-COIN#{i}_USDT" }
+    cfg = described_class.new(minimal_bot_config(pairs: many))
+    expect(cfg.pairs.size).to eq(CoindcxBot::Config::MAX_PAIRS)
+  end
+
+  it 'rejects an empty pairs list' do
+    expect do
+      described_class.new(minimal_bot_config(pairs: []))
+    end.to raise_error(CoindcxBot::Config::ConfigurationError, /must list 1–/)
+  end
+
+  it 'rejects more than Config::MAX_PAIRS instruments' do
+    too_many = (1..(CoindcxBot::Config::MAX_PAIRS + 1)).map { |i| "B-COIN#{i}_USDT" }
+    expect do
+      described_class.new(minimal_bot_config(pairs: too_many))
+    end.to raise_error(CoindcxBot::Config::ConfigurationError, /got #{CoindcxBot::Config::MAX_PAIRS + 1}/)
+  end
 end

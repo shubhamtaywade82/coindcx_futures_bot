@@ -86,8 +86,15 @@ module CoindcxBot
         end
 
         rows = normalize_rows(res.value)
-        row = rows.find { |r| r[:pair].to_s == pair.to_s }
-        return { ok: false, reason: :no_position } unless row
+        row = find_open_position_row(rows, pair, position_id)
+        unless row
+          listed = rows.map { |r| position_row_instrument(r) }.reject(&:empty?).join(', ')
+          @logger&.warn(
+            "[gateway_paper] close #{pair}: no open position matched " \
+            "(#{rows.size} in list#{listed.empty? ? '' : ": #{listed}"})"
+          )
+          return { ok: false, reason: :no_position }
+        end
 
         pid = row[:id] || row['id']
         er = @account.exit_position({ id: pid.to_s })
@@ -150,15 +157,50 @@ module CoindcxBot
       end
 
       def normalize_rows(value)
-        list =
-          case value
-          when Array then value
-          when Hash
-            value[:positions] || value['positions'] || value[:data] || value.values.find { |v| v.is_a?(Array) } || []
-          else
-            []
-          end
+        list = extract_positions_list(value)
         Array(list).map { |h| h.is_a?(Hash) ? h.transform_keys(&:to_sym) : {} }
+      end
+
+      # CoinDCX envelopes: { "data" => { "positions" => [...] } }; paper exchange: { "positions" => [...] }.
+      def extract_positions_list(raw)
+        v = raw
+        if v.is_a?(Hash) && (inner = v[:data] || v['data']).is_a?(Hash)
+          v = inner
+        end
+        return v if v.is_a?(Array)
+        return [] unless v.is_a?(Hash)
+
+        arr = v[:positions] || v['positions'] || v[:open_positions] || v['open_positions']
+        return arr if arr.is_a?(Array)
+
+        v.values.grep(Array).first || []
+      end
+
+      def find_open_position_row(rows, pair, position_id)
+        wanted = pair.to_s
+        if position_id && !position_id.to_s.strip.empty?
+          pid = position_id.to_s
+          hit = rows.find { |r| (r[:id] || r['id']).to_s == pid }
+          return hit if hit
+        end
+
+        rows.find { |r| pairs_match?(position_row_instrument(r), wanted) }
+      end
+
+      def position_row_instrument(r)
+        (r[:pair] || r[:instrument] || r[:instrument_name] || r['pair'] || r['instrument'] || r['instrument_name']).to_s
+      end
+
+      def pairs_match?(api_pair, requested_pair)
+        a = api_pair.to_s.strip
+        b = requested_pair.to_s.strip
+        return true if a == b
+
+        futures_pair_key(a) == futures_pair_key(b)
+      end
+
+      def futures_pair_key(s)
+        s.to_s.strip.upcase.sub(/\AB-/, '').tr('-', '_')
       end
     end
   end

@@ -7,6 +7,9 @@ module CoindcxBot
   class Config
     DEFAULT_PATH = File.expand_path('../../config/bot.yml', __dir__)
 
+    # Upper bound for `pairs:` (WS subs, REST poll, and TUI rows scale with count).
+    MAX_PAIRS = 32
+
     attr_reader :raw
 
     def self.load(path = nil)
@@ -149,7 +152,10 @@ module CoindcxBot
 
     def validate_whitelist!
       allowed = pairs.uniq
-      raise ConfigurationError, 'config pairs must list 1–2 instruments' unless allowed.size.between?(1, 2)
+      unless allowed.size.between?(1, MAX_PAIRS)
+        raise ConfigurationError,
+              "config pairs must list 1–#{MAX_PAIRS} instruments (got #{allowed.size})"
+      end
 
       allowed.each do |p|
         raise ConfigurationError, "Invalid pair #{p.inspect}" unless p.match?(/\A[A-Z0-9._-]+\z/i)
