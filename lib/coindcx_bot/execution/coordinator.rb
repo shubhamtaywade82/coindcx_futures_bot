@@ -37,6 +37,26 @@ module CoindcxBot
         end
       end
 
+      # Called by the engine when PaperBroker#process_tick fills a working exit order.
+      # Syncs the journal and books INR PnL without re-closing through the strategy.
+      def handle_broker_exit(pair:, realized_pnl_usdt:, fill_price:, position_id:, trigger:)
+        row = @journal.open_positions.find { |r| r[:pair].to_s == pair.to_s }
+        close_id = row&.dig(:id)
+
+        if close_id
+          book_inr_from_paper_close(
+            { ok: true, realized_pnl_usdt: realized_pnl_usdt, fill_price: fill_price, position_id: position_id },
+            row: row,
+            pair: pair,
+            source: :"broker_#{trigger}"
+          )
+          @journal.close_position(close_id)
+          @logger&.info("[paper] broker exit synced: #{pair} id=#{close_id} trigger=#{trigger} pnl=#{realized_pnl_usdt&.to_s('F')}")
+        else
+          @logger&.warn("[paper] broker exit for #{pair} but no matching journal row")
+        end
+      end
+
       private
 
       def flatten_pair(pair, ltp: nil)
@@ -73,19 +93,32 @@ module CoindcxBot
       end
 
       def open_via_paper_broker(signal, quantity, entry_price, leverage)
-        result = @broker.place_order(
+        order_params = {
           pair: signal.pair,
           side: signal.side.to_s,
           quantity: quantity,
           ltp: entry_price,
           order_type: :market,
           leverage: leverage
-        )
+        }
+
+        if signal.stop_price && @broker.respond_to?(:place_bracket_order)
+          tp_price = compute_take_profit(signal.side, entry_price, signal.stop_price)
+          result = @broker.place_bracket_order(
+            order_params,
+            sl_price: signal.stop_price,
+            tp_price: tp_price
+          )
+          ok = result.is_a?(Hash) && result[:ok]
+        else
+          result = @broker.place_order(order_params)
+          ok = result == :ok
+        end
 
         journal_id = journal_open(signal, quantity, entry_price)
-        sync_journal_entry_from_paper_fill(signal.pair.to_s, journal_id) if result == :ok
+        sync_journal_entry_from_paper_fill(signal.pair.to_s, journal_id) if ok
         @logger&.info("[paper] opened #{signal.side} #{signal.pair} qty=#{quantity}")
-        result == :ok ? :paper : :failed
+        ok ? :paper : :failed
       end
 
       def open_via_live_broker(signal, quantity, entry_price, leverage)
@@ -196,6 +229,12 @@ module CoindcxBot
 
         @journal.update_position_stop(id, signal.stop_price)
         @journal.log_event('trail', position_id: id, stop: signal.stop_price.to_s('F'))
+
+        # Sync trailing stop to broker's working SL order
+        if @broker.paper? && @broker.respond_to?(:update_trailing_stop)
+          @broker.update_trailing_stop(pair: signal.pair, new_stop: signal.stop_price)
+        end
+
         :ok
       end
 
@@ -343,6 +382,25 @@ module CoindcxBot
         @logger&.warn("Skip open — leverage #{lev} exceeds max #{@exposure.max_leverage}")
         false
       end
+
+      # Compute take-profit price at a configurable R-multiple from entry.
+      def compute_take_profit(side, entry_price, stop_price)
+        return nil if stop_price.nil? || entry_price.nil?
+
+        risk_reward = BigDecimal(
+          @config.paper_config.fetch(:take_profit_r_multiple, 3).to_s
+        )
+        risk = (entry_price - stop_price).abs
+        return nil if risk <= 0
+
+        case side.to_sym
+        when :long
+          entry_price + (risk * risk_reward)
+        when :short
+          entry_price - (risk * risk_reward)
+        end
+      end
+
     end
   end
 end
