@@ -57,7 +57,7 @@ module CoindcxBot
 
         def controls_line_two
           [
-            "#{dim('1–2')} #{dim('symbols · bot.yml')}",
+            "#{dim('pairs · config/bot.yml')}",
             "#{dim('m')} #{dim('mode')}",
             "#{dim('t')} #{dim('strategy (future)')}"
           ].join(dim('  │  '))

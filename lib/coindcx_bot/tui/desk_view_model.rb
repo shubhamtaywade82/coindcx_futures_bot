@@ -6,7 +6,8 @@ module CoindcxBot
   module Tui
     # Maps {Engine#snapshot} + {TickStore#snapshot} into row-oriented desk data. Rendering stays dumb.
     class DeskViewModel
-      INNER_HEIGHT = 6
+      INNER_HEIGHT_MIN = 6
+      INNER_HEIGHT_CAP = 24
 
       def self.build(engine:, tick_store:, symbols:)
         new(
@@ -27,7 +28,8 @@ module CoindcxBot
       end
 
       def inner_height
-        INNER_HEIGHT
+        n = @symbols.size
+        [[n, INNER_HEIGHT_MIN].max, INNER_HEIGHT_CAP].min
       end
 
       def execution_rows
