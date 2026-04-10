@@ -132,7 +132,12 @@ module CoindcxBot
 
         row = @store.db.get_first_row('SELECT ltp FROM pe_mark_prices WHERE pair = ?', [pair])
         ltp_s = row ? row['ltp'].to_s : ''
-        ltp_bd = ltp_s.strip.empty? ? BigDecimal('0') : BigDecimal(ltp_s)
+        ltp_bd =
+          begin
+            ltp_s.strip.empty? ? BigDecimal('0') : BigDecimal(ltp_s)
+          rescue ArgumentError
+            BigDecimal('0')
+          end
         unless ltp_bd.positive?
           return [
             404,

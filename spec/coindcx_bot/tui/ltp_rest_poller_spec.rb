@@ -48,6 +48,45 @@ RSpec.describe CoindcxBot::Tui::LtpRestPoller do
       expect(snap.ask).to eq(10.01)
     end
 
+    it 'skips tick_store when price is zero' do
+      allow(market_data).to receive(:fetch_instrument_display_quote).with(pair: 'B-SOL_USDT').and_return(
+        CoindcxBot::Gateways::Result.ok({ price: BigDecimal('0'), change_pct: nil })
+      )
+
+      poller = described_class.new(
+        market_data: market_data,
+        pairs: ['B-SOL_USDT'],
+        tick_store: tick_store,
+        render_loop: render_loop,
+        interval_seconds: 60,
+        logger: nil
+      )
+      poller.send(:refresh_pair, 'B-SOL_USDT')
+
+      expect(tick_store.snapshot['B-SOL_USDT']).to be_nil
+    end
+
+    it 'synthesizes bid/ask when quote has price but omits book' do
+      allow(market_data).to receive(:fetch_instrument_display_quote).with(pair: 'B-SOL_USDT').and_return(
+        CoindcxBot::Gateways::Result.ok({ price: BigDecimal('100'), change_pct: BigDecimal('1'), bid: nil, ask: nil })
+      )
+
+      poller = described_class.new(
+        market_data: market_data,
+        pairs: ['B-SOL_USDT'],
+        tick_store: tick_store,
+        render_loop: render_loop,
+        interval_seconds: 60,
+        logger: nil
+      )
+      poller.send(:refresh_pair, 'B-SOL_USDT')
+
+      snap = tick_store.snapshot['B-SOL_USDT']
+      expect(snap.ltp).to eq(100.0)
+      expect(snap.bid).to be_within(1e-6).of(99.99)
+      expect(snap.ask).to be_within(1e-6).of(100.01)
+    end
+
     it 'skips tick_store when the gateway fails' do
       allow(market_data).to receive(:fetch_instrument_display_quote).and_return(
         CoindcxBot::Gateways::Result.fail(:request, 'nope')
