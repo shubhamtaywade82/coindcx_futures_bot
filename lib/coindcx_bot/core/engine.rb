@@ -5,6 +5,7 @@ require 'json'
 require 'logger'
 
 require_relative '../display_ltp'
+require_relative '../synthetic_l1'
 
 module CoindcxBot
   module Core
@@ -13,6 +14,7 @@ module CoindcxBot
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
         :running, :dry_run, :stale_tick_seconds, :paper_metrics,
         :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
+        :strategy_last_by_pair,
         keyword_init: true
       )
 
@@ -63,6 +65,7 @@ module CoindcxBot
         @refresh = config.runtime.fetch(:refresh_candles_seconds, 60).to_f
         @lookback = config.runtime.fetch(:candle_lookback, 120).to_i
         @ws_tick_at = {}
+        @last_strategy_by_pair = {}
 
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
@@ -117,7 +120,8 @@ module CoindcxBot
           capital_inr: snapshot_capital_inr,
           recent_events: snapshot_recent_events,
           working_orders: @broker.tui_working_orders,
-          ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago
+          ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago,
+          strategy_last_by_pair: @last_strategy_by_pair.dup
         )
       end
 
@@ -297,13 +301,14 @@ module CoindcxBot
       def forward_tick_to_store(tick)
         return unless @tick_store
 
+        bid, ask = tick_store_bid_ask(tick)
         @tick_store.update(
           symbol: tick.pair,
           ltp: tick.price,
           change_pct: tick.change_pct,
           updated_at: tick.received_at,
-          bid: tick.bid,
-          ask: tick.ask
+          bid: bid,
+          ask: ask
         )
       end
 
@@ -328,15 +333,36 @@ module CoindcxBot
           existing = @tick_store.snapshot[pair]
           next if existing && existing.updated_at > t.received_at
 
+          bid, ask = tick_store_bid_ask(t)
           @tick_store.update(
             symbol: pair,
             ltp: t.price,
             change_pct: t.change_pct,
             updated_at: t.received_at,
-            bid: t.bid,
-            ask: t.ask
+            bid: bid,
+            ask: ask
           )
         end
+      end
+
+      def tick_store_bid_ask(tick)
+        return [nil, nil] unless tick
+
+        if l1_book_usable?(tick.bid, tick.ask)
+          [tick.bid, tick.ask]
+        else
+          SyntheticL1.quote_from_mid_as_float(tick.price)
+        end
+      end
+
+      def l1_book_usable?(bid, ask)
+        return false if bid.nil? || ask.nil?
+
+        b = BigDecimal(bid.to_s)
+        a = BigDecimal(ask.to_s)
+        b.positive? && a.positive? && a > b
+      rescue ArgumentError, TypeError
+        false
       end
 
       def configure_coin_dcx
@@ -401,6 +427,7 @@ module CoindcxBot
         run_paper_process_tick if @broker.paper?
         # Entry gating must be **per pair**: if ETH has no WS ticks, SOL must still be allowed to open.
         # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
+        @last_strategy_by_pair = {}
         @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
       rescue StandardError => e
         @last_error = e.message
@@ -543,6 +570,8 @@ module CoindcxBot
           position: pos,
           ltp: ltp
         )
+
+        @last_strategy_by_pair[pair.to_s] = { action: sig.action, reason: sig.reason.to_s }
 
         log_strategy_signal(pair, sig) if @strategy_signal_trace
 

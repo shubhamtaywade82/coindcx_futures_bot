@@ -31,7 +31,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       capital_inr: BigDecimal('50_000'),
       recent_events: [{ ts: 1, type: 'tick', payload: {} }],
       working_orders: [],
-      ws_last_tick_ms_ago: 42
+      ws_last_tick_ms_ago: 42,
+      strategy_last_by_pair: {}
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
@@ -79,7 +80,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           capital_inr: nil,
           recent_events: [],
           working_orders: [],
-          ws_last_tick_ms_ago: nil
+          ws_last_tick_ms_ago: nil,
+          strategy_last_by_pair: {}
         )
       end
 
@@ -126,7 +128,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           capital_inr: BigDecimal('100_000'),
           recent_events: [],
           working_orders: [],
-          ws_last_tick_ms_ago: 10
+          ws_last_tick_ms_ago: 10,
+          strategy_last_by_pair: {}
         )
       end
 

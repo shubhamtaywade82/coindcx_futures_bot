@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs the optional ollama_agent CLI against this repository (code review / improve).
+# Does not touch the trading engine. Requires: bundle install (include the :development group).
+
+repo_root = File.expand_path('..', __dir__)
+ENV['OLLAMA_AGENT_ROOT'] = repo_root if ENV.fetch('OLLAMA_AGENT_ROOT', '').strip.empty?
+
+require 'bundler/setup'
+Bundler.setup(:default, :development)
+
+begin
+  ollama_exe = Gem.bin_path('ollama_agent', 'ollama_agent')
+rescue Gem::Exception
+  warn <<~MSG
+    ollama_agent is not installed. From the repo root run:
+
+      bundle install
+
+    (Do not use `--without development` if you want this helper.) Or run from your
+    ollama_agent checkout with OLLAMA_AGENT_ROOT set to this repo.
+  MSG
+  exit 1
+end
+
+args = ARGV.empty? ? %w[self_review --mode analysis] : ARGV.dup
+Kernel.exec(ollama_exe, *args)

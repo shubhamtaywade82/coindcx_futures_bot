@@ -100,9 +100,52 @@ If `bin/bot run` logs `CoinDCX::Errors::SocketConnectionError` with retries:
 
 ## Risk and execution notes
 
-- **Per-trade INR:** `risk.per_trade_inr_min` and `risk.per_trade_inr_max` define a band; position sizing uses the **midpoint** of that band (converted via `inr_per_usdt` to USDT risk at the stop).
+- **Per-trade INR:** by default, sizing uses **`capital_inr`** and **`Config`** resolved rails (target ~1.5% of capital at the stop, clamp band and daily loss as % of capital). Optional explicit `risk.per_trade_inr_min` / `max`, `max_daily_loss_inr`, or `*_pct_of_capital` keys override; legacy **midpoint** behavior applies only when both INR min and max are set and `per_trade_capital_pct` is omitted. See [`config/bot.yml.example`](config/bot.yml.example).
 - **Leverage:** `risk.max_leverage` caps leverage on new orders. If `execution.order_defaults` sets `leverage`, the effective value is `min(requested, max_leverage)`.
 - **Partial at 1R:** The bot records partials in the journal for trailing logic; **it does not automatically place a reduce-only order on the exchange** yet. Confirm CoinDCX derivatives order fields in their docs and extend `Execution::Coordinator` when you have a verified payload.
+
+## AI-assisted development (optional)
+
+The repo can bundle **[ollama_agent](https://github.com/shubhamtaywade82/ollama_agent)** under **`group :development`** (path gem → `../../../ai-workspace/ollama_agent` from this checkout). It runs a **local Ollama** coding agent: read/search the tree, patches, **`self_review`**, **`improve`** (sandbox + tests + optional `--apply`). Use it to **iterate on strategy/risk code and specs**, not to drive live trades.
+
+**Not integrated into the engine:** there is **no** Ollama call on the tick or order path; execution stays deterministic.
+
+**Prerequisites:** Ollama running with a tool-capable model; **`patch`** on `PATH`; **`rg`** or **`grep`** for search. See the upstream README for env vars (`OLLAMA_AGENT_MODEL`, cloud URL/key, etc.).
+
+**Commands** (from repository root; **`OLLAMA_AGENT_ROOT`** defaults to this repo):
+
+```bash
+bundle exec bin/ollama-review                    # default: self_review --mode analysis (read-only report)
+bundle exec bin/ollama-review improve --help
+bundle exec bin/ollama-review ask --read-only "Summarize exit rules in lib/coindcx_bot/strategy"
+```
+
+**CoinDCX futures agent (`bin/coindcx-agent`):** read-only **`OllamaAgent::Agent`** scoped to this repo, with extra prompt skill under [`config/ollama_agent/skills/`](config/ollama_agent/skills/) (boundaries, key paths, strategy/risk notes). Use it for **natural-language questions** about the codebase; it does **not** place trades.
+
+```bash
+bundle exec bin/coindcx-agent "Where is daily loss enforced relative to capital_inr?"
+```
+
+**Orchestrator delegate:** to register a sub-agent id **`coindcx_futures`** for `ollama_agent orchestrate` / delegation tools, point at the merge overlay (this **adds** to upstream defaults, it does not replace them):
+
+```bash
+export OLLAMA_AGENT_EXTERNAL_AGENTS_CONFIG="$PWD/config/ollama_agent/external_agents.overlay.yml"
+bundle exec bin/ollama-review agents    # should list coindcx_futures when ruby is on PATH
+```
+
+**Note:** older **`ollama_agent`** versions called the external program **`command`** for `command -v`; on distros without **`/usr/bin/command`** that raised **`ENOENT`**. The path gem under **`../../../ai-workspace/ollama_agent`** includes a **PATH-walk fallback**; update that checkout if you still see the error.
+
+Optional: **`COINDCX_FUTURES_AGENT_RUBY_PATH`** — absolute path to `ruby` if the delegate subprocess cannot find it on `PATH`.
+
+**Path layout:** if your `ollama_agent` checkout is not at `../../..` from `coindcx_futures_bot`, either adjust the **`path:`** in the `Gemfile` or run:
+
+```bash
+bundle config set local.ollama_agent /absolute/path/to/ollama_agent
+```
+
+**Deploy / lean installs:** `bundle install --without development` omits `ollama_agent` and keeps production bundles smaller.
+
+**Dependency note:** `ollama_agent` expects **`dotenv` ~> 2.8**; this Gemfile uses **`dotenv` ~> 2.8** so both resolve together.
 
 ## Tests
 

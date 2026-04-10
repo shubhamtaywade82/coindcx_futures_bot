@@ -21,7 +21,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
       capital_inr: nil,
       recent_events: [],
       working_orders: [],
-      ws_last_tick_ms_ago: 1
+      ws_last_tick_ms_ago: 1,
+      strategy_last_by_pair: {}
     )
   end
   let(:config) do

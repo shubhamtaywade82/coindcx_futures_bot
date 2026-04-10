@@ -4,6 +4,8 @@ require 'json'
 require 'bigdecimal'
 require 'rack'
 
+require_relative '../synthetic_l1'
+
 module CoindcxBot
   module PaperExchange
     class App
@@ -108,7 +110,8 @@ module CoindcxBot
         path = Auth.normalized_request_path(env)
         case path
         when '/exchange/v1/derivatives/futures/data/instrument'
-          json(200, public_instrument(env))
+          status, body = public_instrument_response(env)
+          json(status, body)
         when '/exchange/v1/derivatives/futures/data/active_instruments'
           json(200, public_active_instruments)
         when '/exchange/v1/derivatives/futures/data/trades'
@@ -122,27 +125,40 @@ module CoindcxBot
         end
       end
 
-      def public_instrument(env)
+      def public_instrument_response(env)
         q = Rack::Utils.parse_nested_query(env['QUERY_STRING'].to_s)
         pair = (q['pair'] || q[:pair]).to_s
         raise MarketRules::ValidationError, 'pair required' if pair.empty?
 
         row = @store.db.get_first_row('SELECT ltp FROM pe_mark_prices WHERE pair = ?', [pair])
-        ltp_s = row ? row['ltp'].to_s : '0'
-        ltp_bd = BigDecimal(ltp_s)
-        spread = BigDecimal('0.0001')
-        bid = (ltp_bd * (1 - spread)).to_s('F')
-        ask = (ltp_bd * (1 + spread)).to_s('F')
-        {
-          pair: pair,
-          last_traded_price: ltp_s,
-          ltp: ltp_s,
-          mark_price: ltp_s,
-          bid: bid,
-          ask: ask,
-          pc: '0',
-          change_pct: '0'
-        }
+        ltp_s = row ? row['ltp'].to_s : ''
+        ltp_bd =
+          begin
+            ltp_s.strip.empty? ? BigDecimal('0') : BigDecimal(ltp_s)
+          rescue ArgumentError
+            BigDecimal('0')
+          end
+        unless ltp_bd.positive?
+          return [
+            404,
+            { error: { message: 'mark price not available yet', code: 'no_mark', pair: pair } }
+          ]
+        end
+
+        bid_bd, ask_bd = CoindcxBot::SyntheticL1.quote_from_mid(ltp_bd)
+        [
+          200,
+          {
+            pair: pair,
+            last_traded_price: ltp_s,
+            ltp: ltp_s,
+            mark_price: ltp_s,
+            bid: bid_bd.to_s('F'),
+            ask: ask_bd.to_s('F'),
+            pc: '0',
+            change_pct: '0'
+          }
+        ]
       end
 
       def public_active_instruments

@@ -1,0 +1,104 @@
+# Copy to config/bot.yml and adjust. Env overrides: COINDCX_BOT_CONFIG path.
+
+margin_currency_short_name: USDT
+
+# REST + WS instrument pair codes (e.g. B-SOL_USDT). Run `bin/bot doctor` to list matches.
+pairs:
+  - B-SOL_USDT
+  - B-ETH_USDT
+
+# Approximate INR per USDT for position sizing from INR risk budget
+inr_per_usdt: 83.0
+
+# Reference equity in INR — risk clamps and daily loss limit scale from this (no need to retune ₹ amounts).
+capital_inr: 1_00_000
+
+risk:
+  max_open_positions: 2
+  max_leverage: 10
+  # Optional (% of capital_inr). Defaults: per-trade 1.5% (when both per_trade_inr_min/max are omitted);
+  # clamp floor/ceiling 0.25% / 3%; daily loss halt 3.5%. TUI UTIL = loss vs daily cap, not margin use.
+  # per_trade_capital_pct: 1.5
+  # per_trade_inr_min_pct_of_capital: 0.25
+  # per_trade_inr_max_pct_of_capital: 3.0
+  # max_daily_loss_pct_of_capital: 3.5
+  # Legacy explicit INR band (omit if using *_pct_of_capital above).
+  # per_trade_inr_min: 250
+  # per_trade_inr_max: 500
+  # max_daily_loss_inr: 1500
+
+strategy:
+  execution_resolution: 15m
+  higher_timeframe_resolution: 1h
+  ema_fast: 12
+  ema_slow: 26
+  atr_period: 14
+  # |EMA_fast - EMA_slow| / ATR on execution timeframe; higher => stronger trend tape
+  trend_strength_min: 0.12
+  compression_lookback: 8
+  compression_ratio: 0.65
+  breakout_lookback: 4
+  pullback_ema_tolerance_pct: 0.0025
+  # Optional entry gates (defaults preserve original behavior)
+  volume_filter: false
+  volume_lookback: 20
+  volume_min_ratio: 1.0
+  structure_bars: 0
+  adx_period: 14
+  adx_min: 0
+
+  # Optional: switch engine strategy (default = trend_continuation when omitted).
+  # Supertrend on execution_resolution (use 5m below); exits only at take_profit_pct — no Supertrend-based exit.
+  # name: supertrend_profit
+  # execution_resolution: 5m
+  # higher_timeframe_resolution: 5m
+  # supertrend_atr_period: 10
+  # supertrend_multiplier: 3
+  # take_profit_pct: 0.10
+  # stop_distance_pct_for_sizing: 0.02
+
+execution:
+  # Merged into every futures `order:` hash; required keys depend on CoinDCX API.
+  # See https://docs.coindcx.com/ — adjust for your account (order_type, leverage, etc.).
+  order_defaults:
+    order_type: market_order
+    margin_currency_short_name: USDT
+
+runtime:
+  journal_path: ./data/bot_journal.sqlite3
+  candle_lookback: 200
+  refresh_candles_seconds: 1
+  # Seconds without a WebSocket price tick before the feed is stale (new entries blocked).
+  stale_tick_seconds: 45
+  # While WS is stale, wait this long between engine cycles instead of refresh_candles_seconds.
+  stale_recovery_sleep_seconds: 5
+  # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
+  ws_shutdown_join_seconds: 45
+  # Paper trading: no futures orders / account exits. Same effect as dry_run (either key is enough).
+  dry_run: true
+  # paper: true
+  # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.
+  # log_strategy_signals: true
+  # Paper only: when true (default), mirroring REST candles into LTP also refreshes the WS staleness clock so STALE/AGE match the UI. Live ignores this.
+  # paper_rest_advances_ws_stale_clock: true
+  # TUI only: REST poll interval (seconds) for LTP/CHG/AGE in the dashboard; does not drive strategy or `@ws_tick_at`. Set 0 to disable. Override: COINDCX_TUI_LTP_POLL_SECONDS=0
+  # tui_ltp_poll_seconds: 0.5
+
+# Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true,
+# and paper_exchange.enabled is false). Slippage/fees; persisted to SQLite.
+paper:
+  slippage_bps: 5
+  fee_bps: 4
+  db_path: ./data/paper_trading.sqlite3
+
+# CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). When enabled with
+# `runtime.dry_run` / `runtime.paper`, the bot uses `OrderGateway` / `AccountGateway` against this
+# base URL instead of the in-process `PaperBroker`. Set `COINDCX_API_*` to match the seeded keys.
+paper_exchange:
+  enabled: true
+  api_base_url: http://127.0.0.1:9292
+  tick_path: /exchange/v1/paper/simulation/tick
+
+# To use in-process PaperBroker instead, comment the block above and set:
+# paper_exchange:
+#   enabled: false

@@ -4,7 +4,6 @@
 *.db
 /data/*
 !/data/.gitkeep
-/config/bot.yml
 .env
 .env.*
 !.env.example

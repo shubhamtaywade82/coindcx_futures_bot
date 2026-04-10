@@ -1,0 +1,24 @@
+# Merge fragment for ollama_agent orchestrator (adds one delegate).
+# Use:
+#   export OLLAMA_AGENT_EXTERNAL_AGENTS_CONFIG="$PWD/config/ollama_agent/external_agents.overlay.yml"
+# Then run e.g. `bundle exec ollama-review orchestrate "Delegate a futures-code question to coindcx_futures"`.
+#
+# Merges with ollama_agent's default_agents.yml (does not replace it).
+version: 1
+agents:
+  - id: coindcx_futures
+    binary: ruby
+    # Optional: full path to ruby if `ruby` is not on PATH for the delegate subprocess
+    env_path: COINDCX_FUTURES_AGENT_RUBY_PATH
+    capabilities:
+      - futures_codebase
+      - read_only_ollama
+    argv:
+      - "%{binary}"
+      - "%{root}/bin/coindcx-agent"
+      - "--handoff"
+      - "%{task_file}"
+    version_argv:
+      - "%{binary}"
+      - "--version"
+    timeout_sec: 900

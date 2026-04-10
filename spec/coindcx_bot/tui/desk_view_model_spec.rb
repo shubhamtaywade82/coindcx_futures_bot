@@ -34,7 +34,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         { id: 1, pair: 'B-SOL_USDT', side: 'sell', order_type: 'limit_order', quantity: '0.1',
           limit_price: '160', stop_price: nil }
       ],
-      ws_last_tick_ms_ago: 12
+      ws_last_tick_ms_ago: 12,
+      strategy_last_by_pair: { 'B-SOL_USDT' => { action: :hold, reason: 'below_take_profit' } }
     )
   end
 
@@ -158,6 +159,42 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
   describe '#strategy_name' do
     it 'returns the configured strategy name uppercased' do
       expect(vm.strategy_name).to eq('SUPERTREND_PROFIT')
+    end
+  end
+
+  describe '#strategy_position_state' do
+    it 'summarizes a single open position' do
+      expect(vm.strategy_position_state).to eq('LONG SOL')
+    end
+
+    it 'returns FLAT when there are no positions' do
+      flat = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(positions: []))
+      vm2 = described_class.new(
+        snapshot: flat,
+        tick_ticks: tick_ticks,
+        symbols: %w[B-SOL_USDT],
+        ws_stale_fn: ->(_) { false },
+        config: config
+      )
+      expect(vm2.strategy_position_state).to eq('FLAT')
+    end
+  end
+
+  describe '#strategy_signal_summary' do
+    it 'shows per-pair hold reasons from the last engine cycle' do
+      expect(vm.strategy_signal_summary).to eq('SOL:below_take_profit')
+    end
+
+    it 'returns em dash when the kill switch is on' do
+      k = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(kill_switch: true))
+      vm2 = described_class.new(
+        snapshot: k,
+        tick_ticks: {},
+        symbols: %w[B-SOL_USDT],
+        ws_stale_fn: ->(_) { false },
+        config: config
+      )
+      expect(vm2.strategy_signal_summary).to eq('—')
     end
   end
 end

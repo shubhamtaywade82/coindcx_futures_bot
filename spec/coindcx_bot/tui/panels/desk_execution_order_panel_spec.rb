@@ -28,7 +28,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
         { id: 9, pair: 'B-SOL_USDT', side: 'sell', order_type: 'limit', quantity: '0.1', limit_price: '160',
           stop_price: nil }
       ],
-      ws_last_tick_ms_ago: 5
+      ws_last_tick_ms_ago: 5,
+      strategy_last_by_pair: {}
     )
   end
   let(:config) do

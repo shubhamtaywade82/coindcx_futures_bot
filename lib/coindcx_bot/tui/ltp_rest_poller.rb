@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
+require_relative '../synthetic_l1'
+
 module CoindcxBot
   module Tui
     # Fast REST polls into `TickStore` for TUI LTP/CHG%/AGE (and L1 bid/ask when available). Does not publish engine
@@ -72,19 +75,22 @@ module CoindcxBot
         return unless res.ok?
 
         q = res.value
-        return unless q[:price]
+        return unless display_price_positive?(q[:price])
 
         write_tick_store(pair, q[:price], q[:change_pct], bid: q[:bid], ask: q[:ask])
       end
 
       def write_tick_store(pair, price, change_pct, bid: nil, ask: nil)
+        return unless display_price_positive?(price)
+
+        b, a = normalize_bid_ask_for_store(price, bid, ask)
         @tick_store.update(
           symbol: pair,
           ltp: price,
           change_pct: change_pct,
           updated_at: Time.now,
-          bid: bid,
-          ask: ask
+          bid: b,
+          ask: a
         )
       end
 
@@ -94,17 +100,20 @@ module CoindcxBot
         return unless res.ok?
 
         q = res.value
-        return if q[:bid].nil? && q[:ask].nil?
+        return unless display_price_positive?(q[:price])
 
         tick = @tick_store.snapshot[pair]
         price = tick&.ltp || q[:price]
+        return unless display_price_positive?(price)
+
+        b, a = normalize_bid_ask_for_store(price, q[:bid], q[:ask])
         @tick_store.update(
           symbol: pair,
           ltp: price,
           change_pct: nil,
           updated_at: Time.now,
-          bid: q[:bid],
-          ask: q[:ask]
+          bid: b,
+          ask: a
         )
       end
 
@@ -112,6 +121,21 @@ module CoindcxBot
         elapsed = Time.now - cycle_started
         remain = @interval_seconds - elapsed
         sleep(remain) if remain.positive?
+      end
+
+      def display_price_positive?(price)
+        BigDecimal(price.to_s).positive?
+      rescue ArgumentError, TypeError
+        false
+      end
+
+      def normalize_bid_ask_for_store(price, bid, ask)
+        if bid && ask
+          b = BigDecimal(bid.to_s)
+          a = BigDecimal(ask.to_s)
+          return [b.to_f, a.to_f] if b.positive? && a.positive? && a > b
+        end
+        SyntheticL1.quote_from_mid_as_float(price)
       end
 
       def stopped?

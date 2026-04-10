@@ -140,8 +140,8 @@ module CoindcxBot
       def close_via_paper_broker(signal, row, close_id, exit_price)
         return :failed if close_id.nil?
 
-        if row && exit_price
-          ltp = BigDecimal(exit_price.to_s)
+        if row && paper_close_allowed?(exit_price)
+          ltp = paper_close_ltp(exit_price)
           qty = BigDecimal(row[:quantity].to_s)
           res = @broker.close_position(
             pair: signal.pair.to_s,
@@ -151,6 +151,10 @@ module CoindcxBot
             position_id: nil
           )
           book_inr_from_paper_close(res, row: row, pair: signal.pair.to_s, source: :strategy_close)
+        elsif row && exit_price.nil?
+          @logger&.warn(
+            "[paper] close skipped for #{signal.pair}: no LTP (journal row #{close_id} still closed — sync flatten if needed)"
+          )
         end
 
         @journal.close_position(close_id)
@@ -267,10 +271,16 @@ module CoindcxBot
       end
 
       def book_inr_from_paper_close(result, row:, pair:, source:)
-        return unless paper_broker_close_result?(result) && result[:ok] && result[:realized_pnl_usdt]
+        return unless paper_broker_close_result?(result) && result[:ok]
 
-        usdt = BigDecimal(result[:realized_pnl_usdt].to_s)
+        raw = result[:realized_pnl_usdt]
+        if raw.nil?
+          @logger&.warn("[paper] close ok but missing realized_pnl_usdt for #{pair} — booking 0 USDT")
+        end
+
+        usdt = raw.nil? ? BigDecimal('0') : BigDecimal(raw.to_s)
         inr = usdt * @config.inr_per_usdt
+        fill_s = paper_close_fill_price_for_event(result)
         @journal.add_daily_pnl_inr(inr)
         @journal.log_event(
           'paper_realized',
@@ -278,7 +288,7 @@ module CoindcxBot
           pair: pair,
           pnl_usdt: usdt.to_s('F'),
           pnl_inr: inr.to_s('F'),
-          exit_price: BigDecimal(result[:fill_price].to_s).to_s('F'),
+          exit_price: fill_s,
           source: source.to_s
         )
         @logger&.info("[paper] PnL ~₹#{inr.to_s('F')} (#{usdt.to_s('F')} USDT) #{pair}")
@@ -286,6 +296,30 @@ module CoindcxBot
 
       def paper_broker_close_result?(result)
         result.is_a?(Hash) && result.key?(:ok)
+      end
+
+      # Local {PaperBroker} needs an LTP for fill simulation. {GatewayPaperBroker} exits via the
+      # paper exchange mark price and ignores this value.
+      def paper_close_allowed?(exit_price)
+        return true if exit_price
+        return true if @broker.is_a?(CoindcxBot::Execution::GatewayPaperBroker)
+
+        false
+      end
+
+      def paper_close_ltp(exit_price)
+        return BigDecimal('0') if exit_price.nil?
+
+        BigDecimal(exit_price.to_s)
+      end
+
+      def paper_close_fill_price_for_event(result)
+        fp = result[:fill_price]
+        return '0' if fp.nil?
+
+        BigDecimal(fp.to_s).to_s('F')
+      rescue ArgumentError, TypeError
+        '0'
       end
 
       def sync_journal_entry_from_paper_fill(pair, journal_id)

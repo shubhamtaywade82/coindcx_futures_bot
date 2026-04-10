@@ -256,4 +256,64 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(journal.open_positions).to be_empty
     end
   end
+
+  context 'when gateway paper broker' do
+    let(:config) do
+      CoindcxBot::Config.new(
+        minimal_bot_config(
+          runtime: { dry_run: true, journal_path: journal_path },
+          risk: { max_leverage: 3, per_trade_inr_min: 250, per_trade_inr_max: 500 },
+          execution: { order_defaults: { leverage: 50, margin_currency_short_name: 'USDT', order_type: 'market_order' } }
+        )
+      )
+    end
+
+    let(:broker) do
+      CoindcxBot::Execution::GatewayPaperBroker.new(
+        order_gateway: orders,
+        account_gateway: account,
+        journal: journal,
+        config: config,
+        exposure_guard: guard,
+        logger: nil,
+        tick_base_url: 'http://127.0.0.1:9',
+        tick_path: '/exchange/v1/paper/simulation/tick',
+        api_key: 'k',
+        api_secret: 's'
+      )
+    end
+
+    it 'exits on the paper exchange when LTP is nil and books INR from the API payload' do
+      jid = journal.insert_position(
+        pair: 'B-ETH_USDT',
+        side: 'long',
+        entry_price: BigDecimal('2100'),
+        quantity: BigDecimal('0.01'),
+        stop_price: BigDecimal('2000'),
+        trail_price: nil
+      )
+
+      allow(account).to receive(:list_positions).and_return(
+        CoindcxBot::Gateways::Result.ok('positions' => [{ 'pair' => 'B-ETH_USDT', 'id' => '42' }])
+      )
+      allow(account).to receive(:exit_position).and_return(
+        CoindcxBot::Gateways::Result.ok('realized_pnl_usdt' => '-1.25', 'fill_price' => '2088.5')
+      )
+
+      close_signal = CoindcxBot::Strategy::Signal.new(
+        action: :close,
+        pair: 'B-ETH_USDT',
+        side: :long,
+        stop_price: nil,
+        reason: 'test',
+        metadata: { position_id: jid }
+      )
+
+      coordinator.apply(close_signal, exit_price: nil)
+
+      expect(account).to have_received(:exit_position).with(hash_including(id: '42'))
+      expect(journal.open_positions).to be_empty
+      expect(journal.daily_pnl_inr).to eq(BigDecimal('-1.25') * config.inr_per_usdt)
+    end
+  end
 end
