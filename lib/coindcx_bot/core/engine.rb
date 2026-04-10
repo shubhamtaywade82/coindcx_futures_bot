@@ -14,6 +14,7 @@ module CoindcxBot
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
         :running, :dry_run, :stale_tick_seconds, :paper_metrics,
         :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
+        :strategy_last_by_pair,
         keyword_init: true
       )
 
@@ -64,6 +65,7 @@ module CoindcxBot
         @refresh = config.runtime.fetch(:refresh_candles_seconds, 60).to_f
         @lookback = config.runtime.fetch(:candle_lookback, 120).to_i
         @ws_tick_at = {}
+        @last_strategy_by_pair = {}
 
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
@@ -118,7 +120,8 @@ module CoindcxBot
           capital_inr: snapshot_capital_inr,
           recent_events: snapshot_recent_events,
           working_orders: @broker.tui_working_orders,
-          ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago
+          ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago,
+          strategy_last_by_pair: @last_strategy_by_pair.dup
         )
       end
 
@@ -424,6 +427,7 @@ module CoindcxBot
         run_paper_process_tick if @broker.paper?
         # Entry gating must be **per pair**: if ETH has no WS ticks, SOL must still be allowed to open.
         # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
+        @last_strategy_by_pair = {}
         @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
       rescue StandardError => e
         @last_error = e.message
@@ -566,6 +570,8 @@ module CoindcxBot
           position: pos,
           ltp: ltp
         )
+
+        @last_strategy_by_pair[pair.to_s] = { action: sig.action, reason: sig.reason.to_s }
 
         log_strategy_signal(pair, sig) if @strategy_signal_trace
 

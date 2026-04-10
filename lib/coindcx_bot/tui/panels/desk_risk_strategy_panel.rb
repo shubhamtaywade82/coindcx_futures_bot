@@ -97,8 +97,8 @@ module CoindcxBot
           join_parts(
             [
               "#{bold('STRATEGY: ')}#{cyan(vm.strategy_name)}",
-              "#{bold('STATE: ')}#{dim('—')}",
-              "#{bold('SIGNAL: ')}#{dim('—')}"
+              "#{bold('STATE: ')}#{dim(vm.strategy_position_state)}",
+              "#{bold('SIGNAL: ')}#{dim(vm.strategy_signal_summary)}"
             ]
           )
         end

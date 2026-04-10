@@ -88,6 +88,45 @@ module CoindcxBot
         (@config.strategy[:name] || 'trend_continuation').to_s.upcase
       end
 
+      # Journal positions (open trades), for the SIGNAL + STRATEGY strip.
+      def strategy_position_state
+        return 'PAUSED' if @snap.paused
+        return 'KILL' if @snap.kill_switch
+
+        pos = Array(@snap.positions)
+        return 'FLAT' if pos.empty?
+        return "#{position_side_label(pos.first)} #{compact_pair_symbol((pos.first[:pair] || pos.first['pair']).to_s)}" if pos.size == 1
+
+        "#{pos.size} OPEN"
+      end
+
+      # Last engine-cycle evaluation per configured pair (hold reasons = strategy is working; flips are rare).
+      def strategy_signal_summary
+        return '—' if @snap.paused || @snap.kill_switch
+
+        raw = @snap.strategy_last_by_pair
+        h = raw.is_a?(Hash) ? raw : {}
+        return '—' if h.empty?
+
+        parts = @symbols.filter_map do |sym|
+          row = h[sym] || h[sym.to_s]
+          next unless row
+
+          act = (row[:action] || row['action']).to_sym
+          reason = (row[:reason] || row['reason']).to_s
+          cs = compact_pair_symbol(sym)
+          if act == :hold
+            "#{cs}:#{reason}"
+          else
+            "#{act.to_s.upcase}@#{cs}"
+          end
+        end
+        return '—' if parts.empty?
+
+        line = parts.join(' · ')
+        line.length > 72 ? "#{line[0, 69]}…" : line
+      end
+
       def paper_slippage_total
         pm = @snap.paper_metrics
         return nil unless pm.is_a?(Hash) && pm.key?(:total_slippage)
@@ -96,6 +135,10 @@ module CoindcxBot
       end
 
       private
+
+      def compact_pair_symbol(pair)
+        pair.to_s.sub(/^B-/, '').sub(/_USDT\z/i, '')
+      end
 
       def daily_loss_limit_inr
         BigDecimal(@config.resolved_max_daily_loss_inr.to_s)
