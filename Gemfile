@@ -2,7 +2,8 @@
 
 source 'https://rubygems.org'
 
-ruby '>= 3.1'
+# coindcx-client gemspec requires Ruby >= 3.2
+ruby '>= 3.2'
 
 # Latest from GitHub (override with `bundle config local.coindcx-client ../coindcx-client` for local dev)
 # gem 'coindcx-client', git: 'https://github.com/shubhamtaywade82/coindcx-client.git', branch: 'main'
