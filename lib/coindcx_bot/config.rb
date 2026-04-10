@@ -60,6 +60,19 @@ module CoindcxBot
       raw.fetch(:paper, {})
     end
 
+    def paper_exchange_enabled?
+      dry_run? && truthy?(raw.dig(:paper_exchange, :enabled))
+    end
+
+    def paper_exchange_api_base
+      raw.dig(:paper_exchange, :api_base_url).to_s.strip
+    end
+
+    def paper_exchange_tick_path
+      p = raw.dig(:paper_exchange, :tick_path).to_s.strip
+      p.empty? ? '/exchange/v1/paper/simulation/tick' : p
+    end
+
     def journal_path
       File.expand_path(runtime.fetch(:journal_path, './data/bot_journal.sqlite3'), Dir.pwd)
     end
@@ -67,6 +80,10 @@ module CoindcxBot
     class ConfigurationError < StandardError; end
 
     private
+
+    def truthy?(v)
+      v == true || v.to_s.downcase == 'true' || v.to_s == '1'
+    end
 
     def validate_whitelist!
       allowed = pairs.uniq

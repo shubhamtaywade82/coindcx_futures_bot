@@ -13,6 +13,9 @@ gem 'bigdecimal'
 gem 'dotenv', '~> 3.1'
 gem 'sqlite3', '~> 2.1'
 
+gem 'rack', '~> 3.1'
+gem 'webrick', '~> 1.9'
+
 gem 'pastel'
 gem 'tty-box'
 gem 'tty-logger'

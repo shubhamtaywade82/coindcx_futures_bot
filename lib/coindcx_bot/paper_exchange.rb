@@ -1,0 +1,16 @@
+# frozen_string_literal: true
+
+require_relative 'paper_exchange/store'
+require_relative 'paper_exchange/ledger'
+require_relative 'paper_exchange/boot'
+require_relative 'paper_exchange/auth'
+require_relative 'paper_exchange/rate_limit'
+require_relative 'paper_exchange/market_rules'
+require_relative 'paper_exchange/wallets_service'
+require_relative 'paper_exchange/orders_service'
+require_relative 'paper_exchange/positions_service'
+require_relative 'paper_exchange/tick_dispatcher'
+require_relative 'paper_exchange/fill_strategies'
+require_relative 'paper_exchange/app'
+require_relative 'paper_exchange/harness'
+require_relative 'paper_exchange/ws/event_mapper'

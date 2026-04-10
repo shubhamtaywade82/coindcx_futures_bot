@@ -189,7 +189,21 @@ module CoindcxBot
       end
 
       def build_broker(config)
-        if config.dry_run?
+        if config.dry_run? && config.paper_exchange_enabled?
+          base = config.paper_exchange_api_base
+          raise CoindcxBot::Config::ConfigurationError, 'paper_exchange.api_base_url is required when paper_exchange.enabled' if base.empty?
+
+          Execution::GatewayPaperBroker.new(
+            order_gateway: @orders,
+            account_gateway: @account,
+            journal: @journal,
+            config: config,
+            exposure_guard: @exposure,
+            logger: @logger,
+            tick_base_url: base,
+            tick_path: config.paper_exchange_tick_path
+          )
+        elsif config.dry_run?
           paper_cfg = config.raw.fetch(:paper, {})
           slippage = paper_cfg.fetch(:slippage_bps, 5)
           fee = paper_cfg.fetch(:fee_bps, 4)
@@ -270,6 +284,11 @@ module CoindcxBot
           c.api_key = ENV.fetch('COINDCX_API_KEY')
           c.api_secret = ENV.fetch('COINDCX_API_SECRET')
           c.logger = @logger
+
+          if @config.paper_exchange_enabled?
+            base = @config.paper_exchange_api_base
+            c.api_base_url = base unless base.empty?
+          end
 
           url = ENV['COINDCX_SOCKET_BASE_URL'].to_s.strip
           c.socket_base_url = url unless url.empty?

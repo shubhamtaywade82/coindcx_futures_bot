@@ -85,3 +85,11 @@ paper:
   slippage_bps: 5
   fee_bps: 4
   db_path: ./data/paper_trading.sqlite3
+
+# CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). When enabled with
+# `runtime.dry_run` / `runtime.paper`, the bot uses `OrderGateway` / `AccountGateway` against this
+# base URL instead of the in-process `PaperBroker`. Set `COINDCX_API_*` to match the seeded keys.
+# paper_exchange:
+#   enabled: true
+#   api_base_url: http://127.0.0.1:9292
+#   tick_path: /exchange/v1/paper/simulation/tick
