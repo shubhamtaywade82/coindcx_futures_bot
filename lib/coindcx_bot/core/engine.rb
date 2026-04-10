@@ -74,9 +74,17 @@ module CoindcxBot
       attr_reader :config, :logger, :journal, :broker
 
       # Wall-clock time of the last **WebSocket** tick for this pair (not REST candle mirrors).
-      # Used by the TUI so "AGE" matches `STALE` / entry gating (`@ws_tick_at` only updates from WS).
       def last_ws_tick_at(pair)
         @ws_tick_at[pair]
+      end
+
+      # True when no recent **WebSocket** tick for this pair (entry gating). TUI uses this for [STALE];
+      # LTP "AGE" uses `TickStore#updated_at` (WS ticks + optional fast REST TUI poll).
+      def ws_feed_stale?(pair)
+        at = @ws_tick_at[pair]
+        return true unless at
+
+        Time.now - at > @stale_seconds
       end
 
       def snapshot
@@ -238,7 +246,6 @@ module CoindcxBot
         deadline = Time.now + total_seconds
         until @stop || Time.now >= deadline
           sleep [deadline - Time.now, 1].min
-          mirror_tracker_into_tick_store
         end
       end
 
@@ -373,15 +380,8 @@ module CoindcxBot
         nil
       end
 
-      def ws_feed_stale?(pair)
-        at = @ws_tick_at[pair]
-        return true unless at
-
-        Time.now - at > @stale_seconds
-      end
-
-      # Paper only: advancing the WS clock when we mirror REST candles keeps STALE/TUI AGE aligned with
-      # the LTP you see. Live trading never does this — entries still require real socket ticks unless dry_run.
+      # Paper only: advancing the WS clock when we mirror REST candles keeps STALE aligned with candle-driven
+      # LTP when the TUI REST poller is off. Live never does this — entries still require real socket ticks unless dry_run.
       def touch_ws_staleness_clock_for_paper(pair)
         return unless paper_rest_advances_ws_stale_clock?
 

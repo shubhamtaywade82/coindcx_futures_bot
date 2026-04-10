@@ -56,19 +56,13 @@ module CoindcxBot
         def format_tick_row(tick, symbol, now)
           return dim(format(HEADER_FMT, symbol, '---', '---', '---')) if tick.nil?
 
-          ws_at = @engine&.last_ws_tick_at(symbol)
-          age_sec, stale, age_str =
-            if ws_at
-              sec = (now - ws_at).to_f
-              st = sec > @stale_tick_seconds
-              [sec, st, format('%.2fs', sec)]
-            elsif @engine
-              # Engine present but no WS tick yet: same as entry gating (blocked until real WS).
-              [0, true, 'no WS']
+          age_sec = (now - tick.updated_at).to_f
+          age_str = format('%.2fs', age_sec)
+          stale =
+            if @engine
+              @engine.ws_feed_stale?(symbol)
             else
-              sec = (now - tick.updated_at).to_f
-              st = sec > @stale_tick_seconds
-              [sec, st, format('%.2fs', sec)]
+              age_sec > @stale_tick_seconds
             end
 
           chg_str = tick.change_pct ? format('%+.2f%%', tick.change_pct) : 'n/a'

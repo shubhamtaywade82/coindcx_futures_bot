@@ -23,6 +23,8 @@ module CoindcxBot
         setup_terminal
         tick_store = TickStore.new
         @render_loop = nil
+        @ltp_poller = nil
+        @tui_footer_poll_interval = nil
         engine = CoindcxBot::Core::Engine.new(
           config: config,
           logger: build_logger,
@@ -33,6 +35,7 @@ module CoindcxBot
         symbols = config.pairs
         panels  = build_panels(tick_store: tick_store, engine: engine, symbols: symbols)
         @render_loop = RenderLoop.new(panels: panels, interval: RENDER_INTERVAL)
+        start_ltp_rest_poller(config: config, symbols: symbols, tick_store: tick_store)
 
         engine_thread = start_engine(engine)
 
@@ -131,6 +134,44 @@ module CoindcxBot
         end
       end
 
+      def start_ltp_rest_poller(config:, symbols:, tick_store:)
+        interval = tui_ltp_poll_interval_seconds(config)
+        @tui_footer_poll_interval = interval.positive? ? interval : nil
+        return unless interval.positive?
+
+        md = CoindcxBot::Gateways::MarketDataGateway.new(
+          client: CoinDCX.client,
+          margin_currency_short_name: config.margin_currency_short_name
+        )
+        @ltp_poller = LtpRestPoller.new(
+          market_data: md,
+          pairs: symbols,
+          tick_store: tick_store,
+          render_loop: @render_loop,
+          interval_seconds: interval,
+          logger: build_logger
+        )
+        @ltp_poller.start
+      end
+
+      def tui_ltp_poll_interval_seconds(config)
+        if ENV.key?('COINDCX_TUI_LTP_POLL_SECONDS')
+          ENV['COINDCX_TUI_LTP_POLL_SECONDS'].to_s.strip.to_f
+        else
+          config.runtime.fetch(:tui_ltp_poll_seconds, 0.5).to_f
+        end
+      end
+
+      def footer_hint_text
+        poll_part =
+          if @tui_footer_poll_interval
+            "REST LTP ~#{@tui_footer_poll_interval}s · "
+          else
+            ''
+          end
+        "#{poll_part}WS tick wake · max #{(RENDER_INTERVAL * 1000).to_i}ms if idle · ^C or q to exit"
+      end
+
       def draw_chrome(symbols, keybar_row:)
         term_w = TTY::Screen.width || 80
 
@@ -138,7 +179,7 @@ module CoindcxBot
         buf << TTY::Cursor.move_to(0, keybar_row)
         buf << "\e[2m#{'─' * [term_w - 1, 40].min}\e[0m\n"
         buf << keybar_text
-        buf << "\n\e[2mRedraw on each WS tick · max #{(RENDER_INTERVAL * 1000).to_i}ms if idle · ^C or q to exit\e[0m"
+        buf << "\n\e[2m#{footer_hint_text}\e[0m"
 
         $stdout.print buf.string
         $stdout.flush
@@ -189,6 +230,7 @@ module CoindcxBot
       end
 
       def teardown(engine, engine_thread)
+        @ltp_poller&.stop
         @render_loop&.stop
         engine&.request_stop!
         engine_thread&.join(60) if engine_thread&.alive?

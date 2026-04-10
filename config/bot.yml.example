@@ -74,6 +74,8 @@ runtime:
   # log_strategy_signals: true
   # Paper only: when true (default), mirroring REST candles into LTP also refreshes the WS staleness clock so STALE/AGE match the UI. Live ignores this.
   # paper_rest_advances_ws_stale_clock: true
+  # TUI only: REST poll interval (seconds) for LTP/CHG/AGE in the dashboard; does not drive strategy or `@ws_tick_at`. Set 0 to disable. Override: COINDCX_TUI_LTP_POLL_SECONDS=0
+  # tui_ltp_poll_seconds: 0.5
   # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
   # log_strategy_signals: true
 

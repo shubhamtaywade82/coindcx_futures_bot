@@ -57,7 +57,7 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
       end
     end
 
-    context 'with engine WS clock (AGE matches header STALE, not candle mirror)' do
+    context 'with engine: STALE follows ws_feed_stale?, AGE follows tick_store updated_at' do
       let(:base) { Time.utc(2025, 6, 1, 12, 0, 0) }
       let(:engine) { instance_double(CoindcxBot::Core::Engine) }
       let(:panel) do
@@ -73,14 +73,14 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
 
       before do
         tick_store.update(symbol: 'B-SOL_USDT', ltp: '100.0', change_pct: '0.1', updated_at: base + 2)
-        allow(engine).to receive(:last_ws_tick_at).with('B-SOL_USDT').and_return(base)
+        allow(engine).to receive(:ws_feed_stale?).with('B-SOL_USDT').and_return(true)
         allow(Time).to receive(:now).and_return(base + 50)
       end
 
-      it 'marks STALE from last WS time even when tick_store was just updated' do
+      it 'marks STALE from ws_feed_stale? while AGE uses tick_store freshness' do
         panel.render
         expect(output.string).to include('[STALE]')
-        expect(output.string).to match(/50\.00s/)
+        expect(output.string).to match(/48\.00s/)
       end
     end
 

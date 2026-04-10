@@ -103,6 +103,18 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
       expect(ticks.first.change_pct).to eq(BigDecimal('-0.25'))
     end
 
+    it 'reads currentPrices@futures/rt style ls/pc per instrument' do
+      payload = {
+        'prices' => {
+          'B-SOL_USDT' => { 'ls' => '83.77', 'pc' => '1.5' }
+        }
+      }
+      ticks = gateway.send(:ticks_from_current_prices_payload, payload, ['B-SOL_USDT'])
+      expect(ticks.size).to eq(1)
+      expect(ticks.first.price).to eq(BigDecimal('83.77'))
+      expect(ticks.first.change_pct).to eq(BigDecimal('1.5'))
+    end
+
     it 'finds prices nested under channelData-style wrappers' do
       payload = {
         'channelData' => {

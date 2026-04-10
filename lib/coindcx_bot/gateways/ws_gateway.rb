@@ -26,12 +26,20 @@ module CoindcxBot
         @ws.disconnect
       end
 
-      # Futures LTP freshness: CoinDCX emits `price-change` on @prices-futures sparingly; the
-      # @trades-futures + `new-trade` stream usually updates more often when the book is active.
-      # Both feed the same tick pipeline so the TUI/engine last-tick clock stays realistic.
+      # Futures LTP freshness:
+      # - `new-trade` on @trades-futures carries "s" (instrument) and the correct per-instrument price.
+      # - `price-change` on @prices-futures broadcasts the GLOBAL last-trade price to ALL subscribed
+      #   channels with no instrument hint ("s" field absent). It must NOT be used as a price source
+      #   — it would assign ETH's price to SOL and vice versa. It still keeps the WS liveness clock
+      #   alive via ConnectionManager's touch_activity! (called in register_event_bridge before dispatch).
       def subscribe_futures_prices(instrument:, &block)
         price_channel = CoinDCX::WS::PublicChannels.futures_price_stats(instrument: instrument)
         @ws.subscribe_public(channel_name: price_channel, event_name: 'price-change') do |payload|
+          h = normalize_payload_hash(payload)
+          # Only forward when the payload explicitly names this instrument; global broadcasts have no
+          # "s" field and carry a different instrument's price — skip them as price ticks.
+          next unless instrument_hint_from_payload(h)
+
           tick = normalize_tick(instrument, payload)
           block.call(tick) if tick
         end
@@ -180,8 +188,11 @@ module CoindcxBot
       def extract_price_and_change_from_quote(raw)
         case raw
         when Hash
-          pr = raw[:ltp] || raw['ltp'] || raw[:p] || raw['p'] || raw[:last_price] || raw['last_price'] ||
-               raw[:price] || raw['price'] || raw[:last_traded_price] || raw['last_traded_price']
+          # currentPrices@futures/rt uses `ls` (last price) and `pc` (% change) per CoinDCX glossary.
+          pr = raw[:ltp] || raw['ltp'] || raw[:ls] || raw['ls'] ||
+               raw[:p] || raw['p'] || raw[:last_price] || raw['last_price'] ||
+               raw[:price] || raw['price'] || raw[:mp] || raw['mp'] ||
+               raw[:last_traded_price] || raw['last_traded_price']
           ch = raw[:pc] || raw['pc'] || raw[:change_pct] || raw['change_pct']
           [pr, ch]
         when Array

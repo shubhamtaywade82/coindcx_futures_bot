@@ -36,6 +36,17 @@ module CoindcxBot
         end
       end
 
+      # REST quote for TUI display only (does not move strategy / `@ws_tick_at`).
+      def fetch_instrument_display_quote(pair:)
+        res = fetch_instrument(pair: pair)
+        return res unless res.ok?
+
+        quote = build_display_quote(res.value)
+        return Result.fail(:validation, 'instrument payload missing price') unless quote
+
+        Result.ok(quote)
+      end
+
       private
 
       def normalize_candles(raw)
@@ -107,6 +118,51 @@ module CoindcxBot
         else
           {}
         end
+      end
+
+      def build_display_quote(inst)
+        h = instrument_flat_hash(inst)
+        price_raw = extract_instrument_price(h)
+        return nil if price_raw.nil?
+
+        chg_raw = extract_instrument_change_pct(h)
+        chg =
+          if chg_raw.nil?
+            nil
+          else
+            BigDecimal(chg_raw.to_s)
+          end
+
+        { price: BigDecimal(price_raw.to_s), change_pct: chg }
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def instrument_flat_hash(inst)
+        raw =
+          case inst
+          when Hash then inst
+          else inst.respond_to?(:to_h) ? inst.to_h : {}
+          end
+        h = symbolize(raw)
+        nested = h[:data]
+        h = h.merge(symbolize(nested)) if nested.is_a?(Hash)
+        h
+      end
+
+      def extract_instrument_price(h)
+        keys = %i[
+          last_traded_price ltp last_price mark_price index_price
+          ls p price close last
+        ]
+        keys.each { |k| return h[k] if h.key?(k) && !h[k].nil? && h[k].to_s.strip != '' }
+        nil
+      end
+
+      def extract_instrument_change_pct(h)
+        keys = %i[change_24h change_pct pc percent_change_24h price_change_percent_24h]
+        keys.each { |k| return h[k] if h.key?(k) && !h[k].nil? && h[k].to_s.strip != '' }
+        nil
       end
     end
   end
