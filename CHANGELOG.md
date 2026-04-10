@@ -9,7 +9,7 @@ All notable changes to this project are documented here. The format is inspired 
 - **CoinDCX-shaped paper exchange (HTTP):** Rack app under `lib/coindcx_bot/paper_exchange/` with SQLite store, double-entry `Ledger`, futures-style wallet/order/position routes, rate limiting, and HMAC auth aligned with `coindcx-client` signing. Entrypoint: `bin/paper-exchange` (WEBrick, configurable host/port via `PAPER_EXCHANGE_BIND` / `PAPER_EXCHANGE_PORT`).
 - **`Execution::GatewayPaperBroker`:** Paper mode that keeps using `OrderGateway` / `AccountGateway` against a configurable `api_base_url`, and posts **signed** simulation ticks to `POST /exchange/v1/paper/simulation/tick` so the local matcher can advance working orders.
 - **Config:** `paper_exchange.enabled`, `paper_exchange.api_base_url`, `paper_exchange.tick_path` (optional); enabled only when `Config#dry_run?` is true. Documented in `config/bot.yml.example`.
-- **Dependencies:** `rack` and `webrick` for the local simulator server.
+- **Dependencies:** `rack`, `rackup` (Rack 3 moved WEBrick out of core), and `webrick` for the local simulator server.
 - **Docs:** `docs/paper_exchange.md` (operator guide), `docs/paper_exchange_socketio.md` (Socket.IO spike); this changelog.
 - **Specs:** `spec/paper_exchange/` (ledger, Rack app), `config_spec` and `market_data_gateway` / `tick_store` additions.
 

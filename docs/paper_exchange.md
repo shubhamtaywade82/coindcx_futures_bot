@@ -27,6 +27,8 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
    bundle exec bin/paper-exchange
    ```
 
+   The `bin/paper-exchange` script runs **`Bundler.setup`** and **`Rackup::Handler::WEBrick`** so it works with **Rack 3** without relying on removed `rack/handler/webrick`. You can also run `./bin/paper-exchange` from the repo root (not plain `ruby` from another directory without Bundler, or you risk mixed Rack versions from RubyGems).
+
    Defaults: bind **`127.0.0.1`**, port **`9292`**. Override with **`PAPER_EXCHANGE_BIND`**, **`PAPER_EXCHANGE_PORT`**.
 
 3. **Database:** SQLite path defaults to **`./data/paper_exchange.sqlite3`**. Override with **`PAPER_EXCHANGE_DB`**.

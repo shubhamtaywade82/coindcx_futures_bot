@@ -3,6 +3,9 @@
 require 'logger'
 require 'yaml'
 
+require_relative '../config'
+require_relative '../execution/fill_engine'
+
 module CoindcxBot
   module PaperExchange
     module Harness
