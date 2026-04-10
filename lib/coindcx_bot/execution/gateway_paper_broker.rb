@@ -98,15 +98,41 @@ module CoindcxBot
 
         h = er.value
         h = h.transform_keys(&:to_sym) if h.is_a?(Hash)
+        inner = h.is_a?(Hash) ? (h[:data] || h['data']) : nil
+        inner = inner.transform_keys(&:to_sym) if inner.is_a?(Hash)
+        src = inner.is_a?(Hash) ? inner : h
         {
           ok: true,
-          realized_pnl_usdt: h[:realized_pnl_usdt],
-          fill_price: h[:fill_price] || h[:exit_price],
+          realized_pnl_usdt: extract_realized_pnl_usdt(src),
+          fill_price: extract_fill_price(src),
           position_id: pid
         }
       end
 
       private
+
+      def extract_realized_pnl_usdt(h)
+        return nil unless h.is_a?(Hash)
+
+        raw = h[:realized_pnl_usdt] || h[:realized_pnl] || h[:pnl_usdt] ||
+                h['realized_pnl_usdt'] || h['realized_pnl'] || h['pnl_usdt']
+        return nil if raw.nil?
+
+        BigDecimal(raw.to_s)
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def extract_fill_price(h)
+        return nil unless h.is_a?(Hash)
+
+        raw = h[:fill_price] || h[:exit_price] || h['fill_price'] || h['exit_price']
+        return nil if raw.nil?
+
+        BigDecimal(raw.to_s)
+      rescue ArgumentError, TypeError
+        nil
+      end
 
       def mark_journal_position_unrealized(position, current_ltp)
         entry = BigDecimal((position[:entry_price] || position['entry_price']).to_s)

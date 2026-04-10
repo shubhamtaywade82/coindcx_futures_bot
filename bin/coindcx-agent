@@ -1,0 +1,80 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# CoinDCX futures–focused read-only Ollama agent (ollama_agent) for this repo.
+# Development only: requires bundle install with :development (ollama_agent).
+#
+# Usage:
+#   bundle exec bin/coindcx-agent "Explain how partial exits work in trend_continuation"
+#   bundle exec bin/coindcx-agent --handoff /path/to/handoff.txt   # ollama_agent delegate API
+
+repo_root = File.expand_path('..', __dir__)
+ENV['OLLAMA_AGENT_ROOT'] = repo_root if ENV.fetch('OLLAMA_AGENT_ROOT', '').strip.empty?
+
+require 'bundler/setup'
+Bundler.setup(:default, :development)
+
+begin
+  require 'ollama_agent'
+rescue LoadError => e
+  warn "coindcx-agent: #{e.message}"
+  warn 'Run bundle install (include the :development group).'
+  exit 1
+end
+
+skills_dir = File.join(repo_root, 'config', 'ollama_agent', 'skills')
+skill_opts = {}
+if File.directory?(skills_dir) && Dir.glob(File.join(skills_dir, '*.md')).any?
+  skill_opts[:skill_paths] = skills_dir
+end
+
+def usage
+  puts <<~HELP
+    Usage:
+      bundle exec bin/coindcx-agent "natural language question about this futures bot codebase"
+      bundle exec bin/coindcx-agent --handoff PATH   # internal: ollama_agent external delegate handoff file
+
+    OLLAMA_AGENT_ROOT defaults to this repository. Read-only tools only (no patches).
+    For self_review / improve on the whole tree, use bin/ollama-review.
+
+    Orchestrator: export OLLAMA_AGENT_EXTERNAL_AGENTS_CONFIG="$PWD/config/ollama_agent/external_agents.overlay.yml"
+    then use ollama_agent orchestrate / agents to delegate to agent id coindcx_futures.
+  HELP
+end
+
+argv = ARGV.dup
+if argv.empty? || %w[-h --help help].include?(argv.first)
+  usage
+  exit argv.empty? ? 1 : 0
+end
+
+query =
+  if argv[0] == '--handoff'
+    path = argv[1]
+    unless path && File.file?(path)
+      warn 'usage: bin/coindcx-agent --handoff PATH'
+      exit 1
+    end
+
+    File.read(path, encoding: Encoding::UTF_8)
+  else
+    argv.join(' ').strip
+  end
+
+if query.empty?
+  warn 'Empty query.'
+  exit 1
+end
+
+agent = OllamaAgent::Agent.new(
+  root: repo_root,
+  read_only: true,
+  confirm_patches: true,
+  **skill_opts
+)
+begin
+  agent.run(query)
+rescue Ollama::Error, OllamaAgent::Error => e
+  warn "#{e.class}: #{e.message}"
+  exit 1
+end

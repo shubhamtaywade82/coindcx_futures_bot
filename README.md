@@ -120,6 +120,23 @@ bundle exec bin/ollama-review improve --help
 bundle exec bin/ollama-review ask --read-only "Summarize exit rules in lib/coindcx_bot/strategy"
 ```
 
+**CoinDCX futures agent (`bin/coindcx-agent`):** read-only **`OllamaAgent::Agent`** scoped to this repo, with extra prompt skill under [`config/ollama_agent/skills/`](config/ollama_agent/skills/) (boundaries, key paths, strategy/risk notes). Use it for **natural-language questions** about the codebase; it does **not** place trades.
+
+```bash
+bundle exec bin/coindcx-agent "Where is daily loss enforced relative to capital_inr?"
+```
+
+**Orchestrator delegate:** to register a sub-agent id **`coindcx_futures`** for `ollama_agent orchestrate` / delegation tools, point at the merge overlay (this **adds** to upstream defaults, it does not replace them):
+
+```bash
+export OLLAMA_AGENT_EXTERNAL_AGENTS_CONFIG="$PWD/config/ollama_agent/external_agents.overlay.yml"
+bundle exec bin/ollama-review agents    # should list coindcx_futures when ruby is on PATH
+```
+
+**Note:** older **`ollama_agent`** versions called the external program **`command`** for `command -v`; on distros without **`/usr/bin/command`** that raised **`ENOENT`**. The path gem under **`../../../ai-workspace/ollama_agent`** includes a **PATH-walk fallback**; update that checkout if you still see the error.
+
+Optional: **`COINDCX_FUTURES_AGENT_RUBY_PATH`** — absolute path to `ruby` if the delegate subprocess cannot find it on `PATH`.
+
 **Path layout:** if your `ollama_agent` checkout is not at `../../..` from `coindcx_futures_bot`, either adjust the **`path:`** in the `Gemfile` or run:
 
 ```bash
