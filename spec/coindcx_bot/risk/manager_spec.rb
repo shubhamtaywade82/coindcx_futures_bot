@@ -54,4 +54,52 @@ RSpec.describe CoindcxBot::Risk::Manager do
     expected_qty = (expected_risk_usdt / BigDecimal('2')).round(6, BigDecimal::ROUND_DOWN)
     expect(qty).to eq(expected_qty)
   end
+
+  it 'uses per_trade_capital_pct of capital_inr as risk budget, clamped to min and max INR' do
+    cfg = CoindcxBot::Config.new(
+      minimal_bot_config(
+        capital_inr: 100_000,
+        risk: {
+          per_trade_capital_pct: 10,
+          per_trade_inr_min: 250,
+          per_trade_inr_max: 500,
+          max_daily_loss_inr: 1500
+        }
+      )
+    )
+    pct_manager = described_class.new(
+      config: cfg,
+      journal: journal,
+      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg)
+    )
+    qty = pct_manager.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
+    expected_risk_inr = BigDecimal('500')
+    expected_risk_usdt = expected_risk_inr / BigDecimal('83')
+    expected_qty = (expected_risk_usdt / BigDecimal('2')).round(6, BigDecimal::ROUND_DOWN)
+    expect(qty).to eq(expected_qty)
+  end
+
+  it 'raises per-trade INR budget from pct when raw pct budget is below min' do
+    cfg = CoindcxBot::Config.new(
+      minimal_bot_config(
+        capital_inr: 10_000,
+        risk: {
+          per_trade_capital_pct: 1,
+          per_trade_inr_min: 250,
+          per_trade_inr_max: 500,
+          max_daily_loss_inr: 1500
+        }
+      )
+    )
+    pct_manager = described_class.new(
+      config: cfg,
+      journal: journal,
+      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg)
+    )
+    qty = pct_manager.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
+    expected_risk_inr = BigDecimal('250')
+    expected_risk_usdt = expected_risk_inr / BigDecimal('83')
+    expected_qty = (expected_risk_usdt / BigDecimal('2')).round(6, BigDecimal::ROUND_DOWN)
+    expect(qty).to eq(expected_qty)
+  end
 end

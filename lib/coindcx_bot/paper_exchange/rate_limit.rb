@@ -14,9 +14,13 @@ module CoindcxBot
         end
 
         def call(env)
-          return @app.call(env) if env['PATH_INFO'].to_s == '/health'
+          if env['REQUEST_METHOD'].to_s.upcase == 'GET' &&
+             CoindcxBot::PaperExchange::Auth.normalized_request_path(env) == '/health'
+            return @app.call(env)
+          end
+          return @app.call(env) if CoindcxBot::PaperExchange::Auth.public_market_get?(env)
 
-          key = env['HTTP_X_AUTH_APIKEY'].to_s
+          key = env['HTTP_X_AUTH_APIKEY'].to_s.strip
           key = 'anonymous' if key.empty?
 
           allowed, retry_after = @mutex.synchronize { allow?(key) }

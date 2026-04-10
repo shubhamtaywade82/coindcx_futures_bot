@@ -8,9 +8,17 @@ module CoindcxBot
       module_function
 
       def ensure_seed!(store, api_key:, api_secret:, seed_spot_usdt: '100000', seed_futures_usdt: '100000')
+        api_key = api_key.to_s.strip
+        api_secret = api_secret.to_s.strip
         db = store.db
-        existing = db.get_first_row('SELECT user_id FROM pe_api_keys WHERE api_key = ?', [api_key])
-        return existing['user_id'].to_i if existing
+        existing = db.get_first_row('SELECT user_id, api_secret FROM pe_api_keys WHERE TRIM(api_key) = ?', [api_key])
+        if existing
+          # .env secret can change while the key stays the same; stale DB secret → 401 invalid signature.
+          if existing['api_secret'].to_s != api_secret.to_s
+            db.execute('UPDATE pe_api_keys SET api_secret = ? WHERE TRIM(api_key) = ?', [api_secret, api_key])
+          end
+          return existing['user_id'].to_i
+        end
 
         db.execute('INSERT INTO pe_users (created_at) VALUES (?)', [store.now_iso])
         user_id = db.last_insert_row_id

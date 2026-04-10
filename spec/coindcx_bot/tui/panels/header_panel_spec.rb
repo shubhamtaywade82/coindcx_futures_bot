@@ -9,7 +9,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
     instance_double(
       CoindcxBot::Config,
       risk: { max_daily_loss_inr: 1500 },
-      strategy: { name: 'trend_continuation' }
+      strategy: { name: 'trend_continuation' },
+      inr_per_usdt: BigDecimal('83')
     )
   end
   let(:snapshot) do
@@ -121,20 +122,21 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
             total_slippage: BigDecimal('0.3'),
             fill_count: 4
           },
-          capital_inr: nil,
+          capital_inr: BigDecimal('100_000'),
           recent_events: [],
           working_orders: [],
           ws_last_tick_ms_ago: 10
         )
       end
 
-      it 'renders realized and unrealized paper lines with DD and risk tier' do
+      it 'renders USDT realized/unrealized, BAL from capital plus realized at inr_per_usdt, DD and risk tier' do
         panel.render
         rendered = output.string
 
-        expect(rendered).to include('REAL:')
+        expect(rendered).to include('REAL USDT:')
         expect(rendered).to include('15.50')
-        expect(rendered).to include('UNREAL:')
+        expect(rendered).to include('UNREAL USDT:')
+        expect(rendered).to include('101286.50')
         expect(rendered).to include('DD:')
         expect(rendered).to include('RISK:')
       end

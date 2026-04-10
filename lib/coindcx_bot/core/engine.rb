@@ -4,6 +4,8 @@ require 'bigdecimal'
 require 'json'
 require 'logger'
 
+require_relative '../display_ltp'
+
 module CoindcxBot
   module Core
     class Engine
@@ -270,8 +272,14 @@ module CoindcxBot
       end
 
       def paper_snapshot_metrics(ticks)
-        ltp_map = ticks.transform_values { |t| t[:price] }
+        store_snap = @tick_store ? @tick_store.snapshot : {}
+        ltp_map = DisplayLtp.merge_prices_by_pair(
+          @config.pairs,
+          tick_store_snapshot: store_snap,
+          tracker_tick_hash: ticks
+        )
         base = @broker.metrics
+        base[:total_realized_pnl] = @journal.sum_paper_realized_pnl_usdt if base[:total_realized_pnl].nil?
         base[:unrealized_pnl] = @broker.unrealized_pnl(ltp_map)
         base
       end
@@ -333,8 +341,8 @@ module CoindcxBot
 
       def configure_coin_dcx
         CoinDCX.configure do |c|
-          c.api_key = ENV.fetch('COINDCX_API_KEY')
-          c.api_secret = ENV.fetch('COINDCX_API_SECRET')
+          c.api_key = ENV.fetch('COINDCX_API_KEY').to_s.strip
+          c.api_secret = ENV.fetch('COINDCX_API_SECRET').to_s.strip
           c.logger = @logger
 
           if @config.paper_exchange_enabled?

@@ -20,6 +20,7 @@ module CoindcxBot
       @raw = deep_symbolize(hash || {})
       validate_whitelist!
       validate_risk_band!
+      validate_risk_capital_pct!
     end
 
     def pairs
@@ -32,6 +33,16 @@ module CoindcxBot
 
     def inr_per_usdt
       BigDecimal(raw.fetch(:inr_per_usdt, 83).to_s)
+    end
+
+    # Reference equity in INR (position sizing when `risk.per_trade_capital_pct` is set; TUI header).
+    def capital_inr
+      v = raw[:capital_inr] || raw['capital_inr']
+      return nil if v.nil? || v.to_s.strip.empty?
+
+      BigDecimal(v.to_s)
+    rescue ArgumentError, TypeError
+      nil
     end
 
     def risk
@@ -101,6 +112,19 @@ module CoindcxBot
       return if min_r <= max_r
 
       raise ConfigurationError, 'risk.per_trade_inr_min must be <= risk.per_trade_inr_max'
+    end
+
+    def validate_risk_capital_pct!
+      rk = raw[:risk] || {}
+      return unless rk.key?(:per_trade_capital_pct)
+
+      pct = BigDecimal(rk[:per_trade_capital_pct].to_s)
+      raise ConfigurationError, 'risk.per_trade_capital_pct must be > 0' unless pct.positive?
+      raise ConfigurationError, 'risk.per_trade_capital_pct must be <= 100' if pct > 100
+
+      return unless capital_inr.nil?
+
+      raise ConfigurationError, 'capital_inr is required when risk.per_trade_capital_pct is set'
     end
 
     def deep_symbolize(obj)

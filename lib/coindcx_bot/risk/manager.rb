@@ -41,7 +41,21 @@ module CoindcxBot
         rk = @config.risk
         min_r = BigDecimal(rk.fetch(:per_trade_inr_min, 250).to_s)
         max_r = BigDecimal(rk.fetch(:per_trade_inr_max, 500).to_s)
-        (min_r + max_r) / 2
+        pct = rk[:per_trade_capital_pct]
+        if pct.nil? || pct.to_s.strip.empty?
+          return (min_r + max_r) / 2
+        end
+
+        cap = @config.capital_inr
+        return (min_r + max_r) / 2 if cap.nil?
+
+        raw_budget = (cap * BigDecimal(pct.to_s) / 100).round(2, BigDecimal::ROUND_DOWN)
+        clamp_inr_budget(raw_budget, min_r, max_r)
+      end
+
+      def clamp_inr_budget(value, min_r, max_r)
+        v = [value, min_r].max
+        [v, max_r].min
       end
     end
   end

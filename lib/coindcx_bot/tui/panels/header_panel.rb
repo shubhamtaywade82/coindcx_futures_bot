@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
@@ -85,31 +86,43 @@ module CoindcxBot
         end
 
         def line_balance_net_real_unreal_dd_risk(snap, vm, w)
-          bal =
-            if snap.capital_inr
-              bold('BAL: ') + dim('₹') + fmt_inr(snap.capital_inr)
-            else
-              dim('BAL: —')
-            end
+          bal = balance_line(snap)
           net = bold('NET: ') + colored_inr(snap.daily_pnl)
           rest =
             if paper_metrics?(snap)
               pm = snap.paper_metrics
               [
-                "#{bold('REAL: ')}#{fmt_num(pm[:total_realized_pnl])}",
-                "#{bold('UNREAL: ')}#{colored_num(pm[:unrealized_pnl])}",
+                "#{bold('REAL USDT: ')}#{fmt_num(pm[:total_realized_pnl])}",
+                "#{bold('UNREAL USDT: ')}#{colored_num(pm[:unrealized_pnl])}",
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
               ].join(dim(' │ '))
             else
               [
-                dim('REAL: —'),
-                dim('UNREAL: —'),
+                dim('REAL USDT: —'),
+                dim('UNREAL USDT: —'),
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
               ].join(dim(' │ '))
             end
           join_compact(w, [bal, net, rest])
+        end
+
+        # Paper: config capital (INR) + cumulative realized USDT × inr_per_usdt. Live: config capital only.
+        def balance_line(snap)
+          if paper_metrics?(snap)
+            base = snap.capital_inr || BigDecimal('0')
+            realized_usdt = BigDecimal((snap.paper_metrics[:total_realized_pnl] || 0).to_s)
+            fx = @engine.config.inr_per_usdt
+            total = base + (realized_usdt * fx)
+            bold('BAL: ') + fmt_inr(total)
+          elsif snap.capital_inr
+            bold('BAL: ') + fmt_inr(snap.capital_inr)
+          else
+            dim('BAL: —')
+          end
+        rescue ArgumentError, TypeError
+          dim('BAL: —')
         end
 
         def line_pos_ord_err_last(snap, vm, w)

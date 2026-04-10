@@ -113,11 +113,17 @@ module CoindcxBot
         end
       end
 
+      def merged_display_ltps
+        @merged_display_ltps ||= CoindcxBot::DisplayLtp.merge_prices_by_pair(
+          @symbols,
+          tick_store_snapshot: @tick_ticks,
+          tracker_tick_hash: @snap.ticks
+        )
+      end
+
       def execution_row_for(sym, pos_by_pair)
         p = pos_by_pair[sym]
-        tick = @tick_ticks[sym]
-        ltp = tick&.ltp || @snap.ticks[sym]&.[](:price)
-        ltp_bd = optional_bd(ltp)
+        ltp_bd = optional_bd(merged_display_ltps[sym])
 
         if p.nil?
           return {

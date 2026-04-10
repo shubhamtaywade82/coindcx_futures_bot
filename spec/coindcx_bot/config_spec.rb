@@ -13,6 +13,21 @@ RSpec.describe CoindcxBot::Config do
     expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /per_trade_inr_min/)
   end
 
+  it 'rejects per_trade_capital_pct without capital_inr' do
+    bad = minimal_bot_config.merge(capital_inr: nil, risk: minimal_bot_config[:risk].merge(per_trade_capital_pct: 5))
+    expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /capital_inr/)
+  end
+
+  it 'rejects per_trade_capital_pct outside (0, 100]' do
+    expect do
+      described_class.new(minimal_bot_config(risk: { per_trade_capital_pct: 0 }))
+    end.to raise_error(CoindcxBot::Config::ConfigurationError, /per_trade_capital_pct/)
+
+    expect do
+      described_class.new(minimal_bot_config(risk: { per_trade_capital_pct: 101 }))
+    end.to raise_error(CoindcxBot::Config::ConfigurationError, /per_trade_capital_pct/)
+  end
+
   it 'enables paper exchange when dry_run and paper_exchange.enabled are set' do
     cfg = described_class.new(
       minimal_bot_config(

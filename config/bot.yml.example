@@ -10,10 +10,13 @@ pairs:
 # Approximate INR per USDT for position sizing from INR risk budget
 inr_per_usdt: 83.0
 
-# Capital reference (INR) — used with risk_per_trade_inr for sizing hints in logs
-capital_inr: 50_000
+# Reference equity in INR (TUI balance; required if you set risk.per_trade_capital_pct).
+capital_inr: 1_00_000
 
 risk:
+  # Optional: per-trade INR risk budget = capital_inr * (pct / 100), then clamped to min/max below.
+  # This is stop-distance risk sizing (same units as per_trade_inr_*), not margin or notional cap.
+  # per_trade_capital_pct: 2
   per_trade_inr_min: 250
   per_trade_inr_max: 500
   max_daily_loss_inr: 1500

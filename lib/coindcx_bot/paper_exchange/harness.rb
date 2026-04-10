@@ -2,6 +2,7 @@
 
 require 'logger'
 require 'yaml'
+require 'rack/common_logger'
 
 require_relative '../config'
 require_relative '../execution/fill_engine'
@@ -11,16 +12,25 @@ module CoindcxBot
     module Harness
       module_function
 
+      # Apache-style lines to stdout (method, path, status, length, duration). Disable: PAPER_EXCHANGE_ACCESS_LOG=0
+      def access_log_enabled?
+        v = ENV.fetch('PAPER_EXCHANGE_ACCESS_LOG', '1').to_s.strip.downcase
+        !%w[0 false no off].include?(v)
+      end
+
       def build_app(logger: nil)
         logger ||= Logger.new($stdout)
+        logger.progname = 'paper_exchange'
+        logger.level = Logger::INFO
         db_path = ENV.fetch('PAPER_EXCHANGE_DB') do
           File.expand_path('data/paper_exchange.sqlite3', Dir.pwd)
         end
+        logger.info("[paper_exchange] sqlite #{db_path}")
 
         store = Store.new(db_path)
         ledger = Ledger.new(store)
-        api_key = ENV.fetch('COINDCX_API_KEY')
-        api_secret = ENV.fetch('COINDCX_API_SECRET')
+        api_key = ENV.fetch('COINDCX_API_KEY').to_s.strip
+        api_secret = ENV.fetch('COINDCX_API_SECRET').to_s.strip
         Boot.ensure_seed!(store, api_key: api_key, api_secret: api_secret)
 
         paper_cfg = {}
@@ -39,10 +49,17 @@ module CoindcxBot
         positions = PositionsService.new(store: store, ledger: ledger, orders_service: orders)
         tick_dispatcher = TickDispatcher.new(store: store, orders_service: orders)
 
-        inner = App.new(wallets: wallets, orders: orders, positions: positions, tick_dispatcher: tick_dispatcher,
-                        logger: logger)
+        inner = App.new(
+          wallets: wallets,
+          orders: orders,
+          positions: positions,
+          tick_dispatcher: tick_dispatcher,
+          store: store,
+          logger: logger
+        )
 
         Rack::Builder.new do
+          use Rack::CommonLogger, $stdout if CoindcxBot::PaperExchange::Harness.access_log_enabled?
           use RateLimit::Middleware
           use Auth::Middleware, store: store
           run inner

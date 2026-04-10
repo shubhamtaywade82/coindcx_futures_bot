@@ -31,7 +31,15 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
 
    Defaults: bind **`127.0.0.1`**, port **`9292`**. Override with **`PAPER_EXCHANGE_BIND`**, **`PAPER_EXCHANGE_PORT`**.
 
-3. **Database:** SQLite path defaults to **`./data/paper_exchange.sqlite3`**. Override with **`PAPER_EXCHANGE_DB`**.
+   **Logging (stdout):** **`Rack::CommonLogger`** is **on by default** (one line per request: method, path, status, size, duration). Simulation ticks also log **`pair`** and **`ltp`** after a successful dispatch. Disable access-style lines with **`PAPER_EXCHANGE_ACCESS_LOG=0`** (WEBrick startup messages still appear).
+
+   **`401` on `/simulation/tick`:** the exchange verifies **`X-AUTH-APIKEY`** + HMAC body like CoinDCX. Use the **same** **`COINDCX_API_KEY`** / **`COINDCX_API_SECRET`** as when the server starts (both load `.env` from the repo). If the key exists but the secret in **`.env` changed**, restart **`bin/paper-exchange`** so the DB row is updated (or delete **`data/paper_exchange.sqlite3`** to re-seed). To print the failure reason (`unknown api key` vs `invalid signature` vs `missing auth headers`), run with **`PAPER_EXCHANGE_AUTH_DEBUG=1`**.
+
+   - **`unknown api key`:** the `X-AUTH-APIKEY` value is not in the simulator DB — the bot is using a different key than the process that ran **`ensure_seed!`** (e.g. paper-exchange started without loading the same `.env`, or an old DB from another key). Fix: align **`.env`** with the bot, restart **`bin/paper-exchange`**, or remove **`data/paper_exchange.sqlite3`** and restart so the current key is seeded.
+
+   - **`missing auth headers` on `GET …/data/instrument`:** fixed in current code — **`coindcx-client` uses `auth: false`** for that route (public market data on production). The simulator now allows the same GETs **without** HMAC. If you still see this, upgrade to a revision that includes public market GET handling.
+
+3. **Database:** **`bin/paper-exchange`** defaults to **`<repo>/data/paper_exchange.sqlite3`** (next to `lib/`), not `Dir.pwd`, so the simulator always uses the same file no matter which directory you start it from. Override with **`PAPER_EXCHANGE_DB`**. On startup the server logs **`[paper_exchange] sqlite <path>`** so you can confirm which file is in use.
 
 4. **Bot config** (`config/bot.yml`):
 

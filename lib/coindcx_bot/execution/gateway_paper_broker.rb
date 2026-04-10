@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
 require 'json'
 require 'faraday'
 
@@ -20,8 +21,8 @@ module CoindcxBot
         )
         @tick_base_url = tick_base_url.to_s.chomp('/')
         @tick_path = tick_path.start_with?('/') ? tick_path : "/#{tick_path}"
-        @api_key = api_key || ENV.fetch('COINDCX_API_KEY')
-        @api_secret = api_secret || ENV.fetch('COINDCX_API_SECRET')
+        @api_key = (api_key || ENV.fetch('COINDCX_API_KEY')).to_s.strip
+        @api_secret = (api_secret || ENV.fetch('COINDCX_API_SECRET')).to_s.strip
         @conn = Faraday.new(url: @tick_base_url) do |f|
           f.options.open_timeout = 5
           f.options.timeout = 15
@@ -66,8 +67,15 @@ module CoindcxBot
         }
       end
 
+      # Match journal + mark (same idea as {PaperBroker}) so the TUI header aligns with the execution matrix.
       def unrealized_pnl(ltp_map)
-        BigDecimal('0')
+        @journal.open_positions.sum(BigDecimal('0')) do |pos|
+          pair = (pos[:pair] || pos['pair']).to_s
+          pair_ltp = ltp_map[pair] || ltp_map[pos[:pair].to_sym]
+          next BigDecimal('0') unless pair_ltp
+
+          mark_journal_position_unrealized(pos, BigDecimal(pair_ltp.to_s))
+        end
       end
 
       def close_position(pair:, side:, quantity:, ltp:, position_id: nil)
@@ -99,6 +107,21 @@ module CoindcxBot
       end
 
       private
+
+      def mark_journal_position_unrealized(position, current_ltp)
+        entry = BigDecimal((position[:entry_price] || position['entry_price']).to_s)
+        qty = BigDecimal((position[:quantity] || position['quantity']).to_s)
+        case (position[:side] || position['side']).to_s
+        when 'long', 'buy'
+          (current_ltp - entry) * qty
+        when 'short', 'sell'
+          (entry - current_ltp) * qty
+        else
+          BigDecimal('0')
+        end
+      rescue ArgumentError, TypeError
+        BigDecimal('0')
+      end
 
       def normalize_rows(value)
         list =
