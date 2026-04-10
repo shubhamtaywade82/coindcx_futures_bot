@@ -5,6 +5,13 @@ require 'bigdecimal'
 RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
   let(:output) { StringIO.new }
   let(:broker_double) { double('broker', paper?: false, tui_working_orders: []) }
+  let(:config) do
+    instance_double(
+      CoindcxBot::Config,
+      risk: { max_daily_loss_inr: 1500 },
+      strategy: { name: 'trend_continuation' }
+    )
+  end
   let(:snapshot) do
     CoindcxBot::Core::Engine::Snapshot.new(
       pairs: %w[SOLUSDT],
@@ -20,18 +27,22 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       stale_tick_seconds: 45,
       paper_metrics: {},
       capital_inr: BigDecimal('50_000'),
-      recent_events: [],
+      recent_events: [{ ts: 1, type: 'tick', payload: {} }],
       working_orders: [],
       ws_last_tick_ms_ago: 42
     )
   end
-  let(:engine) { double('engine', snapshot: snapshot, broker: broker_double) }
+  let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
   let(:panel) do
     described_class.new(engine: engine, origin_row: 0, output: output)
   end
 
+  before do
+    allow(engine).to receive(:ws_feed_stale?).and_return(false)
+  end
+
   describe '#render' do
-    it 'renders mode, ws, engine, pnl, and balance line' do
+    it 'renders mode, ws, engine, net pnl, balance, and desk counts' do
       panel.render
       rendered = output.string
 
@@ -39,10 +50,13 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       expect(rendered).to include('MODE:')
       expect(rendered).to include('WS:')
       expect(rendered).to include('ENGINE: RUN')
-      expect(rendered).to include('PnL:')
+      expect(rendered).to include('NET:')
       expect(rendered).to include('123.45')
       expect(rendered).to include('BAL:')
       expect(rendered).to include('50000')
+      expect(rendered).to include('POS:')
+      expect(rendered).to include('ORD:')
+      expect(rendered).to include('LAST:')
     end
 
     context 'when engine is paused with kill switch' do
@@ -75,7 +89,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         expect(rendered).to include('PAUSED')
         expect(rendered).to include('KILL')
         expect(rendered).to include('STALE')
-        expect(rendered).to include('connection lost')
+        expect(rendered).to include('ERR:')
       end
     end
 
@@ -114,14 +128,15 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         )
       end
 
-      it 'renders realized, unrealized, and fees on the balance row' do
+      it 'renders realized and unrealized paper lines with DD and risk tier' do
         panel.render
         rendered = output.string
 
         expect(rendered).to include('REAL:')
         expect(rendered).to include('15.50')
         expect(rendered).to include('UNREAL:')
-        expect(rendered).to include('FEES:')
+        expect(rendered).to include('DD:')
+        expect(rendered).to include('RISK:')
       end
     end
   end

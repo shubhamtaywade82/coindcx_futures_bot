@@ -110,29 +110,40 @@ module CoindcxBot
       end
 
       def build_panels(tick_store:, engine:, symbols:)
-        stale_sec = engine.config.runtime.fetch(:stale_tick_seconds, 45).to_i
         origin = 0
 
         header = Panels::HeaderPanel.new(engine: engine, origin_row: origin)
         origin += header.row_count
 
-        tri = Panels::TriColumnPanel.new(engine: engine, symbols: symbols, origin_row: origin)
-        origin += tri.row_count
-
-        ltp = Panels::LtpPanel.new(
+        matrix = Panels::DeskExecutionOrderPanel.new(
+          engine: engine,
           tick_store: tick_store,
           symbols: symbols,
-          origin_row: origin,
-          stale_tick_seconds: stale_sec,
-          engine: engine
+          origin_row: origin
         )
-        origin += ltp.row_count
+        origin += matrix.row_count
+
+        depth = Panels::DeskMarketDepthPanel.new(
+          engine: engine,
+          tick_store: tick_store,
+          symbols: symbols,
+          origin_row: origin
+        )
+        origin += depth.row_count
+
+        desk = Panels::DeskRiskStrategyPanel.new(
+          engine: engine,
+          tick_store: tick_store,
+          symbols: symbols,
+          origin_row: origin
+        )
+        origin += desk.row_count
 
         logs = Panels::EventLogPanel.new(engine: engine, origin_row: origin, max_lines: 6)
         origin += logs.row_count
 
         keybar = Panels::KeybarPanel.new(origin_row: origin, footer_text_proc: -> { footer_hint_text })
-        [header, tri, ltp, logs, keybar]
+        [header, matrix, depth, desk, logs, keybar]
       end
 
       def start_engine(engine)

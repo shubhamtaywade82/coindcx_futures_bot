@@ -1,12 +1,13 @@
 # frozen_string_literal: true
 
 require 'tty-cursor'
+require 'tty-screen'
 require 'stringio'
 
 module CoindcxBot
   module Tui
     module Panels
-      # Top status strip: mode / time / WS / latency, engine / kill / feed / errors, PnL row.
+      # Top status strip: execution-first summary (mode, engine, kill, feed, latency, balances, desk counts).
       class HeaderPanel
         def initialize(engine:, origin_row: 0, origin_col: 0, output: $stdout)
           @engine = engine
@@ -18,13 +19,14 @@ module CoindcxBot
 
         def render
           snap = @engine.snapshot
+          vm = desk_vm(snap)
           w = term_width
 
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row)     << clear_line(line_mode_time_ws_lat(snap, w))
-          buf << move(@row + 1) << clear_line(line_engine_kill_feed_err(snap, w))
-          buf << move(@row + 2) << clear_line(line_balance_pnl(snap, w))
+          buf << move(@row)     << clear_line(line_mode_engine_kill_ws_lat_feed(snap, w))
+          buf << move(@row + 1) << clear_line(line_balance_net_real_unreal_dd_risk(snap, vm, w))
+          buf << move(@row + 2) << clear_line(line_pos_ord_err_last(snap, vm, w))
           buf << move(@row + 3) << clear_line(dim('─' * [[w - 1, 40].max, 120].min))
           buf << @cursor.restore
 
@@ -38,6 +40,16 @@ module CoindcxBot
 
         private
 
+        def desk_vm(snap)
+          DeskViewModel.new(
+            snapshot: snap,
+            tick_ticks: {},
+            symbols: Array(snap.pairs),
+            ws_stale_fn: ->(sym) { @engine.ws_feed_stale?(sym) },
+            config: @engine.config
+          )
+        end
+
         def term_width
           TTY::Screen.width || 80
         end
@@ -46,25 +58,8 @@ module CoindcxBot
           @cursor.move_to(@col, row)
         end
 
-        def line_mode_time_ws_lat(snap, w)
+        def line_mode_engine_kill_ws_lat_feed(snap, w)
           mode = snap.dry_run ? bold_magenta('PAPER') : bold_red('LIVE')
-          t = Time.now.strftime('%Y-%m-%d %H:%M:%S')
-          ws =
-            if snap.stale
-              red('WS: ○ STALE')
-            else
-              green('WS: ● CONNECTED')
-            end
-          lat =
-            if snap.ws_last_tick_ms_ago
-              dim('LAT: ') + cyan("#{snap.ws_last_tick_ms_ago}ms")
-            else
-              dim('LAT: —')
-            end
-          join_compact(w, ["MODE: #{mode}", "TIME: #{t}", ws, lat])
-        end
-
-        def line_engine_kill_feed_err(snap, w)
           eng =
             if snap.running
               green('ENGINE: RUN')
@@ -73,35 +68,103 @@ module CoindcxBot
             end
           pause = snap.paused ? on_yellow(' PAUSED ') : nil
           kill = snap.kill_switch ? on_red(' KILL: ON ') : dim('KILL: OFF')
-          feed = snap.stale ? on_yellow(' FEED: STALE ') : green(' FEED: OK ')
-          err = snap.last_error ? red(truncate(snap.last_error.to_s, 28)) : dim('ERR: NONE')
-          join_compact(w, [eng, pause, kill, feed, err].compact)
+          ws =
+            if snap.stale
+              red('WS: ○')
+            else
+              green('WS: ●')
+            end
+          lat =
+            if snap.ws_last_tick_ms_ago
+              dim('LAT: ') + cyan("#{snap.ws_last_tick_ms_ago}ms")
+            else
+              dim('LAT: —')
+            end
+          feed = snap.stale ? on_yellow(' FEED: STALE ') : green('FEED: OK')
+          join_compact(w, ["MODE: #{mode}", eng, pause, kill, ws, lat, feed].compact)
         end
 
-        def line_balance_pnl(snap, w)
+        def line_balance_net_real_unreal_dd_risk(snap, vm, w)
           bal =
             if snap.capital_inr
               bold('BAL: ') + dim('₹') + fmt_inr(snap.capital_inr)
             else
               dim('BAL: —')
             end
-          pnl = bold('PnL: ') + bold_cyan(fmt_inr(snap.daily_pnl))
+          net = bold('NET: ') + colored_inr(snap.daily_pnl)
           rest =
             if paper_metrics?(snap)
               pm = snap.paper_metrics
               [
                 "#{bold('REAL: ')}#{fmt_num(pm[:total_realized_pnl])}",
-                "#{bold('UNREAL: ')}#{yellow(fmt_num(pm[:unrealized_pnl]))}",
-                "#{bold('FEES: ')}#{dim(fmt_num(pm[:total_fees]))}"
+                "#{bold('UNREAL: ')}#{colored_num(pm[:unrealized_pnl])}",
+                "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
+                "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
               ].join(dim(' │ '))
             else
-              [dim('REAL: —'), dim('UNREAL: —'), dim('FEES: —')].join(dim(' │ '))
+              [
+                dim('REAL: —'),
+                dim('UNREAL: —'),
+                "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
+                "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
+              ].join(dim(' │ '))
             end
-          join_compact(w, [bal, pnl, rest])
+          join_compact(w, [bal, net, rest])
         end
 
-        def join_compact(_w, parts)
-          parts.join(dim(' │ '))
+        def line_pos_ord_err_last(snap, vm, w)
+          pos_n = Array(snap.positions).size
+          ord_n = Array(snap.working_orders).size
+          err = snap.last_error ? red('1') : dim('0')
+          last = cyan(vm.last_event_type.to_s)
+          join_compact(
+            w,
+            [
+              "#{bold('POS: ')}#{pos_n}",
+              "#{bold('ORD: ')}#{ord_n}",
+              "#{bold('ERR: ')}#{err}",
+              "#{bold('LAST: ')}#{last}"
+            ]
+          )
+        end
+
+        def fmt_dd(pct)
+          return dim('—') if pct.nil?
+
+          v = pct.to_f
+          s = format('%+.2f%%', v)
+          v.negative? ? red(s) : dim(s)
+        end
+
+        def color_risk_band(band)
+          case band
+          when 'CRIT' then on_red(" #{band} ")
+          when 'HIGH' then red(band)
+          when 'MED' then yellow(band)
+          else green(band)
+          end
+        end
+
+        def colored_inr(v)
+          bd = BigDecimal(v.to_s)
+          s = fmt_inr(bd)
+          return green(s) if bd.positive?
+          return red(s) if bd.negative?
+
+          dim(s)
+        rescue ArgumentError, TypeError
+          dim('₹0.00')
+        end
+
+        def colored_num(v)
+          bd = BigDecimal((v || 0).to_s)
+          s = fmt_num(bd)
+          return green(s) if bd.positive?
+          return red(s) if bd.negative?
+
+          yellow(s)
+        rescue ArgumentError, TypeError
+          dim('0.00')
         end
 
         def paper_metrics?(snap)
@@ -120,8 +183,8 @@ module CoindcxBot
           '0.00'
         end
 
-        def truncate(s, max)
-          s.length <= max ? s : "#{s[0, max - 1]}…"
+        def join_compact(_w, parts)
+          parts.join(dim(' │ '))
         end
 
         def clear_line(content)
@@ -129,7 +192,6 @@ module CoindcxBot
         end
 
         def bold(str)           = "\e[1m#{str}\e[0m"
-        def bold_cyan(str)      = "\e[1;36m#{str}\e[0m"
         def bold_magenta(str)   = "\e[1;35m#{str}\e[0m"
         def bold_red(str)       = "\e[1;31m#{str}\e[0m"
         def cyan(str)           = "\e[36m#{str}\e[0m"

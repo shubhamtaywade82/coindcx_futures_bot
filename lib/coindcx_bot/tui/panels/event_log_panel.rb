@@ -26,7 +26,7 @@ module CoindcxBot
           buf = StringIO.new
           buf << @cursor.save
           rule = '─' * [[w - 6, 12].max, 0].max
-          buf << move(@row) << clear_line("#{bold('LOGS')} #{dim(rule)}")
+          buf << move(@row) << clear_line("#{bold('EVENT LOG (FIFO)')} #{dim(rule)}")
 
           @max_lines.times do |i|
             line =
