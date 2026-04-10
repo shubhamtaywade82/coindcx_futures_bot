@@ -5,6 +5,7 @@ require 'json'
 require 'logger'
 
 require_relative '../display_ltp'
+require_relative '../synthetic_l1'
 
 module CoindcxBot
   module Core
@@ -297,13 +298,14 @@ module CoindcxBot
       def forward_tick_to_store(tick)
         return unless @tick_store
 
+        bid, ask = tick_store_bid_ask(tick)
         @tick_store.update(
           symbol: tick.pair,
           ltp: tick.price,
           change_pct: tick.change_pct,
           updated_at: tick.received_at,
-          bid: tick.bid,
-          ask: tick.ask
+          bid: bid,
+          ask: ask
         )
       end
 
@@ -328,15 +330,36 @@ module CoindcxBot
           existing = @tick_store.snapshot[pair]
           next if existing && existing.updated_at > t.received_at
 
+          bid, ask = tick_store_bid_ask(t)
           @tick_store.update(
             symbol: pair,
             ltp: t.price,
             change_pct: t.change_pct,
             updated_at: t.received_at,
-            bid: t.bid,
-            ask: t.ask
+            bid: bid,
+            ask: ask
           )
         end
+      end
+
+      def tick_store_bid_ask(tick)
+        return [nil, nil] unless tick
+
+        if l1_book_usable?(tick.bid, tick.ask)
+          [tick.bid, tick.ask]
+        else
+          SyntheticL1.quote_from_mid_as_float(tick.price)
+        end
+      end
+
+      def l1_book_usable?(bid, ask)
+        return false if bid.nil? || ask.nil?
+
+        b = BigDecimal(bid.to_s)
+        a = BigDecimal(ask.to_s)
+        b.positive? && a.positive? && a > b
+      rescue ArgumentError, TypeError
+        false
       end
 
       def configure_coin_dcx
