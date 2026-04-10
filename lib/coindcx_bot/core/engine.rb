@@ -270,6 +270,13 @@ module CoindcxBot
           t = @tracker.last_tick(pair)
           next unless t
 
+          # TUI `LtpRestPoller` refreshes `TickStore` on a short interval using public REST quotes.
+          # Without this guard, each engine `tick_cycle` would overwrite `updated_at` with the
+          # tracker's `received_at` (last WS or candle mirror), making AGE look ~30–60s stale and
+          # hiding REST-driven LTP movement even while the footer shows a fast REST poll interval.
+          existing = @tick_store.snapshot[pair]
+          next if existing && existing.updated_at > t.received_at
+
           @tick_store.update(
             symbol: pair,
             ltp: t.price,
