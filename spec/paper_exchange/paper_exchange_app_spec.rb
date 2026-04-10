@@ -9,30 +9,35 @@ RSpec.describe 'PaperExchange Rack app' do
   let(:path) { File.join(Dir.tmpdir, "pe_app_#{Process.pid}_#{rand(1_000_000)}.sqlite3") }
   let(:api_key) { 'test-key' }
   let(:api_secret) { 'test-secret' }
+  let(:store) do
+    s = CoindcxBot::PaperExchange::Store.new(path)
+    CoindcxBot::PaperExchange::Boot.ensure_seed!(s, api_key: api_key, api_secret: api_secret,
+                                                   seed_spot_usdt: '0', seed_futures_usdt: '1_000_000')
+    s
+  end
   let(:app) do
-    store = CoindcxBot::PaperExchange::Store.new(path)
-    ledger = CoindcxBot::PaperExchange::Ledger.new(store)
-    CoindcxBot::PaperExchange::Boot.ensure_seed!(store, api_key: api_key, api_secret: api_secret,
-                                                    seed_spot_usdt: '0', seed_futures_usdt: '1_000_000')
+    pe_store = store
+    ledger = CoindcxBot::PaperExchange::Ledger.new(pe_store)
     fill_engine = CoindcxBot::Execution::FillEngine.new(slippage_bps: 1, fee_bps: 1)
-    market_rules = CoindcxBot::PaperExchange::MarketRules.new(store)
+    market_rules = CoindcxBot::PaperExchange::MarketRules.new(pe_store)
     orders = CoindcxBot::PaperExchange::OrdersService.new(
-      store: store, ledger: ledger, market_rules: market_rules, fill_engine: fill_engine
+      store: pe_store, ledger: ledger, market_rules: market_rules, fill_engine: fill_engine
     )
-    wallets = CoindcxBot::PaperExchange::WalletsService.new(store: store, ledger: ledger)
-    positions = CoindcxBot::PaperExchange::PositionsService.new(store: store, ledger: ledger, orders_service: orders)
-    tick = CoindcxBot::PaperExchange::TickDispatcher.new(store: store, orders_service: orders)
+    wallets = CoindcxBot::PaperExchange::WalletsService.new(store: pe_store, ledger: ledger)
+    positions = CoindcxBot::PaperExchange::PositionsService.new(store: pe_store, ledger: ledger, orders_service: orders)
+    tick = CoindcxBot::PaperExchange::TickDispatcher.new(store: pe_store, orders_service: orders)
     inner = CoindcxBot::PaperExchange::App.new(
       wallets: wallets,
       orders: orders,
       positions: positions,
       tick_dispatcher: tick,
-      store: store,
+      store: pe_store,
       logger: nil
     )
     Rack::Builder.new do
+      use CoindcxBot::PaperExchange::SqlMutex::Middleware, store: pe_store
       use CoindcxBot::PaperExchange::RateLimit::Middleware
-      use CoindcxBot::PaperExchange::Auth::Middleware, store: store
+      use CoindcxBot::PaperExchange::Auth::Middleware, store: pe_store
       run inner
     end
   end
@@ -58,6 +63,66 @@ RSpec.describe 'PaperExchange Rack app' do
     env = Rack::MockRequest.env_for('/health', method: 'GET')
     status, = app.call(env)
     expect(status).to eq(200)
+  end
+
+  it 'returns 401 missing_auth_headers when auth headers are absent' do
+    env = Rack::MockRequest.env_for(
+      '/exchange/v1/paper/simulation/tick',
+      method: 'POST',
+      input: '{"pair":"B-SOL_USDT","ltp":"1"}',
+      'CONTENT_TYPE' => 'application/json'
+    )
+    expect do
+      status, _, body = app.call(env)
+      expect(status).to eq(401)
+      expect(JSON.parse(body.join).dig('error', 'code')).to eq('missing_auth_headers')
+    end.to output(/paper_exchange:auth.*missing auth headers/).to_stderr
+  end
+
+  it 'returns 401 unknown_api_key when api key is not seeded' do
+    prev_key = ENV['COINDCX_API_KEY']
+    ENV['COINDCX_API_KEY'] = api_key
+    signer = CoinDCX::Auth::Signer.new(api_key: 'other-key', api_secret: api_secret)
+    normalized, headers = signer.authenticated_request({ pair: 'B-SOL_USDT', ltp: '1' })
+    payload = JSON.generate(CoinDCX::Utils::Payload.stringify_keys(normalized))
+    env = Rack::MockRequest.env_for(
+      '/exchange/v1/paper/simulation/tick',
+      method: 'POST',
+      input: payload,
+      'CONTENT_TYPE' => 'application/json',
+      'HTTP_X_AUTH_APIKEY' => headers['X-AUTH-APIKEY'],
+      'HTTP_X_AUTH_SIGNATURE' => headers['X-AUTH-SIGNATURE']
+    )
+    expect do
+      status, _, body = app.call(env)
+      expect(status).to eq(401)
+      j = JSON.parse(body.join)['error']
+      expect(j['code']).to eq('unknown_api_key')
+      expect(j['hint']).to include('request key')
+      expect(j['hint']).to include('server env')
+    end.to output(/paper_exchange:auth.*unknown api key/).to_stderr
+  ensure
+    if prev_key.nil?
+      ENV.delete('COINDCX_API_KEY')
+    else
+      ENV['COINDCX_API_KEY'] = prev_key
+    end
+  end
+
+  it 'returns 401 invalid_signature when signature does not match body' do
+    env = Rack::MockRequest.env_for(
+      '/exchange/v1/paper/simulation/tick',
+      method: 'POST',
+      input: '{"pair":"B-SOL_USDT","ltp":"1","timestamp":1}',
+      'CONTENT_TYPE' => 'application/json',
+      'HTTP_X_AUTH_APIKEY' => api_key,
+      'HTTP_X_AUTH_SIGNATURE' => '0' * 64
+    )
+    expect do
+      status, _, body = app.call(env)
+      expect(status).to eq(401)
+      expect(JSON.parse(body.join).dig('error', 'code')).to eq('invalid_signature')
+    end.to output(/paper_exchange:auth.*invalid signature/).to_stderr
   end
 
   it 'returns 404 for instrument when mark price is not seeded yet' do
@@ -92,6 +157,31 @@ RSpec.describe 'PaperExchange Rack app' do
     )
     expect(status).to eq(200)
     expect(JSON.parse(body.join)).to include('status' => 'ok')
+  end
+
+  it 're-seeds pe_api_keys when the row is missing but the request key matches ENV' do
+    prev_k = ENV['COINDCX_API_KEY']
+    prev_s = ENV['COINDCX_API_SECRET']
+    ENV['COINDCX_API_KEY'] = api_key
+    ENV['COINDCX_API_SECRET'] = api_secret
+    store.db.execute('DELETE FROM pe_api_keys')
+    status, _, body = signed_post(
+      '/exchange/v1/paper/simulation/tick',
+      { pair: 'B-SOL_USDT', ltp: '77' }
+    )
+    expect(status).to eq(200)
+    expect(JSON.parse(body.join)).to include('status' => 'ok')
+  ensure
+    if prev_k.nil?
+      ENV.delete('COINDCX_API_KEY')
+    else
+      ENV['COINDCX_API_KEY'] = prev_k
+    end
+    if prev_s.nil?
+      ENV.delete('COINDCX_API_SECRET')
+    else
+      ENV['COINDCX_API_SECRET'] = prev_s
+    end
   end
 
   it 'creates a market order after tick seeds mark price' do

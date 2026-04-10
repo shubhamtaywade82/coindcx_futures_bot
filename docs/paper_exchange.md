@@ -33,13 +33,23 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
 
    **Logging (stdout):** **`Rack::CommonLogger`** is **on by default** (one line per request: method, path, status, size, duration). Simulation ticks also log **`pair`** and **`ltp`** after a successful dispatch. Disable access-style lines with **`PAPER_EXCHANGE_ACCESS_LOG=0`** (WEBrick startup messages still appear).
 
-   **`401` on `/simulation/tick`:** the exchange verifies **`X-AUTH-APIKEY`** + HMAC body like CoinDCX. Use the **same** **`COINDCX_API_KEY`** / **`COINDCX_API_SECRET`** as when the server starts (both load `.env` from the repo). If the key exists but the secret in **`.env` changed**, restart **`bin/paper-exchange`** so the DB row is updated (or delete **`data/paper_exchange.sqlite3`** to re-seed). To print the failure reason (`unknown api key` vs `invalid signature` vs `missing auth headers`), run with **`PAPER_EXCHANGE_AUTH_DEBUG=1`**.
+   **`401` on `/simulation/tick`:** the exchange verifies **`X-AUTH-APIKEY`** + HMAC body like CoinDCX. Use the **same** **`COINDCX_API_KEY`** / **`COINDCX_API_SECRET`** as when the server starts (both load `.env` from the repo). If the key exists but the secret in **`.env` changed**, restart **`bin/paper-exchange`** so the DB row is updated (or delete **`data/paper_exchange.sqlite3`** to re-seed).
 
-   - **`unknown api key`:** the `X-AUTH-APIKEY` value is not in the simulator DB — the bot is using a different key than the process that ran **`ensure_seed!`** (e.g. paper-exchange started without loading the same `.env`, or an old DB from another key). Fix: align **`.env`** with the bot, restart **`bin/paper-exchange`**, or remove **`data/paper_exchange.sqlite3`** and restart so the current key is seeded.
+   Each failed auth request logs one line to **stderr** (`[paper_exchange:auth] …`) and returns JSON `error.code` as below. Set **`PAPER_EXCHANGE_AUTH_DEBUG=1`** for an extra **`[paper_exchange:auth:debug]`** line on **`unknown_api_key`** (fingerprints + whether the header key equals this process’s `COINDCX_API_KEY`).
 
-   - **`missing auth headers` on `GET …/data/instrument`:** fixed in current code — **`coindcx-client` uses `auth: false`** for that route (public market data on production). The simulator now allows the same GETs **without** HMAC. If you still see this, upgrade to a revision that includes public market GET handling.
+   **Shell vs `.env`:** `Dotenv.load` does **not** replace variables already exported in your environment. If one terminal has old `COINDCX_API_KEY` in the shell and another loads only `.env`, fingerprints differ → **`unknown_api_key`**. Fix: `unset COINDCX_API_KEY COINDCX_API_SECRET` in both shells, or run both processes from clean environments so the repo `.env` applies.
 
-3. **Database:** **`bin/paper-exchange`** defaults to **`<repo>/data/paper_exchange.sqlite3`** (next to `lib/`), not `Dir.pwd`, so the simulator always uses the same file no matter which directory you start it from. Override with **`PAPER_EXCHANGE_DB`**. On startup the server logs **`[paper_exchange] sqlite <path>`** so you can confirm which file is in use.
+   | `error.code` (JSON) | Typical fix |
+   | --- | --- |
+   | `missing_auth_headers` | Request omitted `X-AUTH-APIKEY` / `X-AUTH-SIGNATURE` (unusual for **`GatewayPaperBroker`** + Faraday). |
+   | `unknown_api_key` | Response includes **`error.hint`**: either the request key **fingerprint** ≠ server `.env` (align keys), or fingerprints match but the row is missing (stop server, delete the logged **`sqlite`** path, restart). Compare startup **`COINDCX_API_KEY fingerprint=…`** with the bot’s key (same string → same fingerprint). |
+   | `invalid_signature` | **`COINDCX_API_SECRET`** on the bot must match the row in the DB. After changing **`.env`**, restart **`bin/paper-exchange`** (Boot updates the secret for an existing key) or wipe the DB and restart. |
+
+   **`missing auth headers` on `GET …/data/instrument`:** fixed in current code — **`coindcx-client` uses `auth: false`** for that route (public market data on production). The simulator allows the same GETs **without** HMAC. If you still see this, upgrade to a revision that includes public market GET handling.
+
+3. **Database:** **`Harness`** (used by **`bin/paper-exchange`** and any **`rackup`** of the same app) defaults to **`<repo>/data/paper_exchange.sqlite3`** resolved from the gem path, **not** `Dir.pwd`, so the simulator uses one stable file no matter which directory you start the server from. Override with **`PAPER_EXCHANGE_DB`**. On startup the server logs **`[paper_exchange] sqlite <path>`** and a **`COINDCX_API_KEY fingerprint=…`** line — the bot’s key must yield the **same** fingerprint (same `.env`).
+
+   **Threading:** The app uses **one** `SQLite3::Database` per file. **`PaperExchange::SqlMutex::Middleware`** is the **outermost** Rack layer in **`Harness`** so WEBrick’s thread pool never touches SQLite concurrently (which can otherwise yield bogus “unknown api key” even when `pe_api_keys` is seeded). Custom Rack stacks should keep that middleware **outside** all other layers that might run handlers in parallel.
 
 4. **Bot config** (`config/bot.yml`):
 

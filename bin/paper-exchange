@@ -8,6 +8,7 @@ require 'bundler/setup'
 
 begin
   require 'dotenv'
+  # Does not override COINDCX_* already exported in the shell — unset those vars if .env should win.
   Dotenv.load(File.expand_path('../.env', __dir__), File.expand_path('../.env.local', __dir__))
 rescue LoadError
 end
