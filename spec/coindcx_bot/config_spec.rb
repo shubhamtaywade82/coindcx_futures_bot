@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
+
 RSpec.describe CoindcxBot::Config do
   it 'treats runtime.paper as dry_run (paper trading mode)' do
     cfg = described_class.new(
@@ -10,7 +12,25 @@ RSpec.describe CoindcxBot::Config do
 
   it 'rejects per_trade_inr_min greater than max' do
     bad = minimal_bot_config(risk: { per_trade_inr_min: 600, per_trade_inr_max: 500 })
-    expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /per_trade_inr_min/)
+    expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /per-trade INR min/)
+  end
+
+  it 'derives per-trade clamps and daily loss from capital_inr when absolute INR limits are omitted' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        capital_inr: 200_000,
+        risk: {
+          per_trade_inr_min: nil,
+          per_trade_inr_max: nil,
+          max_daily_loss_inr: nil,
+          max_open_positions: 2,
+          max_leverage: 10
+        }
+      )
+    )
+    expect(cfg.resolved_per_trade_inr_min).to eq(BigDecimal('500'))
+    expect(cfg.resolved_per_trade_inr_max).to eq(BigDecimal('6000'))
+    expect(cfg.resolved_max_daily_loss_inr).to eq(BigDecimal('7000'))
   end
 
   it 'rejects per_trade_capital_pct without capital_inr' do

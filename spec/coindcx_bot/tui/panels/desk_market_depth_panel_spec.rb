@@ -25,7 +25,12 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
     )
   end
   let(:config) do
-    instance_double(CoindcxBot::Config, risk: { max_daily_loss_inr: 1500 }, strategy: { name: 'trend' })
+    instance_double(
+      CoindcxBot::Config,
+      risk: { max_daily_loss_inr: 1500 },
+      strategy: { name: 'trend' },
+      resolved_max_daily_loss_inr: BigDecimal('1500')
+    )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
   let(:panel) do

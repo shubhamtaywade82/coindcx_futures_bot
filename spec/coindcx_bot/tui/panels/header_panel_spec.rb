@@ -10,7 +10,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       CoindcxBot::Config,
       risk: { max_daily_loss_inr: 1500 },
       strategy: { name: 'trend_continuation' },
-      inr_per_usdt: BigDecimal('83')
+      inr_per_usdt: BigDecimal('83'),
+      resolved_max_daily_loss_inr: BigDecimal('1500')
     )
   end
   let(:snapshot) do

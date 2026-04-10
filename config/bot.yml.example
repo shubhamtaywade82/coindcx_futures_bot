@@ -10,18 +10,18 @@ pairs:
 # Approximate INR per USDT for position sizing from INR risk budget
 inr_per_usdt: 83.0
 
-# Reference equity in INR (TUI balance; required if you set risk.per_trade_capital_pct).
+# Reference equity in INR — risk clamps and daily loss limit scale from this (no need to retune ₹ amounts).
 capital_inr: 1_00_000
 
 risk:
-  # Optional: per-trade INR risk budget = capital_inr * (pct / 100), then clamped to min/max below.
-  # This is stop-distance risk sizing (same units as per_trade_inr_*), not margin or notional cap.
-  # per_trade_capital_pct: 2
-  per_trade_inr_min: 250
-  per_trade_inr_max: 500
-  max_daily_loss_inr: 1500
   max_open_positions: 2
-  max_leverage: 5
+  max_leverage: 10
+  # Optional (% of capital_inr). Defaults: per-trade 1.5% (when both per_trade_inr_min/max are omitted);
+  # clamp floor/ceiling 0.25% / 3%; daily loss halt 3.5%. TUI UTIL = loss vs daily cap, not margin use.
+  # per_trade_capital_pct: 1.5
+  # per_trade_inr_min_pct_of_capital: 0.25
+  # per_trade_inr_max_pct_of_capital: 3.0
+  # max_daily_loss_pct_of_capital: 3.5
 
 strategy:
   execution_resolution: 15m

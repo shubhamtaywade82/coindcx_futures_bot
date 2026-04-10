@@ -79,6 +79,31 @@ RSpec.describe CoindcxBot::Risk::Manager do
     expect(qty).to eq(expected_qty)
   end
 
+  it 'uses 1.5% of capital_inr as per-trade budget when absolute clamps and per_trade_capital_pct are omitted' do
+    cfg = CoindcxBot::Config.new(
+      minimal_bot_config(
+        capital_inr: 100_000,
+        risk: {
+          per_trade_inr_min: nil,
+          per_trade_inr_max: nil,
+          max_daily_loss_inr: nil,
+          max_open_positions: 2,
+          max_leverage: 10
+        }
+      )
+    )
+    dyn = described_class.new(
+      config: cfg,
+      journal: journal,
+      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg)
+    )
+    qty = dyn.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
+    expected_risk_inr = BigDecimal('1500')
+    expected_risk_usdt = expected_risk_inr / BigDecimal('83')
+    expected_qty = (expected_risk_usdt / BigDecimal('2')).round(6, BigDecimal::ROUND_DOWN)
+    expect(qty).to eq(expected_qty)
+  end
+
   it 'raises per-trade INR budget from pct when raw pct budget is below min' do
     cfg = CoindcxBot::Config.new(
       minimal_bot_config(

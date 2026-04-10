@@ -7,7 +7,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
     instance_double(
       CoindcxBot::Config,
       risk: { max_daily_loss_inr: 1_500 },
-      strategy: { name: 'supertrend_profit' }
+      strategy: { name: 'supertrend_profit' },
+      resolved_max_daily_loss_inr: BigDecimal('1500')
     )
   end
 

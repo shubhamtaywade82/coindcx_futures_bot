@@ -9,7 +9,7 @@ module CoindcxBot
         @config = config
         @journal = journal
         @guard = exposure_guard
-        @max_daily_loss = BigDecimal(config.risk.fetch(:max_daily_loss_inr, 1500).to_s)
+        @max_daily_loss = BigDecimal(config.resolved_max_daily_loss_inr.to_s)
       end
 
       def daily_loss_breached?
@@ -39,17 +39,23 @@ module CoindcxBot
 
       def per_trade_risk_inr
         rk = @config.risk
-        min_r = BigDecimal(rk.fetch(:per_trade_inr_min, 250).to_s)
-        max_r = BigDecimal(rk.fetch(:per_trade_inr_max, 500).to_s)
-        pct = rk[:per_trade_capital_pct]
-        if pct.nil? || pct.to_s.strip.empty?
-          return (min_r + max_r) / 2
+        min_r = @config.resolved_per_trade_inr_min
+        max_r = @config.resolved_per_trade_inr_max
+        cap = @config.capital_inr
+        pct_raw = rk[:per_trade_capital_pct]
+
+        if pct_raw.nil? || pct_raw.to_s.strip.empty?
+          if cap && !@config.legacy_per_trade_inr_band?
+            pct_raw = '1.5'
+          else
+            return (min_r + max_r) / 2
+          end
         end
 
-        cap = @config.capital_inr
+        pct = BigDecimal(pct_raw.to_s)
         return (min_r + max_r) / 2 if cap.nil?
 
-        raw_budget = (cap * BigDecimal(pct.to_s) / 100).round(2, BigDecimal::ROUND_DOWN)
+        raw_budget = (cap * pct / 100).round(2, BigDecimal::ROUND_DOWN)
         clamp_inr_budget(raw_budget, min_r, max_r)
       end
 

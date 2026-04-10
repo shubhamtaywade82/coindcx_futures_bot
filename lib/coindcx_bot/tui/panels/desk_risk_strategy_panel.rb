@@ -104,10 +104,7 @@ module CoindcxBot
         end
 
         def max_daily_loss_s
-          v = @engine.config.risk[:max_daily_loss_inr]
-          return dim('—') if v.nil?
-
-          fmt_inr(BigDecimal(v.to_s))
+          fmt_inr(BigDecimal(@engine.config.resolved_max_daily_loss_inr.to_s))
         rescue ArgumentError, TypeError
           dim('—')
         end

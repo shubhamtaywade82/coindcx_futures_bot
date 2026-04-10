@@ -98,10 +98,7 @@ module CoindcxBot
       private
 
       def daily_loss_limit_inr
-        v = @config.risk[:max_daily_loss_inr]
-        return nil if v.nil?
-
-        BigDecimal(v.to_s)
+        BigDecimal(@config.resolved_max_daily_loss_inr.to_s)
       rescue ArgumentError, TypeError
         nil
       end
