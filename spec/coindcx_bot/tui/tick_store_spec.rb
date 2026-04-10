@@ -60,6 +60,15 @@ RSpec.describe CoindcxBot::Tui::TickStore do
 
       expect(store.snapshot['SOLUSDT'].updated_at).to eq(past)
     end
+
+    it 'stores bid and ask and retains them when a later update omits them' do
+      store.update(symbol: 'SOLUSDT', ltp: '100.0', bid: '99.90', ask: '100.10')
+      store.update(symbol: 'SOLUSDT', ltp: '100.05')
+
+      tick = store.snapshot['SOLUSDT']
+      expect(tick.bid).to eq(99.90)
+      expect(tick.ask).to eq(100.10)
+    end
   end
 
   describe '#stale?' do

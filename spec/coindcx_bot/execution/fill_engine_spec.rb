@@ -74,7 +74,7 @@ RSpec.describe CoindcxBot::Execution::FillEngine do
       CoindcxBot::Execution::OrderBook::WorkingOrder.new(
         id: 1, pair: 'B-SOL_USDT', side: 'long', order_type: 'market',
         quantity: BigDecimal('1'), anchor_price: BigDecimal('100'),
-        limit_price: nil, stop_price: nil, group_id: nil, group_role: nil
+        limit_price: nil, stop_price: nil, group_id: nil, group_role: nil, placed_at: nil
       )
     end
 
@@ -93,7 +93,7 @@ RSpec.describe CoindcxBot::Execution::FillEngine do
       wo = CoindcxBot::Execution::OrderBook::WorkingOrder.new(
         id: 2, pair: 'B-SOL_USDT', side: 'long', order_type: 'limit',
         quantity: BigDecimal('1'), anchor_price: BigDecimal('100'),
-        limit_price: BigDecimal('98'), stop_price: nil, group_id: nil, group_role: nil
+        limit_price: BigDecimal('98'), stop_price: nil, group_id: nil, group_role: nil, placed_at: nil
       )
       expect(engine.evaluate(wo, ltp: BigDecimal('99'))).to be_nil
       f = engine.evaluate(wo, ltp: BigDecimal('98'))
@@ -106,7 +106,7 @@ RSpec.describe CoindcxBot::Execution::FillEngine do
       wo = CoindcxBot::Execution::OrderBook::WorkingOrder.new(
         id: 3, pair: 'B-SOL_USDT', side: 'long', order_type: 'limit',
         quantity: BigDecimal('1'), anchor_price: BigDecimal('100'),
-        limit_price: BigDecimal('98'), stop_price: nil, group_id: nil, group_role: nil
+        limit_price: BigDecimal('98'), stop_price: nil, group_id: nil, group_role: nil, placed_at: nil
       )
       f = engine.evaluate(wo, ltp: BigDecimal('99'), high: nil, low: BigDecimal('97.5'))
       expect(f).not_to be_nil
@@ -117,7 +117,7 @@ RSpec.describe CoindcxBot::Execution::FillEngine do
       wo = CoindcxBot::Execution::OrderBook::WorkingOrder.new(
         id: 4, pair: 'B-SOL_USDT', side: 'short', order_type: 'limit',
         quantity: BigDecimal('1'), anchor_price: BigDecimal('100'),
-        limit_price: BigDecimal('102'), stop_price: nil, group_id: nil, group_role: nil
+        limit_price: BigDecimal('102'), stop_price: nil, group_id: nil, group_role: nil, placed_at: nil
       )
       expect(engine.evaluate(wo, ltp: BigDecimal('101'))).to be_nil
       f = engine.evaluate(wo, ltp: BigDecimal('102'))
@@ -128,7 +128,7 @@ RSpec.describe CoindcxBot::Execution::FillEngine do
       wo = CoindcxBot::Execution::OrderBook::WorkingOrder.new(
         id: 5, pair: 'B-SOL_USDT', side: 'sell', order_type: 'stop_market',
         quantity: BigDecimal('1'), anchor_price: BigDecimal('100'),
-        limit_price: nil, stop_price: BigDecimal('95'), group_id: nil, group_role: nil
+        limit_price: nil, stop_price: BigDecimal('95'), group_id: nil, group_role: nil, placed_at: nil
       )
       expect(engine.evaluate(wo, ltp: BigDecimal('96'))).to be_nil
       f = engine.evaluate(wo, ltp: BigDecimal('95'))
@@ -139,7 +139,7 @@ RSpec.describe CoindcxBot::Execution::FillEngine do
       wo = CoindcxBot::Execution::OrderBook::WorkingOrder.new(
         id: 6, pair: 'B-SOL_USDT', side: 'sell', order_type: 'take_profit',
         quantity: BigDecimal('1'), anchor_price: BigDecimal('100'),
-        limit_price: nil, stop_price: BigDecimal('110'), group_id: nil, group_role: nil
+        limit_price: nil, stop_price: BigDecimal('110'), group_id: nil, group_role: nil, placed_at: nil
       )
       expect(engine.evaluate(wo, ltp: BigDecimal('109'))).to be_nil
       f = engine.evaluate(wo, ltp: BigDecimal('110'))
@@ -150,7 +150,7 @@ RSpec.describe CoindcxBot::Execution::FillEngine do
       wo = CoindcxBot::Execution::OrderBook::WorkingOrder.new(
         id: 7, pair: 'B-SOL_USDT', side: 'buy', order_type: 'stop',
         quantity: BigDecimal('1'), anchor_price: BigDecimal('100'),
-        limit_price: nil, stop_price: BigDecimal('105'), group_id: nil, group_role: nil
+        limit_price: nil, stop_price: BigDecimal('105'), group_id: nil, group_role: nil, placed_at: nil
       )
       expect(engine.evaluate(wo, ltp: BigDecimal('104'))).to be_nil
       f = engine.evaluate(wo, ltp: BigDecimal('105'))

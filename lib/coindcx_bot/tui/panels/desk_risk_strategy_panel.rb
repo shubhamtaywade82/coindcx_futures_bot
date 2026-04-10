@@ -48,7 +48,12 @@ module CoindcxBot
           max_l = max_daily_loss_s
           loss = snap.daily_pnl.negative? ? -snap.daily_pnl : BigDecimal('0')
           util = vm.loss_utilization_pct
-          util_s = util ? "#{util}%" : '—'
+          util_s =
+            if util.nil?
+              '—'
+            else
+              format('%.1f%%', util.to_f)
+            end
           join_parts(
             [
               "#{bold('MAX LOSS: ')}#{max_l}",

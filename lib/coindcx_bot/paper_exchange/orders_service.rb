@@ -282,7 +282,8 @@ module CoindcxBot
           limit_price: row['limit_price'] ? BigDecimal(row['limit_price'].to_s) : nil,
           stop_price: row['stop_price'] ? BigDecimal(row['stop_price'].to_s) : nil,
           group_id: nil,
-          group_role: nil
+          group_role: nil,
+          placed_at: nil
         )
       end
 

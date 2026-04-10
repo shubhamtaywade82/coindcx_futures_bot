@@ -27,8 +27,8 @@ The "Gatekeeper."
 
 ### E. TUI (`lib/coindcx_bot/tui/`)
 The "Observer." Terminal-based UI (TTY cursor + **`RenderLoop`**, ~4 Hz).
-- **Panels**: **`HeaderPanel`** (snapshot: mode, WS, PnL, paper balances), **`TriColumnPanel`** (tickers / positions / working orders), **`LtpPanel`** market watch ( **`TickStore`** for CHG% + age), **`EventLogPanel`** (journal events), **`KeybarPanel`** (keys + footer).
-- **TickStore** + **`LtpRestPoller`**: Fast REST refresh of LTP / CHG% for the market-watch table; **`TickStore`** can retain the last **`change_pct`** when a source omits it. Strategy and risk still read **`Engine#snapshot`** / **`PositionTracker`**.
+- **Layout**: **`DeskViewModel`** maps **`Engine#snapshot`** + **`TickStore`** into row data; panels stay render-only. **`HeaderPanel`** (mode, engine, kill, WS/LAT, feed, balances, DD/risk tier, POS/ORD/LAST event), **`DeskExecutionOrderPanel`** (execution matrix + order flow), **`DeskMarketDepthPanel`** (L1-style bid/ask/spread when the feed provides them), **`DeskRiskStrategyPanel`**, **`EventLogPanel`**, **`KeybarPanel`**.
+- **TickStore** + **`LtpRestPoller`**: Fast REST refresh of LTP / CHG% (and optional **bid/ask** when present on instrument or RT quotes); **`TickStore`** can retain the last **`change_pct`** and last top-of-book when a source omits those fields. **`RenderLoop`** skips stdout writes when a panel’s captured frame is unchanged. Strategy and risk still read **`Engine#snapshot`** / **`PositionTracker`**.
 - **Benefit**: Low-overhead monitoring without needing a web browser.
 
 ### F. Paper exchange (`lib/coindcx_bot/paper_exchange/`)

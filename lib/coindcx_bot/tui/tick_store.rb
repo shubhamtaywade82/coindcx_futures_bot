@@ -3,14 +3,14 @@
 module CoindcxBot
   module Tui
     class TickStore
-      Tick = Data.define(:symbol, :ltp, :change_pct, :updated_at)
+      Tick = Data.define(:symbol, :ltp, :change_pct, :updated_at, :bid, :ask)
 
       def initialize
         @mutex = Mutex.new
         @ticks = {}
       end
 
-      def update(symbol:, ltp:, change_pct: nil, updated_at: nil)
+      def update(symbol:, ltp:, change_pct: nil, updated_at: nil, bid: nil, ask: nil)
         sym = symbol.to_s
         at = updated_at || Time.now
         @mutex.synchronize do
@@ -21,12 +21,16 @@ module CoindcxBot
             else
               change_pct.to_f
             end
+          bid_v = bid.nil? ? prior&.bid : optional_float(bid)
+          ask_v = ask.nil? ? prior&.ask : optional_float(ask)
 
           @ticks[sym] = Tick.new(
             symbol: sym,
             ltp: ltp.to_f,
             change_pct: ch,
-            updated_at: at
+            updated_at: at,
+            bid: bid_v,
+            ask: ask_v
           )
         end
       end
@@ -40,6 +44,16 @@ module CoindcxBot
         return true if tick.nil?
 
         (Time.now - tick.updated_at) > threshold_seconds
+      end
+
+      private
+
+      def optional_float(v)
+        return nil if v.nil? || v.to_s.strip.empty?
+
+        v.to_f
+      rescue ArgumentError, TypeError
+        nil
       end
     end
   end

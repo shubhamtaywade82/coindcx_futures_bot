@@ -54,6 +54,14 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
     expect(s).to include('+1.23%')
   end
 
+  it 'keeps STATE column distinct without sprintf/ANSI width bleed' do
+    tick_store.update(symbol: 'B-SOL_USDT', ltp: 142.5, change_pct: 1.23)
+    panel.render
+    plain = output.string.gsub(/\e\[[0-9;]*m/, '')
+    expect(plain).to include('LIVE')
+    expect(plain).not_to include('LIVEE')
+  end
+
   it 'marks STALE when the engine reports a stale WebSocket feed' do
     tick_store.update(symbol: 'B-SOL_USDT', ltp: 100.0, change_pct: 0.0)
     allow(engine).to receive(:ws_feed_stale?).with('B-SOL_USDT').and_return(true)

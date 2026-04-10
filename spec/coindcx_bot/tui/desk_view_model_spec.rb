@@ -40,7 +40,12 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
   let(:tick_ticks) do
     {
       'B-SOL_USDT' => CoindcxBot::Tui::TickStore::Tick.new(
-        'B-SOL_USDT', 150.0, 1.2, Time.now
+        symbol: 'B-SOL_USDT',
+        ltp: 150.0,
+        change_pct: 1.2,
+        updated_at: Time.now,
+        bid: 149.9,
+        ask: 150.1
       )
     }
   end
@@ -84,6 +89,35 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       expect(row[:type_abbr]).to eq('LIM')
       expect(row[:status]).to eq('ACTIVE')
       expect(row[:latency]).to be_nil
+    end
+
+    it 'exposes working age in ms from placed_at when present' do
+      t0 = Time.utc(2025, 6, 1, 12, 0, 0)
+      allow(Time).to receive(:now).and_return(t0 + 1.5)
+      snap2 = CoindcxBot::Core::Engine::Snapshot.new(
+        **snapshot.to_h.merge(
+          working_orders: [
+            snapshot.working_orders.first.merge(placed_at: t0.utc.iso8601(3))
+          ]
+        )
+      )
+      vm2 = described_class.new(
+        snapshot: snap2,
+        tick_ticks: tick_ticks,
+        symbols: %w[B-SOL_USDT],
+        ws_stale_fn: ->(_) { false },
+        config: config
+      )
+      expect(vm2.order_flow_rows.first[:latency]).to eq(1500)
+    end
+  end
+
+  describe '#depth_rows' do
+    it 'computes spread when bid and ask exist on the tick store' do
+      rows = vm.depth_rows(now: Time.now)
+      expect(rows.first[:bid]).to eq('149.90')
+      expect(rows.first[:ask]).to eq('150.10')
+      expect(rows.first[:spread]).to eq('0.20')
     end
   end
 

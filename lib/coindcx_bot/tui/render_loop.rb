@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'stringio'
+
 module CoindcxBot
   module Tui
     class RenderLoop
@@ -12,6 +14,7 @@ module CoindcxBot
         @running   = false
         @thread    = nil
         @wake_queue = Queue.new
+        @last_frames = {}
       end
 
       def start
@@ -54,9 +57,28 @@ module CoindcxBot
       private
 
       def render_once
-        @panels.each(&:render)
+        @panels.each { |panel| render_panel_cached(panel) }
       rescue StandardError => e
         warn "[RenderLoop] #{e.class}: #{e.message}"
+      end
+
+      # Captures each panel’s ANSI frame off-terminal and skips stdout writes when nothing changed
+      # (reduces flicker and syscall volume at idle).
+      def render_panel_cached(panel)
+        return panel.render unless panel.instance_variable_defined?(:@output)
+
+        real_out = panel.instance_variable_get(:@output)
+        buf = StringIO.new
+        panel.instance_variable_set(:@output, buf)
+        panel.render
+        panel.instance_variable_set(:@output, real_out)
+        frame = buf.string
+        key = panel.object_id
+        return if @last_frames[key] == frame
+
+        @last_frames[key] = frame
+        real_out.print(frame)
+        real_out.flush
       end
 
       def wait_for_tick_or_interval

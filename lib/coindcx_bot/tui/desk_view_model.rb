@@ -36,7 +36,8 @@ module CoindcxBot
       end
 
       def order_flow_rows
-        Array(@snap.working_orders).map { |o| order_flow_row(o) }
+        now = Time.now
+        Array(@snap.working_orders).map { |o| order_flow_row(o, now) }
       end
 
       def depth_rows(now: Time.now)
@@ -79,7 +80,8 @@ module CoindcxBot
 
         pnl = @snap.daily_pnl
         loss = pnl.negative? ? -pnl : BigDecimal('0')
-        ((loss / max_loss) * 100).round(1)
+        # Float for stable "%" display (BigDecimal#to_s can use exponent form for some values).
+        ((loss / max_loss) * 100).round(1).to_f
       end
 
       def strategy_name
@@ -159,13 +161,25 @@ module CoindcxBot
         "#{fmt_num(u)} (#{pct})"
       end
 
-      def order_flow_row(o)
+      def order_flow_row(o, now)
         {
           type_abbr: abbrev_order_type(o[:order_type]),
           symbol: o[:pair].to_s,
           status: 'ACTIVE',
-          latency: nil
+          latency: order_working_age_ms(o, now)
         }
+      end
+
+      # Wall-clock age since the order row was created (resting / working latency), not exchange ACK.
+      def order_working_age_ms(o, now)
+        raw = o[:placed_at] || o['placed_at']
+        return nil if raw.nil? || raw.to_s.strip.empty?
+
+        t = Time.iso8601(raw.to_s)
+        ms = ((now - t) * 1000).round
+        ms.negative? ? 0 : ms
+      rescue ArgumentError, TypeError
+        nil
       end
 
       def abbrev_order_type(raw)
@@ -194,14 +208,30 @@ module CoindcxBot
 
         {
           symbol: sym,
-          bid: '—',
-          ask: '—',
-          spread: '—',
+          bid: fmt_depth_price(tick&.bid),
+          ask: fmt_depth_price(tick&.ask),
+          spread: fmt_spread(tick),
           chg_pct: chg_s,
           age: age_s,
           state: state,
           ltp: tick ? format('%.2f', tick.ltp.to_f) : '—'
         }
+      end
+
+      def fmt_depth_price(v)
+        return '—' if v.nil?
+
+        format('%.2f', v.to_f)
+      end
+
+      def fmt_spread(tick)
+        return '—' unless tick&.bid && tick&.ask
+
+        b = tick.bid.to_f
+        a = tick.ask.to_f
+        return '—' if a < b
+
+        format('%.2f', a - b)
       end
 
       def depth_state(ws_stale, age_sec)

@@ -7,8 +7,9 @@ require 'stringio'
 module CoindcxBot
   module Tui
     module Panels
-      # L1-style quote strip: bid/ask/spread require exchange depth (not wired) — shown as em dash; Δ%/AGE/STATE live.
+      # L1-style quote strip: bid/ask/spread from {TickStore} (REST RT + instrument enrich); em dash when API omits book.
       class DeskMarketDepthPanel
+        # Plain header only — data rows use ANSI-aware columns (sprintf breaks width with escapes).
         HEADER = '  %-14s %8s %8s %8s %8s %7s  %-8s'
 
         def initialize(engine:, tick_store:, symbols:, origin_row:, origin_col: 0, output: $stdout)
@@ -49,15 +50,18 @@ module CoindcxBot
         private
 
         def format_depth_row(d)
-          return dim(format(HEADER, '—', '—', '—', '—', '—', '—', '—')) if d.nil?
+          if d.nil?
+            return depth_row_line(
+              dim('—'), dim('—'), dim('—'), dim('—'), dim('—'), dim('—'), dim('—')
+            )
+          end
 
           sym = d[:symbol].to_s
           sym = "#{sym[0, 12]}…" if sym.length > 13
           chg = d[:chg_pct].to_s
           chg_col = chg.start_with?('-') ? red(chg) : chg == '—' ? dim(chg) : green(chg)
-          format(
-            HEADER,
-            sym,
+          depth_row_line(
+            dim(sym),
             dim(d[:bid].to_s),
             dim(d[:ask].to_s),
             dim(d[:spread].to_s),
@@ -65,6 +69,52 @@ module CoindcxBot
             dim(d[:age].to_s),
             colorize_state(d[:state].to_s)
           )
+        end
+
+        def depth_row_line(sym_c, bid_c, ask_c, spread_c, chg_c, age_c, state_c)
+          cells = [
+            fmt_cell(sym_c, 14, :left),
+            fmt_cell(bid_c, 8, :right),
+            fmt_cell(ask_c, 8, :right),
+            fmt_cell(spread_c, 8, :right),
+            fmt_cell(chg_c, 8, :right),
+            fmt_cell(age_c, 7, :right),
+            fmt_cell(state_c, 8, :left)
+          ]
+          "  #{cells[0]} #{cells[1]} #{cells[2]} #{cells[3]} #{cells[4]} #{cells[5]}  #{cells[6]}"
+        end
+
+        def fmt_cell(str, width, align)
+          v = visible_len(str)
+          pad = width - v
+          return slice_visible(str, width) if pad.negative?
+
+          spaces = ' ' * pad
+          align == :left ? "#{str}#{spaces}" : "#{spaces}#{str}"
+        end
+
+        def visible_len(s)
+          s.gsub(/\e\[[0-9;]*m/, '').length
+        end
+
+        def slice_visible(s, max_chars)
+          out = +''
+          n = 0
+          i = 0
+          while i < s.length && n < max_chars
+            if s[i] == "\e"
+              j = s.index('m', i)
+              if j
+                out << s[i..j]
+                i = j + 1
+                next
+              end
+            end
+            out << s[i]
+            n += 1
+            i += 1
+          end
+          out
         end
 
         def colorize_state(state)

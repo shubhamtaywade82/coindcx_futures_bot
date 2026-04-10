@@ -293,7 +293,9 @@ module CoindcxBot
           symbol: tick.pair,
           ltp: tick.price,
           change_pct: tick.change_pct,
-          updated_at: tick.received_at
+          updated_at: tick.received_at,
+          bid: tick.bid,
+          ask: tick.ask
         )
       end
 
@@ -322,7 +324,9 @@ module CoindcxBot
             symbol: pair,
             ltp: t.price,
             change_pct: t.change_pct,
-            updated_at: t.received_at
+            updated_at: t.received_at,
+            bid: t.bid,
+            ask: t.ask
           )
         end
       end

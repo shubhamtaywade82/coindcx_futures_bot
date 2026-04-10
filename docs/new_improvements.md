@@ -42,16 +42,18 @@ This file replaces an earlier draft (`new_improvments.md`) that mixed chat trans
 
 ### TUI
 
-- **`Tui::TickStore`**: Mutex-backed; WebSocket ticks forwarded from the engine (`forward_tick_to_store` / `mirror_tracker_into_tick_store`). Keys symbols with **`to_s`**; if **`change_pct`** is **`nil`** on update, **reuses** the previous value. **`stale?`** uses the same keying.
-- **`Tui::LtpRestPoller`**: Periodically batch-fetches **`MarketDataGateway#fetch_futures_rt_quotes`** (public RT **`ls`/`pc`**) and writes **`TickStore`**; falls back per pair to **`fetch_instrument_display_quote`**.
-- **`Tui::RenderLoop`**: Timer-driven redraw (~250ms); panels use `TTY::Cursor` and buffered `StringIO` output.
-- **`HeaderPanel`**: Mode, time, WS/LAT, engine/kill/feed/error, balance + daily PnL + paper REAL/UNREAL/FEES (from **`Engine#snapshot`**).
-- **`TriColumnPanel`**: Tracker LTP tickers | journal positions (entry, LTP, uPnL, SL/TR) | **`tui_working_orders`** (paper).
-- **`LtpPanel` (`MARKET WATCH`)**: SYMBOL / LTP / CHG% / AGE / **STATUS** (`LIVE` / `LAG` / `STALE`); display quotes from **`TickStore`** (REST poller + WS mirror) while trading logic uses the engine snapshot / tracker.
+- **`Tui::DeskViewModel`**: Pure projection from **`Engine#snapshot`** + **`TickStore#snapshot`** (execution rows, order flow with **working-age ms** from **`paper_orders.created_at`** via **`OrderBook#working_snapshot`**, depth rows, risk helpers).
+- **`Tui::TickStore`**: Mutex-backed; WebSocket ticks forwarded from the engine (`forward_tick_to_store` / `mirror_tracker_into_tick_store`). Keys symbols with **`to_s`**; if **`change_pct`** or **bid/ask** are **`nil`** on update, **reuses** the previous value where applicable. **`stale?`** uses the same keying.
+- **`Tui::LtpRestPoller`**: Periodically batch-fetches **`MarketDataGateway#fetch_futures_rt_quotes`** (public RT snapshot; **`Dto::Tick`** may carry **bid/ask** when the wire includes them) and writes **`TickStore`**; falls back per pair to **`fetch_instrument_display_quote`** (optional bid/ask on instrument payload).
+- **`Tui::RenderLoop`**: Timer-driven redraw (~250ms); **skips terminal writes** when a panel’s rendered frame string is unchanged (still calls **`render`** to build the frame).
+- **`HeaderPanel`**: Dense status strip (mode, engine, kill, WS/LAT, feed, BAL/NET, paper REAL/UNREAL, DD%, risk band, POS/ORD/ERR/LAST event).
+- **`DeskExecutionOrderPanel`**: Per-symbol execution matrix + **`tui_working_orders`** order flow (type abbr, ACTIVE, **LAT** = ms since order row creation when **`placed_at`** is present).
+- **`DeskMarketDepthPanel`**: SYMBOL / BID / ASK / SPREAD / Δ% / AGE / STATE from **`TickStore`** + **`ws_feed_stale?`** (spread populated only when bid and ask exist).
+- **`DeskRiskStrategyPanel`**: Daily loss cap vs current loss, utilization, paper slippage aggregate, strategy name (config); placeholder strategy state/signal until the engine exposes them.
 - **`EventLogPanel`**: Last rows from journal **`recent_events`** (via snapshot).
-- **`KeybarPanel`**: Control hints and footer (poll interval, render wake).
+- **`KeybarPanel`**: Command-bus hints and footer (poll interval, render wake).
 - **`Tui::App`**: `COINDCX_TUI_POLL_ONLY=1` disables interactive keys.
-- **No** separate legacy `OrdersPanel` / `PnlPanel`; orders surface in **TriColumnPanel** when the broker exposes **`tui_working_orders`**.
+- **`Execution::OrderBook::WorkingOrder`**: Includes **`placed_at`** (from store **`created_at`** or **`Time.now`** on synthetic **`add`**) for TUI age display.
 
 ### Other
 

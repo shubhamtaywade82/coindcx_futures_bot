@@ -26,22 +26,22 @@ module CoindcxBot
           ord_lines = pad_orders(vm.order_flow_rows, h)
 
           w = term_width
-          inner_w = column_width(w)
+          left_w, right_w = column_widths(w)
 
           buf = StringIO.new
           buf << @cursor.save
           r = @row
-          buf << move(r) << clear_line(top_rule(inner_w))
+          buf << move(r) << clear_line(top_rule(left_w, right_w))
           r += 1
-          buf << move(r) << clear_line(title_row(inner_w))
+          buf << move(r) << clear_line(title_row(left_w, right_w))
           r += 1
-          buf << move(r) << clear_line(mid_rule(inner_w))
+          buf << move(r) << clear_line(mid_rule(left_w, right_w))
           r += 1
           h.times do |i|
-            buf << move(r + i) << clear_line(data_row(exec_lines[i], ord_lines[i], inner_w))
+            buf << move(r + i) << clear_line(data_row(exec_lines[i], ord_lines[i], left_w, right_w))
           end
           r += h
-          buf << move(r) << clear_line(bot_rule(inner_w))
+          buf << move(r) << clear_line(bot_rule(left_w, right_w))
           buf << @cursor.restore
 
           @output.print buf.string
@@ -108,27 +108,31 @@ module CoindcxBot
           w
         end
 
-        def column_width(total_w)
-          inner = total_w - 4
-          w = (inner / 2) - 1
-          [w, 22].max
+        # Full row: │ left │ right │  => left + right + 3 == total_w (handles odd widths).
+        def column_widths(total_w)
+          content = [total_w - 3, 4].max
+          left = content / 2
+          right = content - left
+          [left, right]
         end
 
         def move(row)
           @cursor.move_to(@col, row)
         end
 
-        def data_row(exec_row, ord_row, inner_w)
-          left = truncate_pad(format_exec_cell(exec_row), inner_w)
-          right = truncate_pad(format_ord_cell(ord_row), inner_w)
+        def data_row(exec_row, ord_row, left_w, right_w)
+          left = pad_or_truncate_visible(format_exec_cell(exec_row), left_w)
+          right = pad_or_truncate_visible(format_ord_cell(ord_row), right_w)
           "│#{left}│#{right}│"
         end
 
-        # Pad/truncate using visible width (ANSI-aware)
-        def truncate_pad(str, w)
-          return str.ljust(w) if visible_len(str) <= w
+        # Pad/truncate using visible width (ANSI-aware). Ruby String#ljust counts escapes as columns.
+        def pad_or_truncate_visible(str, w)
+          v = visible_len(str)
+          return "#{str}#{' ' * (w - v)}" if v < w
+          return str if v == w
 
-          "#{slice_visible(str, w - 1)}…".ljust(w + (str.length - visible_len(str)))
+          "#{slice_visible(str, w - 1)}…"
         end
 
         def visible_len(s)
@@ -159,22 +163,27 @@ module CoindcxBot
           s.length <= max ? s : "#{s[0, max - 1]}…"
         end
 
-        def top_rule(inner_w)
-          "┌#{'─' * inner_w}┬#{'─' * inner_w}┐"
+        def top_rule(left_w, right_w)
+          "┌#{'─' * left_w}┬#{'─' * right_w}┐"
         end
 
-        def mid_rule(inner_w)
-          "├#{'─' * inner_w}┼#{'─' * inner_w}┤"
+        def mid_rule(left_w, right_w)
+          "├#{'─' * left_w}┼#{'─' * right_w}┤"
         end
 
-        def bot_rule(inner_w)
-          "└#{'─' * inner_w}┴#{'─' * inner_w}┘"
+        def bot_rule(left_w, right_w)
+          "└#{'─' * left_w}┴#{'─' * right_w}┘"
         end
 
-        def title_row(inner_w)
-          l = bold('EXECUTION MATRIX'.ljust(inner_w))
-          r = bold('ORDER FLOW'.ljust(inner_w))
+        def title_row(left_w, right_w)
+          l = bold(pad_plain_title('EXECUTION MATRIX', left_w))
+          r = bold(pad_plain_title('ORDER FLOW', right_w))
           "│#{l}│#{r}│"
+        end
+
+        def pad_plain_title(text, w)
+          t = text.length > w ? "#{text[0, [w - 1, 0].max]}…" : text
+          t.ljust(w)
         end
 
         def clear_line(content)
