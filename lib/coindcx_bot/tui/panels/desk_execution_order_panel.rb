@@ -37,6 +37,8 @@ module CoindcxBot
           r += 1
           buf << move(r) << clear_line(mid_rule(left_w, right_w))
           r += 1
+          buf << move(r) << clear_line(header_row(left_w, right_w))
+          r += 1
           h.times do |i|
             buf << move(r + i) << clear_line(data_row(exec_lines[i], ord_lines[i], left_w, right_w))
           end
@@ -50,7 +52,7 @@ module CoindcxBot
 
         def row_count
           vm = DeskViewModel.build(engine: @engine, tick_store: @tick_store, symbols: @symbols)
-          4 + vm.inner_height
+          5 + vm.inner_height
         end
 
         private
@@ -118,6 +120,33 @@ module CoindcxBot
 
         def move(row)
           @cursor.move_to(@col, row)
+        end
+
+        def header_row(left_w, right_w)
+          left = pad_or_truncate_visible(format_exec_header_line, left_w)
+          right = pad_or_truncate_visible(format_ord_header_line, right_w)
+          "│#{left}│#{right}│"
+        end
+
+        # Column spacing matches {#format_exec_cell} / {#format_ord_cell} (ANSI-safe pad/truncate on the row).
+        def format_exec_header_line
+          [
+            dim('SYMBOL'.ljust(11)),
+            dim('SIDE'.ljust(5)),
+            dim('QTY'.ljust(7)),
+            dim('ENTRY'.ljust(7)),
+            dim('LTP'.ljust(7)),
+            dim('PNL')
+          ].join(dim(' '))
+        end
+
+        def format_ord_header_line
+          [
+            dim('TYPE'.ljust(4)),
+            dim('PAIR'.ljust(12)),
+            dim('STATUS'.ljust(7)),
+            dim('LAT')
+          ].join(dim(' '))
         end
 
         def data_row(exec_row, ord_row, left_w, right_w)
