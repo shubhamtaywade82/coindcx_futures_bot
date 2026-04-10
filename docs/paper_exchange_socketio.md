@@ -1,5 +1,7 @@
 # Paper exchange — Socket.IO private channel (Phase 5 spike)
 
+**Companion doc:** HTTP simulator setup, config, and routes — [`paper_exchange.md`](paper_exchange.md).
+
 CoinDCX’s private streams use **Socket.IO over Engine.IO v3** (`EIO=3`), matching `coindcx-client` defaults. A Ruby-native Socket.IO server with full protocol parity is uncommon; practical options:
 
 1. **Small Node sidecar** (recommended for fidelity): an EIO3-compatible server subscribes to an internal queue (Redis, HTTP long-poll, or UNIX socket) fed by this simulator’s `pe_internal_events` / future pub-sub, and emits CoinDCX-shaped payloads.
