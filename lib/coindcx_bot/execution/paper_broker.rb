@@ -156,6 +156,10 @@ module CoindcxBot
         true
       end
 
+      def tui_working_orders
+        @order_book.working_snapshot
+      end
+
       def metrics
         {
           total_fees: @store.total_fees,

@@ -13,6 +13,10 @@ gem 'bigdecimal'
 gem 'dotenv', '~> 3.1'
 gem 'sqlite3', '~> 2.1'
 
+gem 'rack', '~> 3.1'
+gem 'rackup', '~> 2.0' # Rack 3: WEBrick server lives here, not in `rack`
+gem 'webrick', '~> 1.9'
+
 gem 'pastel'
 gem 'tty-box'
 gem 'tty-logger'

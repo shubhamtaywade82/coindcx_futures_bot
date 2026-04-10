@@ -1,10 +1,12 @@
 # Paper broker simulation — roadmap and phases
 
+**HTTP paper exchange (optional):** A separate **CoinDCX-shaped REST** simulator (`bin/paper-exchange`, `CoindcxBot::PaperExchange::*`) integrates via **`Execution::GatewayPaperBroker`** when `paper_exchange.enabled` is set. That path uses HTTP order/account APIs and **signed `POST …/simulation/tick`** for fill simulation. Operator guide: [`paper_exchange.md`](paper_exchange.md). The phases below focus mainly on the **in-process** [`PaperBroker`](../lib/coindcx_bot/execution/paper_broker.rb) + [`PaperStore`](../lib/coindcx_bot/persistence/paper_store.rb) stack.
+
 This document is the **source of truth** for turning the current **immediate-fill** paper broker into a **working-order, tick-driven** simulator. Implement **one phase at a time**; update the **status** lines below as you complete each phase.
 
 **Next step:** Phase C — `Coordinator` journal sync on paper tick fills (`handle_paper_fill`) and optional `paper.fill_timing` config.
 
-**Related code today:** [`PaperBroker`](../lib/coindcx_bot/execution/paper_broker.rb), [`FillEngine`](../lib/coindcx_bot/execution/fill_engine.rb), [`PaperStore`](../lib/coindcx_bot/persistence/paper_store.rb), [`Coordinator`](../lib/coindcx_bot/execution/coordinator.rb), [`Engine`](../lib/coindcx_bot/core/engine.rb).
+**Related code today:** [`PaperBroker`](../lib/coindcx_bot/execution/paper_broker.rb), [`GatewayPaperBroker`](../lib/coindcx_bot/execution/gateway_paper_broker.rb), [`FillEngine`](../lib/coindcx_bot/execution/fill_engine.rb), [`PaperStore`](../lib/coindcx_bot/persistence/paper_store.rb), [`Coordinator`](../lib/coindcx_bot/execution/coordinator.rb), [`Engine`](../lib/coindcx_bot/core/engine.rb).
 
 ---
 
@@ -111,4 +113,5 @@ This document is the **source of truth** for turning the current **immediate-fil
 
 ## References
 
-- [`docs/new_improvements.md`](new_improvements.md) — historical gaps and what was fixed for flatten/PnL alignment.
+- [`docs/paper_exchange.md`](paper_exchange.md) — HTTP CoinDCX-shaped simulator and `GatewayPaperBroker`.
+- [`docs/new_improvements.md`](new_improvements.md) — inventory of what the codebase implements today.

@@ -1,14 +1,19 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require 'json'
 require 'logger'
+
+require_relative '../display_ltp'
 
 module CoindcxBot
   module Core
     class Engine
       Snapshot = Struct.new(
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
-        :running, :dry_run, :stale_tick_seconds, :paper_metrics, keyword_init: true
+        :running, :dry_run, :stale_tick_seconds, :paper_metrics,
+        :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
+        keyword_init: true
       )
 
       def initialize(config:, logger: nil, tick_store: nil, on_tick: nil)
@@ -108,7 +113,11 @@ module CoindcxBot
           running: !@stop,
           dry_run: @config.dry_run?,
           stale_tick_seconds: @stale_seconds,
-          paper_metrics: pm
+          paper_metrics: pm,
+          capital_inr: snapshot_capital_inr,
+          recent_events: snapshot_recent_events,
+          working_orders: @broker.tui_working_orders,
+          ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago
         )
       end
 
@@ -158,6 +167,40 @@ module CoindcxBot
 
       private
 
+      def snapshot_capital_inr
+        v = @config.raw[:capital_inr] || @config.raw['capital_inr']
+        return nil if v.nil? || v.to_s.strip.empty?
+
+        BigDecimal(v.to_s)
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def snapshot_recent_events(limit = 12)
+        rows = @journal.recent_events(limit).to_a
+        rows.reverse.map { |r| normalize_event_row(r) }
+      end
+
+      def normalize_event_row(r)
+        ts = r['ts'] || r[:ts]
+        type = (r['type'] || r[:type]).to_s
+        raw = r['payload'] || r[:payload] || '{}'
+        payload =
+          begin
+            JSON.parse(raw.to_s, symbolize_names: true)
+          rescue JSON::ParserError
+            {}
+          end
+        { ts: ts.to_i, type: type, payload: payload }
+      end
+
+      def snapshot_ws_last_tick_ms_ago
+        times = @config.pairs.filter_map { |p| @ws_tick_at[p] }
+        return nil if times.empty?
+
+        ((Time.now - times.max) * 1000).round
+      end
+
       def strategy_signal_trace_enabled?(config)
         return true if ENV['COINDCX_STRATEGY_SIGNALS'].to_s == '1'
 
@@ -189,7 +232,21 @@ module CoindcxBot
       end
 
       def build_broker(config)
-        if config.dry_run?
+        if config.dry_run? && config.paper_exchange_enabled?
+          base = config.paper_exchange_api_base
+          raise CoindcxBot::Config::ConfigurationError, 'paper_exchange.api_base_url is required when paper_exchange.enabled' if base.empty?
+
+          Execution::GatewayPaperBroker.new(
+            order_gateway: @orders,
+            account_gateway: @account,
+            journal: @journal,
+            config: config,
+            exposure_guard: @exposure,
+            logger: @logger,
+            tick_base_url: base,
+            tick_path: config.paper_exchange_tick_path
+          )
+        elsif config.dry_run?
           paper_cfg = config.raw.fetch(:paper, {})
           slippage = paper_cfg.fetch(:slippage_bps, 5)
           fee = paper_cfg.fetch(:fee_bps, 4)
@@ -215,8 +272,14 @@ module CoindcxBot
       end
 
       def paper_snapshot_metrics(ticks)
-        ltp_map = ticks.transform_values { |t| t[:price] }
+        store_snap = @tick_store ? @tick_store.snapshot : {}
+        ltp_map = DisplayLtp.merge_prices_by_pair(
+          @config.pairs,
+          tick_store_snapshot: store_snap,
+          tracker_tick_hash: ticks
+        )
         base = @broker.metrics
+        base[:total_realized_pnl] = @journal.sum_paper_realized_pnl_usdt if base[:total_realized_pnl].nil?
         base[:unrealized_pnl] = @broker.unrealized_pnl(ltp_map)
         base
       end
@@ -238,7 +301,9 @@ module CoindcxBot
           symbol: tick.pair,
           ltp: tick.price,
           change_pct: tick.change_pct,
-          updated_at: tick.received_at
+          updated_at: tick.received_at,
+          bid: tick.bid,
+          ask: tick.ask
         )
       end
 
@@ -256,20 +321,34 @@ module CoindcxBot
           t = @tracker.last_tick(pair)
           next unless t
 
+          # TUI `LtpRestPoller` refreshes `TickStore` on a short interval using public REST quotes.
+          # Without this guard, each engine `tick_cycle` would overwrite `updated_at` with the
+          # tracker's `received_at` (last WS or candle mirror), making AGE look ~30–60s stale and
+          # hiding REST-driven LTP movement even while the footer shows a fast REST poll interval.
+          existing = @tick_store.snapshot[pair]
+          next if existing && existing.updated_at > t.received_at
+
           @tick_store.update(
             symbol: pair,
             ltp: t.price,
             change_pct: t.change_pct,
-            updated_at: t.received_at
+            updated_at: t.received_at,
+            bid: t.bid,
+            ask: t.ask
           )
         end
       end
 
       def configure_coin_dcx
         CoinDCX.configure do |c|
-          c.api_key = ENV.fetch('COINDCX_API_KEY')
-          c.api_secret = ENV.fetch('COINDCX_API_SECRET')
+          c.api_key = ENV.fetch('COINDCX_API_KEY').to_s.strip
+          c.api_secret = ENV.fetch('COINDCX_API_SECRET').to_s.strip
           c.logger = @logger
+
+          if @config.paper_exchange_enabled?
+            base = @config.paper_exchange_api_base
+            c.api_base_url = base unless base.empty?
+          end
 
           url = ENV['COINDCX_SOCKET_BASE_URL'].to_s.strip
           c.socket_base_url = url unless url.empty?

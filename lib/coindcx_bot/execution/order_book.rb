@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require 'time'
 
 module CoindcxBot
   module Execution
@@ -17,7 +18,8 @@ module CoindcxBot
         :limit_price,
         :stop_price,
         :group_id,
-        :group_role
+        :group_role,
+        :placed_at
       )
 
       def initialize
@@ -41,7 +43,8 @@ module CoindcxBot
       end
 
       def add(id, pair:, side:, order_type:, quantity:, anchor_price: nil, limit_price: nil, stop_price: nil,
-              group_id: nil, group_role: nil)
+              group_id: nil, group_role: nil, placed_at: nil)
+        at = placed_at || Time.now
         wo = WorkingOrder.new(
           id: id,
           pair: pair.to_s,
@@ -52,7 +55,8 @@ module CoindcxBot
           limit_price: optional_bd(limit_price),
           stop_price: optional_bd(stop_price),
           group_id: group_id,
-          group_role: group_role&.to_s
+          group_role: group_role&.to_s,
+          placed_at: at
         )
         @mutex.synchronize { @orders[id] = wo }
         wo
@@ -86,7 +90,8 @@ module CoindcxBot
             limit_price: existing.limit_price,
             stop_price: optional_bd(new_stop),
             group_id: existing.group_id,
-            group_role: existing.group_role
+            group_role: existing.group_role,
+            placed_at: existing.placed_at
           )
         end
       end
@@ -97,6 +102,24 @@ module CoindcxBot
 
       def size
         @mutex.synchronize { @orders.size }
+      end
+
+      # TUI / snapshot: serializable rows for working orders only.
+      def working_snapshot
+        @mutex.synchronize do
+          @orders.values.map do |wo|
+            {
+              id: wo.id,
+              pair: wo.pair,
+              side: wo.side,
+              order_type: wo.order_type,
+              quantity: wo.quantity.to_s('F'),
+              limit_price: wo.limit_price&.to_s('F'),
+              stop_price: wo.stop_price&.to_s('F'),
+              placed_at: wo.placed_at&.utc&.iso8601(3)
+            }
+          end
+        end
       end
 
       private
@@ -112,8 +135,20 @@ module CoindcxBot
           limit_price: optional_bd(row[:limit_price]),
           stop_price: optional_bd(row[:stop_price]),
           group_id: row[:group_id],
-          group_role: row[:group_role]&.to_s
+          group_role: row[:group_role]&.to_s,
+          placed_at: parse_placed_at(row)
         )
+      end
+
+      def parse_placed_at(row)
+        raw = row[:created_at] || row['created_at']
+        return nil if raw.nil? || raw.to_s.strip.empty?
+
+        Time.iso8601(raw.to_s)
+      rescue ArgumentError
+        Time.parse(raw.to_s)
+      rescue ArgumentError, TypeError
+        nil
       end
 
       def bd(v)

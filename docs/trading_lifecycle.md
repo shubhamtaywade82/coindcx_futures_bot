@@ -1,11 +1,17 @@
 # Trading Lifecycle
 
-The bot operates in a continuous, reactive loop. It does not "poll" the exchange; it waits for events.
+The bot runs a **reactive** market-data path (WebSocket ticks on the bus) and a **scheduled** `tick_cycle` (candles, stale recovery, paper **`process_tick`**). The TUI may **poll** public REST quotes for display LTP/CHG% (`LtpRestPoller`).
+
+## 0. Execution mode (config)
+
+- **Live:** `LiveBroker` — production REST for orders and exits.
+- **Paper (default):** `PaperBroker` — `PaperStore` SQLite; no production order API.
+- **Paper exchange:** `GatewayPaperBroker` when **`paper_exchange.enabled`** — REST targets **`bin/paper-exchange`**; see [`paper_exchange.md`](paper_exchange.md).
 
 ## 1. The Startup Sequence
-1. **Load Config**: `tty-config` reads `settings.yml` (e.g., ₹50k capital, `SOLUSDT.P`).
-2. **Inject Dependencies**: The `Engine` is booted with gateways and strategy modules.
-3. **Connect**: `MarketDataGateway` opens a WebSocket to CoinDCX.
+1. **Load Config**: `config/bot.yml` (pairs, risk, `runtime`, optional `paper` / `paper_exchange`).
+2. **Inject Dependencies**: The `Engine` is booted with gateways, broker, coordinator, and strategy.
+3. **Connect**: WebSocket to CoinDCX for public ticks (and private order updates when configured).
 4. **Synchronize**: TUI renders the initial dashboard frame.
 
 ## 2. The Live Event Loop

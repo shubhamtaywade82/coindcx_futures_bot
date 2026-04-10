@@ -69,6 +69,17 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
       expect(tick.change_pct).to eq(BigDecimal('2.5'))
     end
 
+    it 'extracts bid and ask when present on the payload' do
+      tick = gateway.send(
+        :normalize_tick,
+        'B-SOL_USDT',
+        { 'p' => '100', 'bid' => '99.5', 'ask' => '100.5' }
+      )
+
+      expect(tick.bid).to eq(BigDecimal('99.5'))
+      expect(tick.ask).to eq(BigDecimal('100.5'))
+    end
+
     it 'reads trade-style price keys' do
       tick = gateway.send(:normalize_tick, 'B-ETH_USDT', { 'price' => '2254.1' })
       expect(tick.price).to eq(BigDecimal('2254.1'))
@@ -89,6 +100,18 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
       ticks = gateway.send(:ticks_from_current_prices_payload, payload, %w[B-SOL_USDT B-ETH_USDT])
       expect(ticks.map(&:pair)).to contain_exactly('B-SOL_USDT', 'B-ETH_USDT')
       expect(ticks.find { |t| t.pair == 'B-SOL_USDT' }.price).to eq(BigDecimal('83.4'))
+    end
+
+    it 'reads bid and ask from current prices rows when present' do
+      payload = {
+        'prices' => {
+          'B-SOL_USDT' => { 'ls' => '100', 'pc' => '0.1', 'bid' => '99.9', 'ask' => '100.1' }
+        }
+      }
+      ticks = gateway.send(:ticks_from_current_prices_payload, payload, ['B-SOL_USDT'])
+      t = ticks.first
+      expect(t.bid).to eq(BigDecimal('99.9'))
+      expect(t.ask).to eq(BigDecimal('100.1'))
     end
 
     it 'reads nested ltp/pc per instrument' do

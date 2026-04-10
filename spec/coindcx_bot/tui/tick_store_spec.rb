@@ -39,10 +39,19 @@ RSpec.describe CoindcxBot::Tui::TickStore do
       expect { snap['NEW'] = 'x' }.to raise_error(FrozenError)
     end
 
-    it 'handles nil change_pct gracefully' do
+    it 'handles nil change_pct gracefully when there is no prior tick' do
       store.update(symbol: 'SOLUSDT', ltp: '100.0')
 
       expect(store.snapshot['SOLUSDT'].change_pct).to be_nil
+    end
+
+    it 'reuses prior change_pct when a later update omits it' do
+      store.update(symbol: 'SOLUSDT', ltp: '100.0', change_pct: '2.5')
+      store.update(symbol: 'SOLUSDT', ltp: '101.0')
+
+      tick = store.snapshot['SOLUSDT']
+      expect(tick.ltp).to eq(101.0)
+      expect(tick.change_pct).to eq(2.5)
     end
 
     it 'uses provided updated_at for age display' do
@@ -50,6 +59,15 @@ RSpec.describe CoindcxBot::Tui::TickStore do
       store.update(symbol: 'SOLUSDT', ltp: '100.0', updated_at: past)
 
       expect(store.snapshot['SOLUSDT'].updated_at).to eq(past)
+    end
+
+    it 'stores bid and ask and retains them when a later update omits them' do
+      store.update(symbol: 'SOLUSDT', ltp: '100.0', bid: '99.90', ask: '100.10')
+      store.update(symbol: 'SOLUSDT', ltp: '100.05')
+
+      tick = store.snapshot['SOLUSDT']
+      expect(tick.bid).to eq(99.90)
+      expect(tick.ask).to eq(100.10)
     end
   end
 

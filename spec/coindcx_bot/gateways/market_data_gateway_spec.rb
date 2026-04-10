@@ -41,4 +41,25 @@ RSpec.describe CoindcxBot::Gateways::MarketDataGateway do
       expect(res.code).to eq(:validation)
     end
   end
+
+  describe '#fetch_futures_rt_quotes' do
+    before { allow(client).to receive(:ws).and_return(Object.new) }
+
+    it 'returns ls and pc from the public current_prices futures/rt shape' do
+      payload = {
+        'ts' => 1,
+        'prices' => {
+          'B-SOL_USDT' => { 'ls' => '83.28', 'pc' => '0.08' },
+          'B-ETH_USDT' => { 'ls' => '2195.27', 'pc' => '-0.1' }
+        }
+      }
+      allow(futures_md).to receive(:current_prices).and_return(payload)
+
+      res = gateway.fetch_futures_rt_quotes(pairs: %w[B-SOL_USDT B-ETH_USDT])
+      expect(res.ok?).to be true
+      expect(res.value['B-SOL_USDT'][:price]).to eq(BigDecimal('83.28'))
+      expect(res.value['B-SOL_USDT'][:change_pct]).to eq(BigDecimal('0.08'))
+      expect(res.value['B-ETH_USDT'][:change_pct]).to eq(BigDecimal('-0.1'))
+    end
+  end
 end

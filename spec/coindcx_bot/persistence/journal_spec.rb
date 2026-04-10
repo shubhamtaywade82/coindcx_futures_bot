@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
+
 RSpec.describe CoindcxBot::Persistence::Journal do
   let(:path) { Tempfile.new(['j', '.sqlite3']).path }
 
@@ -53,6 +55,13 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(journal.open_positions.size).to eq(1)
     journal.close_position(id)
     expect(journal.open_positions).to be_empty
+  end
+
+  it 'sums pnl_usdt from paper_realized events' do
+    journal = described_class.new(path)
+    journal.log_event('paper_realized', pnl_usdt: '2.5', pair: 'B-SOL_USDT')
+    journal.log_event('paper_realized', pnl_usdt: '1.0', pair: 'B-ETH_USDT')
+    expect(journal.sum_paper_realized_pnl_usdt).to eq(BigDecimal('3.5'))
   end
 
   it 'updates entry_price for an open position' do

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require 'securerandom'
 
 module CoindcxBot
   module Execution
@@ -92,7 +93,9 @@ module CoindcxBot
           pair: signal.pair,
           side: api_side(signal),
           total_quantity: quantity.to_s('F'),
-          leverage: leverage
+          leverage: leverage,
+          order_type: 'market_order',
+          client_order_id: "coindcx-bot-#{SecureRandom.uuid}"
         }
 
         result = @broker.place_order(body)
@@ -156,12 +159,21 @@ module CoindcxBot
       end
 
       def close_via_live_broker(signal, close_id, exit_price)
-        @broker.close_position(
+        result = @broker.close_position(
           pair: signal.pair.to_s,
           side: nil,
           quantity: 0,
           ltp: exit_price || 0
         )
+        row = @journal.open_positions.find { |r| r[:id] == close_id }
+        if paper_broker_close_result?(result) && result[:ok] && result[:realized_pnl_usdt]
+          book_inr_from_paper_close(
+            result,
+            row: row,
+            pair: signal.pair.to_s,
+            source: :strategy_close
+          )
+        end
         @journal.close_position(close_id)
         :ok
       end

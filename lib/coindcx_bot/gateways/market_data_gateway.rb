@@ -2,6 +2,7 @@
 
 require 'bigdecimal'
 require 'time'
+require_relative 'ws_gateway'
 
 module CoindcxBot
   module Gateways
@@ -45,6 +46,25 @@ module CoindcxBot
         return Result.fail(:validation, 'instrument payload missing price') unless quote
 
         Result.ok(quote)
+      end
+
+      # Single public snapshot: `ls` + `pc` per pair (same shape as currentPrices@futures/rt on the socket).
+      # Prefer this for the TUI poller — `/derivatives/futures/data/instrument` often has no % change field.
+      def fetch_futures_rt_quotes(pairs:)
+        list = Array(pairs).map(&:to_s)
+        guard_call do
+          raw = @client.futures.market_data.current_prices
+          helper = WsGateway.new(client: @client, logger: nil)
+          ticks = helper.send(:ticks_from_current_prices_payload, raw, list)
+          ticks.each_with_object({}) do |tick, acc|
+            acc[tick.pair.to_s] = {
+              price: tick.price,
+              change_pct: tick.change_pct,
+              bid: tick.bid,
+              ask: tick.ask
+            }
+          end
+        end
       end
 
       private
@@ -133,7 +153,12 @@ module CoindcxBot
             BigDecimal(chg_raw.to_s)
           end
 
-        { price: BigDecimal(price_raw.to_s), change_pct: chg }
+        bid_raw = extract_instrument_scalar(h, %i[bid best_bid bid_price buy bp bb])
+        ask_raw = extract_instrument_scalar(h, %i[ask best_ask ask_price sell ap ba])
+        bid = safe_decimal(bid_raw)
+        ask = safe_decimal(ask_raw)
+
+        { price: BigDecimal(price_raw.to_s), change_pct: chg, bid: bid, ask: ask }
       rescue ArgumentError, TypeError
         nil
       end
@@ -162,6 +187,19 @@ module CoindcxBot
       def extract_instrument_change_pct(h)
         keys = %i[change_24h change_pct pc percent_change_24h price_change_percent_24h]
         keys.each { |k| return h[k] if h.key?(k) && !h[k].nil? && h[k].to_s.strip != '' }
+        nil
+      end
+
+      def extract_instrument_scalar(h, keys)
+        keys.each { |k| return h[k] if h.key?(k) && !h[k].nil? && h[k].to_s.strip != '' }
+        nil
+      end
+
+      def safe_decimal(raw)
+        return nil if raw.nil? || raw.to_s.strip.empty?
+
+        BigDecimal(raw.to_s)
+      rescue ArgumentError, TypeError
         nil
       end
     end

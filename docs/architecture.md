@@ -4,15 +4,15 @@ This project is built using a **layered, event-driven architecture** centered on
 
 ## 1. Layers & Components
 
-### A. Adapters (`lib/coindcx_bot/adapters/`)
+### A. Adapters (`lib/coindcx_bot/adapters/` and `lib/coindcx_bot/gateways/`)
 The "I/O Layer." These classes wrap the `coindcx-client` gem.
-- **MarketDataGateway**: Manages WebSocket connections and yields raw market ticks.
-- **OrderGateway**: Translates internal `Signal` objects into CoinDCX API calls.
+- **MarketDataGateway**: REST + WebSocket market data; batch **`fetch_futures_rt_quotes`** for public RT snapshots (`ls` / `pc`) used by the TUI poller.
+- **OrderGateway** / **AccountGateway**: CoinDCX REST calls. When **`paper_exchange.enabled`** is true, **`CoinDCX.configure { api_base_url }`** targets the local **paper exchange** Rack app instead of production.
 - **Benefit**: If you change exchanges, you only rewrite the adapters; the logic stays the same.
 
 ### B. Core Engine (`lib/coindcx_bot/core/`)
 The "Orchestrator." It wires everything together.
-- **Engine**: Listens to the `MarketDataGateway`, evaluates ticks via the `Strategy`, validates via `Risk::Manager`, and executes via `OrderGateway`.
+- **Engine**: Subscribes to market ticks, runs the strategy loop, validates via **`Risk::Manager`**, and executes via a **`Execution::Broker`** (**`LiveBroker`**, **`PaperBroker`**, or **`GatewayPaperBroker`**). In paper modes it runs **`run_paper_process_tick`** so **`process_tick`** can advance simulators. **`mirror_tracker_into_tick_store`** feeds the TUI without clobbering fresher REST updates in **`TickStore`**.
 - **Benefit**: Centralized control without logic "pollution."
 
 ### C. Strategy (`lib/coindcx_bot/strategy/`)
@@ -26,9 +26,13 @@ The "Gatekeeper."
 - **Benefit**: Hard safety limits that can't be bypassed by strategy bugs.
 
 ### E. TUI (`lib/coindcx_bot/tui/`)
-The "Observer." Terminal-based UI.
-- **Dashboard**: Uses `tty-box` and `tty-table` to show live state.
+The "Observer." Terminal-based UI (TTY cursor + **`RenderLoop`**, ~4 Hz).
+- **Layout**: **`DeskViewModel`** maps **`Engine#snapshot`** + **`TickStore`** into row data; panels stay render-only. **`HeaderPanel`** (mode, engine, kill, WS/LAT, feed, balances, DD/risk tier, POS/ORD/LAST event), **`DeskExecutionOrderPanel`** (execution matrix + order flow), **`DeskMarketDepthPanel`** (L1-style bid/ask/spread when the feed provides them), **`DeskRiskStrategyPanel`**, **`EventLogPanel`**, **`KeybarPanel`**.
+- **TickStore** + **`LtpRestPoller`**: Fast REST refresh of LTP / CHG% (and optional **bid/ask** when present on instrument or RT quotes); **`TickStore`** can retain the last **`change_pct`** and last top-of-book when a source omits those fields. **`RenderLoop`** skips stdout writes when a panel’s captured frame is unchanged. Strategy and risk still read **`Engine#snapshot`** / **`PositionTracker`**.
 - **Benefit**: Low-overhead monitoring without needing a web browser.
+
+### F. Paper exchange (`lib/coindcx_bot/paper_exchange/`)
+Optional **Rack** app: SQLite ledger, HMAC auth, futures-shaped wallet/order/position routes, and a **signed simulation tick** endpoint. Run with **`bin/paper-exchange`**. See [`paper_exchange.md`](paper_exchange.md).
 
 ## 2. Rails-Ready Design
 - **No Global State**: All dependencies are injected into the `Engine`.
