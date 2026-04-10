@@ -2,9 +2,18 @@
 
 require 'bigdecimal'
 
-RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
+RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
   let(:output) { StringIO.new }
-  let(:broker_double) { double('broker', paper?: false) }
+  let(:broker_double) { double('broker', paper?: false, tui_working_orders: []) }
+  let(:config) do
+    instance_double(
+      CoindcxBot::Config,
+      risk: { max_daily_loss_inr: 1500 },
+      strategy: { name: 'trend_continuation' },
+      inr_per_usdt: BigDecimal('83'),
+      resolved_max_daily_loss_inr: BigDecimal('1500')
+    )
+  end
   let(:snapshot) do
     CoindcxBot::Core::Engine::Snapshot.new(
       pairs: %w[SOLUSDT],
@@ -18,56 +27,38 @@ RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
       running: true,
       dry_run: true,
       stale_tick_seconds: 45,
-      paper_metrics: {}
+      paper_metrics: {},
+      capital_inr: BigDecimal('50_000'),
+      recent_events: [{ ts: 1, type: 'tick', payload: {} }],
+      working_orders: [],
+      ws_last_tick_ms_ago: 42
     )
   end
-  let(:engine) { double('engine', snapshot: snapshot, broker: broker_double) }
+  let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
   let(:panel) do
     described_class.new(engine: engine, origin_row: 0, output: output)
   end
 
+  before do
+    allow(engine).to receive(:ws_feed_stale?).and_return(false)
+  end
+
   describe '#render' do
-    it 'renders mode, status, positions, and metrics lines' do
+    it 'renders mode, ws, engine, net pnl, balance, and desk counts' do
       panel.render
       rendered = output.string
 
       expect(rendered).to include('PAPER')
-      expect(rendered).to include('Engine')
-      expect(rendered).to include('Positions')
-      expect(rendered).to include('none open')
-      expect(rendered).to include('PnL today')
+      expect(rendered).to include('MODE:')
+      expect(rendered).to include('WS:')
+      expect(rendered).to include('ENGINE: RUN')
+      expect(rendered).to include('NET:')
       expect(rendered).to include('123.45')
-    end
-
-    context 'with open positions' do
-      let(:snapshot) do
-        CoindcxBot::Core::Engine::Snapshot.new(
-          pairs: %w[B-SOL_USDT],
-          ticks: {},
-          positions: [
-            { id: 4, pair: 'B-SOL_USDT', side: 'long', quantity: '0.02', entry_price: '142.5' }
-          ],
-          paused: false,
-          kill_switch: false,
-          stale: false,
-          last_error: nil,
-          daily_pnl: BigDecimal('0'),
-          running: true,
-          dry_run: true,
-          stale_tick_seconds: 45,
-          paper_metrics: {}
-        )
-      end
-
-      it 'renders id, pair, side, qty, entry' do
-        panel.render
-        rendered = output.string
-        expect(rendered).to include('#4')
-        expect(rendered).to include('B-SOL_USDT')
-        expect(rendered).to include('long')
-        expect(rendered).to include('0.02')
-        expect(rendered).to include('142.50')
-      end
+      expect(rendered).to include('BAL:')
+      expect(rendered).to include('50000')
+      expect(rendered).to include('POS:')
+      expect(rendered).to include('ORD:')
+      expect(rendered).to include('LAST:')
     end
 
     context 'when engine is paused with kill switch' do
@@ -84,7 +75,11 @@ RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
           running: true,
           dry_run: false,
           stale_tick_seconds: 45,
-          paper_metrics: {}
+          paper_metrics: {},
+          capital_inr: nil,
+          recent_events: [],
+          working_orders: [],
+          ws_last_tick_ms_ago: nil
         )
       end
 
@@ -96,7 +91,7 @@ RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
         expect(rendered).to include('PAUSED')
         expect(rendered).to include('KILL')
         expect(rendered).to include('STALE')
-        expect(rendered).to include('connection lost')
+        expect(rendered).to include('ERR:')
       end
     end
 
@@ -107,7 +102,7 @@ RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
     end
 
     context 'with paper metrics' do
-      let(:broker_double) { double('broker', paper?: true) }
+      let(:broker_double) { double('broker', paper?: true, tui_working_orders: []) }
       let(:snapshot) do
         CoindcxBot::Core::Engine::Snapshot.new(
           pairs: %w[B-SOL_USDT],
@@ -127,34 +122,31 @@ RSpec.describe CoindcxBot::Tui::Panels::StatusPanel do
             total_fees: BigDecimal('0.8'),
             total_slippage: BigDecimal('0.3'),
             fill_count: 4
-          }
+          },
+          capital_inr: BigDecimal('100_000'),
+          recent_events: [],
+          working_orders: [],
+          ws_last_tick_ms_ago: 10
         )
       end
 
-      it 'renders paper metrics line with realized PnL, fees, and fill count' do
+      it 'renders USDT realized/unrealized, BAL from capital plus realized at inr_per_usdt, DD and risk tier' do
         panel.render
         rendered = output.string
 
-        expect(rendered).to include('Realized')
+        expect(rendered).to include('REAL USDT:')
         expect(rendered).to include('15.50')
-        expect(rendered).to include('Fees')
-        expect(rendered).to include('Fills')
-        expect(rendered).to include('4.00')
+        expect(rendered).to include('UNREAL USDT:')
+        expect(rendered).to include('101286.50')
+        expect(rendered).to include('DD:')
+        expect(rendered).to include('RISK:')
       end
     end
   end
 
   describe '#row_count' do
-    it 'returns 4 when broker is not paper' do
+    it 'returns 4' do
       expect(panel.row_count).to eq(4)
-    end
-
-    context 'when broker is paper' do
-      let(:broker_double) { double('broker', paper?: true) }
-
-      it 'returns 5 to accommodate paper metrics line' do
-        expect(panel.row_count).to eq(5)
-      end
     end
   end
 end

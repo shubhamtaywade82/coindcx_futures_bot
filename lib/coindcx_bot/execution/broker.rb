@@ -35,6 +35,11 @@ module CoindcxBot
       def metrics
         {}
       end
+
+      # Paper working orders for TUI; live / gateway paper default to none.
+      def tui_working_orders
+        []
+      end
     end
   end
 end

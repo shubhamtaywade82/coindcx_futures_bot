@@ -3,12 +3,33 @@
 require 'openssl'
 require 'json'
 require 'stringio'
+require 'rack/request'
 
 module CoindcxBot
   module PaperExchange
     # Verifies CoinDCX HMAC (same contract as CoinDCX::Auth::Signer).
     module Auth
       module_function
+
+      # CoinDCX::REST::Futures::MarketData uses `auth: false` for these GETs — no X-AUTH headers on the wire.
+      PUBLIC_MARKET_GET_PATHS = %w[
+        /exchange/v1/derivatives/futures/data/instrument
+        /exchange/v1/derivatives/futures/data/active_instruments
+        /exchange/v1/derivatives/futures/data/trades
+        /api/v1/derivatives/futures/data/stats
+        /api/v1/derivatives/futures/data/conversions
+      ].freeze
+
+      def normalized_request_path(env)
+        Rack::Request.new(env).path.to_s.sub(%r{\A//+}, '/').chomp('/')
+      end
+
+      def public_market_get?(env)
+        return false unless env['REQUEST_METHOD'].to_s.upcase == 'GET'
+
+        req_path = normalized_request_path(env)
+        PUBLIC_MARKET_GET_PATHS.any? { |p| p.chomp('/') == req_path }
+      end
 
       def verify_signature!(raw_body, api_secret)
         require 'coindcx'
@@ -32,18 +53,18 @@ module CoindcxBot
           raw = env['rack.input'].read
           env['rack.input'] = StringIO.new(raw)
 
-          api_key = env['HTTP_X_AUTH_APIKEY'].to_s
-          sig_header = env['HTTP_X_AUTH_SIGNATURE'].to_s
-          return error_response(401, 'missing auth headers') if api_key.empty? || sig_header.empty?
+          api_key = env['HTTP_X_AUTH_APIKEY'].to_s.strip
+          sig_header = env['HTTP_X_AUTH_SIGNATURE'].to_s.strip
+          return error_response(env, 401, 'missing auth headers') if api_key.empty? || sig_header.empty?
 
           row = @store.db.get_first_row(
-            'SELECT user_id, api_secret FROM pe_api_keys WHERE api_key = ?',
+            'SELECT user_id, api_secret FROM pe_api_keys WHERE TRIM(api_key) = ?',
             [api_key]
           )
-          return error_response(401, 'unknown api key') unless row
+          return error_response(env, 401, 'unknown api key') unless row
 
           expected = Auth.verify_signature!(raw, row['api_secret'])
-          return error_response(401, 'invalid signature') unless secure_compare(expected, sig_header)
+          return error_response(env, 401, 'invalid signature') unless secure_compare(expected, sig_header)
 
           env['paper_exchange.user_id'] = row['user_id'].to_i
           env['paper_exchange.raw_body'] = raw
@@ -52,13 +73,15 @@ module CoindcxBot
 
           @app.call(env)
         rescue JSON::ParserError
-          error_response(400, 'invalid json')
+          error_response(env, 400, 'invalid json')
         end
 
         private
 
         def skip_auth?(env)
-          env['PATH_INFO'].to_s == '/health'
+          return true if env['REQUEST_METHOD'].to_s.upcase == 'GET' && Auth.normalized_request_path(env) == '/health'
+
+          Auth.public_market_get?(env)
         end
 
         def secure_compare(a, b)
@@ -69,7 +92,12 @@ module CoindcxBot
           false
         end
 
-        def error_response(status, message)
+        def error_response(env, status, message)
+          if ENV['PAPER_EXCHANGE_AUTH_DEBUG'].to_s == '1'
+            meth = env['REQUEST_METHOD'].to_s.upcase
+            path = Auth.normalized_request_path(env)
+            warn("[paper_exchange:auth] #{status} #{meth} #{path} — #{message}")
+          end
           [
             status,
             { 'Content-Type' => 'application/json' },

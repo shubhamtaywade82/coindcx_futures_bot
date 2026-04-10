@@ -135,6 +135,19 @@ module CoindcxBot
         @db.execute('SELECT ts, type, payload FROM event_log ORDER BY id DESC LIMIT ?', limit)
       end
 
+      # Sum of `pnl_usdt` from coordinator `paper_realized` events (USDT). Used when the broker
+      # has no in-process paper store (e.g. gateway paper) but the journal still books closes.
+      def sum_paper_realized_pnl_usdt
+        rows = @db.execute('SELECT payload FROM event_log WHERE type = ?', ['paper_realized'])
+        rows.sum(BigDecimal('0')) do |row|
+          raw = row['payload'] || row[:payload]
+          h = JSON.parse(raw.to_s, symbolize_names: true)
+          BigDecimal((h[:pnl_usdt] || h['pnl_usdt'] || '0').to_s)
+        rescue JSON::ParserError, ArgumentError, TypeError
+          BigDecimal('0')
+        end
+      end
+
       private
 
       def blank?(v)
@@ -169,6 +182,7 @@ module CoindcxBot
             type TEXT NOT NULL,
             payload TEXT NOT NULL
           );
+          CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(type);
         SQL
       end
     end

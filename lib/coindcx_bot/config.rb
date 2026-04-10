@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
 require 'yaml'
 
 module CoindcxBot
@@ -19,7 +20,9 @@ module CoindcxBot
     def initialize(hash)
       @raw = deep_symbolize(hash || {})
       validate_whitelist!
+      validate_risk_pct_sanity!
       validate_risk_band!
+      validate_risk_capital_pct!
     end
 
     def pairs
@@ -32,6 +35,61 @@ module CoindcxBot
 
     def inr_per_usdt
       BigDecimal(raw.fetch(:inr_per_usdt, 83).to_s)
+    end
+
+    # Reference equity in INR (position sizing when `risk.per_trade_capital_pct` is set; TUI header).
+    def capital_inr
+      v = raw[:capital_inr] || raw['capital_inr']
+      return nil if v.nil? || v.to_s.strip.empty?
+
+      BigDecimal(v.to_s)
+    rescue ArgumentError, TypeError
+      nil
+    end
+
+    # True when both INR clamps are set explicitly (legacy YAML). Otherwise clamps scale from `capital_inr`.
+    def legacy_per_trade_inr_band?
+      rk = risk
+      risk_value_present?(rk, :per_trade_inr_min) && risk_value_present?(rk, :per_trade_inr_max)
+    end
+
+    # Per-trade floor in INR: explicit `per_trade_inr_min`, else `capital_inr` × min_pct/100, else ₹250.
+    def resolved_per_trade_inr_min
+      rk = risk
+      if risk_value_present?(rk, :per_trade_inr_min)
+        BigDecimal(rk[:per_trade_inr_min].to_s)
+      elsif (cap = capital_inr)
+        p = BigDecimal(rk.fetch(:per_trade_inr_min_pct_of_capital, 0.25).to_s)
+        (cap * p / 100).round(2, BigDecimal::ROUND_DOWN)
+      else
+        BigDecimal('250')
+      end
+    end
+
+    # Per-trade ceiling in INR: explicit `per_trade_inr_max`, else `capital_inr` × max_pct/100, else ₹500.
+    def resolved_per_trade_inr_max
+      rk = risk
+      if risk_value_present?(rk, :per_trade_inr_max)
+        BigDecimal(rk[:per_trade_inr_max].to_s)
+      elsif (cap = capital_inr)
+        p = BigDecimal(rk.fetch(:per_trade_inr_max_pct_of_capital, 3.0).to_s)
+        (cap * p / 100).round(2, BigDecimal::ROUND_DOWN)
+      else
+        BigDecimal('500')
+      end
+    end
+
+    # Daily loss halt: explicit `max_daily_loss_inr`, else `capital_inr` × loss_pct/100, else ₹1500.
+    def resolved_max_daily_loss_inr
+      rk = risk
+      if risk_value_present?(rk, :max_daily_loss_inr)
+        BigDecimal(rk[:max_daily_loss_inr].to_s)
+      elsif (cap = capital_inr)
+        p = BigDecimal(rk.fetch(:max_daily_loss_pct_of_capital, 3.5).to_s)
+        (cap * p / 100).round(2, BigDecimal::ROUND_DOWN)
+      else
+        BigDecimal('1500')
+      end
     end
 
     def risk
@@ -85,6 +143,10 @@ module CoindcxBot
       v == true || v.to_s.downcase == 'true' || v.to_s == '1'
     end
 
+    def risk_value_present?(rk, key)
+      rk.key?(key) && !(rk[key].nil? || rk[key].to_s.strip.empty?)
+    end
+
     def validate_whitelist!
       allowed = pairs.uniq
       raise ConfigurationError, 'config pairs must list 1–2 instruments' unless allowed.size.between?(1, 2)
@@ -95,12 +157,38 @@ module CoindcxBot
     end
 
     def validate_risk_band!
-      rk = raw[:risk] || {}
-      min_r = BigDecimal(rk.fetch(:per_trade_inr_min, 250).to_s)
-      max_r = BigDecimal(rk.fetch(:per_trade_inr_max, 500).to_s)
+      min_r = resolved_per_trade_inr_min
+      max_r = resolved_per_trade_inr_max
       return if min_r <= max_r
 
-      raise ConfigurationError, 'risk.per_trade_inr_min must be <= risk.per_trade_inr_max'
+      raise ConfigurationError,
+            'resolved per-trade INR min must be <= max (check capital_inr and risk.*_pct_of_capital or per_trade_inr_min/max)'
+    end
+
+    def validate_risk_pct_sanity!
+      rk = raw[:risk] || {}
+      min_p = BigDecimal(rk.fetch(:per_trade_inr_min_pct_of_capital, 0.25).to_s)
+      max_p = BigDecimal(rk.fetch(:per_trade_inr_max_pct_of_capital, 3.0).to_s)
+      return if min_p <= max_p
+
+      raise ConfigurationError,
+            'risk.per_trade_inr_min_pct_of_capital must be <= risk.per_trade_inr_max_pct_of_capital'
+
+    rescue ArgumentError, TypeError
+      raise ConfigurationError, 'risk per-trade *_pct_of_capital values must be numeric'
+    end
+
+    def validate_risk_capital_pct!
+      rk = raw[:risk] || {}
+      return unless risk_value_present?(rk, :per_trade_capital_pct)
+
+      pct = BigDecimal(rk[:per_trade_capital_pct].to_s)
+      raise ConfigurationError, 'risk.per_trade_capital_pct must be > 0' unless pct.positive?
+      raise ConfigurationError, 'risk.per_trade_capital_pct must be <= 100' if pct > 100
+
+      return unless capital_inr.nil?
+
+      raise ConfigurationError, 'capital_inr is required when risk.per_trade_capital_pct is set'
     end
 
     def deep_symbolize(obj)

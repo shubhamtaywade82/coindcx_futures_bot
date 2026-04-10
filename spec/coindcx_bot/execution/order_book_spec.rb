@@ -22,6 +22,7 @@ RSpec.describe CoindcxBot::Execution::OrderBook do
     expect(wo.pair).to eq('B-SOL_USDT')
     expect(wo.limit_price).to eq(BigDecimal('99'))
     expect(wo.anchor_price).to eq(BigDecimal('100'))
+    expect(wo.placed_at).to be_a(Time)
   end
 
   it 'removes an order and clears on clear' do
@@ -43,7 +44,9 @@ RSpec.describe CoindcxBot::Execution::OrderBook do
     book = described_class.new
     book.add(1, pair: 'B-SOL_USDT', side: 'sell', order_type: 'stop_market', quantity: '1',
              stop_price: BigDecimal('95'))
+    placed_before = book.find(1).placed_at
     book.update_stop(1, BigDecimal('96'))
     expect(book.find(1).stop_price).to eq(BigDecimal('96'))
+    expect(book.find(1).placed_at).to eq(placed_before)
   end
 end

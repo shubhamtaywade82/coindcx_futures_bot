@@ -1,18 +1,29 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+
+# Activate Gemfile deps first (avoids system Rack vs project Rack conflicts when not using `bundle exec`).
+require 'bundler/setup'
+
 begin
   require 'dotenv'
   Dotenv.load(File.expand_path('../.env', __dir__), File.expand_path('../.env.local', __dir__))
 rescue LoadError
 end
 
-$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+# Stable DB location: default was Dir.pwd-relative, so starting the server from another cwd used a different
+# SQLite file than the bot (still same ENV keys) → POST /simulation/tick "unknown api key".
+repo_root = File.expand_path('..', __dir__)
+ENV['PAPER_EXCHANGE_DB'] = File.join(repo_root, 'data', 'paper_exchange.sqlite3') if ENV['PAPER_EXCHANGE_DB'].to_s.strip.empty?
+
 require 'coindcx_bot/paper_exchange'
-require 'rack/handler/webrick'
+# Rack 3 removed built-in handlers; `rackup` supplies WEBrick.
+require 'rackup/handler/webrick'
 
 port = Integer(ENV.fetch('PAPER_EXCHANGE_PORT', 9292))
 bind = ENV.fetch('PAPER_EXCHANGE_BIND', '127.0.0.1')
+# Request logging: Rack::CommonLogger inside Harness (default on). Quiet: PAPER_EXCHANGE_ACCESS_LOG=0
 
 app = CoindcxBot::PaperExchange::Harness.build_app
-Rack::Handler::WEBrick.run(app, Port: port, Host: bind, AccessLog: [])
+Rackup::Handler::WEBrick.run(app, Port: port, Host: bind, AccessLog: [])

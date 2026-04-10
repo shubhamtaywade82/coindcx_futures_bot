@@ -126,11 +126,15 @@ module CoindcxBot
               BigDecimal(change_raw.to_s)
             end
 
+          bid, ask = extract_bid_ask_from_quote(raw)
+
           Dto::Tick.new(
             pair: pair.to_s,
             price: BigDecimal(price_raw.to_s),
             change_pct: change_pct,
-            received_at: Time.now
+            received_at: Time.now,
+            bid: bid,
+            ask: ask
           )
         end
       end
@@ -185,6 +189,39 @@ module CoindcxBot
         nil
       end
 
+      def extract_bid_ask_from_quote(raw)
+        return [nil, nil] unless raw.is_a?(Hash)
+
+        h = raw.transform_keys { |k| k.to_sym }
+        bid_raw = first_quote_scalar(h, %i[
+          bid best_bid bid_price buy_price buy bp bb bid_px bidpx
+        ])
+        ask_raw = first_quote_scalar(h, %i[
+          ask best_ask ask_price sell_price sell ap ba ask_px askpx
+        ])
+        [decimal_or_nil(bid_raw), decimal_or_nil(ask_raw)]
+      end
+
+      def first_quote_scalar(h, keys)
+        keys.each do |k|
+          next unless h.key?(k)
+
+          v = h[k]
+          next if v.nil? || v.to_s.strip.empty?
+
+          return v
+        end
+        nil
+      end
+
+      def decimal_or_nil(v)
+        return nil if v.nil?
+
+        BigDecimal(v.to_s)
+      rescue ArgumentError, TypeError
+        nil
+      end
+
       def extract_price_and_change_from_quote(raw)
         case raw
         when Hash
@@ -216,11 +253,15 @@ module CoindcxBot
         change_raw = h[:pc] || h[:change_pct]
         change_pct = change_raw.nil? ? nil : BigDecimal(change_raw.to_s)
 
+        bid, ask = extract_bid_ask_from_quote(h)
+
         Dto::Tick.new(
           pair: instrument,
           price: BigDecimal(price_raw.to_s),
           change_pct: change_pct,
-          received_at: Time.now
+          received_at: Time.now,
+          bid: bid,
+          ask: ask
         )
       end
 

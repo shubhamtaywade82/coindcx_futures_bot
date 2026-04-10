@@ -23,7 +23,12 @@ RSpec.describe 'PaperExchange Rack app' do
     positions = CoindcxBot::PaperExchange::PositionsService.new(store: store, ledger: ledger, orders_service: orders)
     tick = CoindcxBot::PaperExchange::TickDispatcher.new(store: store, orders_service: orders)
     inner = CoindcxBot::PaperExchange::App.new(
-      wallets: wallets, orders: orders, positions: positions, tick_dispatcher: tick, logger: nil
+      wallets: wallets,
+      orders: orders,
+      positions: positions,
+      tick_dispatcher: tick,
+      store: store,
+      logger: nil
     )
     Rack::Builder.new do
       use CoindcxBot::PaperExchange::RateLimit::Middleware
@@ -53,6 +58,20 @@ RSpec.describe 'PaperExchange Rack app' do
     env = Rack::MockRequest.env_for('/health', method: 'GET')
     status, = app.call(env)
     expect(status).to eq(200)
+  end
+
+  it 'serves public GET instrument without auth (CoinDCX client uses auth: false)' do
+    signed_post('/exchange/v1/paper/simulation/tick', { pair: 'B-SOL_USDT', ltp: '123.45' })
+    env = Rack::MockRequest.env_for(
+      '/exchange/v1/derivatives/futures/data/instrument?pair=B-SOL_USDT&margin_currency_short_name=USDT',
+      method: 'GET'
+    )
+    status, _, body = app.call(env)
+    expect(status).to eq(200)
+    j = JSON.parse(body.join)
+    expect(j['ltp']).to eq('123.45')
+    expect(j['last_traded_price']).to eq('123.45')
+    expect(j).to include('bid' => be_a(String), 'ask' => be_a(String))
   end
 
   it 'accepts a signed simulation tick' do
