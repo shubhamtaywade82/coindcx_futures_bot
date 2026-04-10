@@ -19,9 +19,10 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
         panel.render
         rendered = output.string
 
+        expect(rendered).to include('MARKET WATCH')
         expect(rendered).to include('SOLUSDT')
         expect(rendered).to include('ETHUSDT')
-        expect(rendered).to include('---')
+        expect(rendered).to include('—')
       end
     end
 
@@ -41,6 +42,11 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
         panel.render
 
         expect(output.string).to include('+1.23%')
+      end
+
+      it 'renders LIVE status when age is fresh' do
+        panel.render
+        expect(output.string).to include('LIVE')
       end
     end
 
@@ -77,14 +83,14 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
         allow(Time).to receive(:now).and_return(base + 50)
       end
 
-      it 'marks STALE from ws_feed_stale? while AGE uses tick_store freshness' do
+      it 'marks STALE in STATUS when ws_feed_stale? while AGE uses tick_store freshness' do
         panel.render
-        expect(output.string).to include('[STALE]')
+        expect(output.string).to match(/STALE/)
         expect(output.string).to match(/48\.00s/)
       end
     end
 
-    context 'with a stale tick' do
+    context 'with a stale tick by age' do
       let(:panel) do
         described_class.new(
           tick_store: tick_store,
@@ -95,22 +101,22 @@ RSpec.describe CoindcxBot::Tui::Panels::LtpPanel do
         )
       end
 
-      it 'renders STALE marker and dims the LTP when age exceeds stale_tick_seconds' do
+      it 'renders STALE status and dims the LTP when quote age exceeds 1s' do
         base = Time.utc(2025, 6, 1, 12, 0, 0)
         tick_store.update(symbol: 'SOLUSDT', ltp: '100.0', updated_at: base)
         allow(Time).to receive(:now).and_return(base + 40)
 
         panel.render
 
-        expect(output.string).to include('[STALE]')
+        expect(output.string).to match(/STALE/)
         expect(output.string).to include("\e[2m")
       end
     end
   end
 
   describe '#row_count' do
-    it 'returns header rows plus symbol count' do
-      expect(panel.row_count).to eq(4)
+    it 'returns title, header, rule, and symbol rows' do
+      expect(panel.row_count).to eq(5)
     end
   end
 end

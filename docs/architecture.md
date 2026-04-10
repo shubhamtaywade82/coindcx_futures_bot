@@ -26,9 +26,9 @@ The "Gatekeeper."
 - **Benefit**: Hard safety limits that can't be bypassed by strategy bugs.
 
 ### E. TUI (`lib/coindcx_bot/tui/`)
-The "Observer." Terminal-based UI.
-- **Dashboard**: Uses `tty-box` and `tty-table` to show live state.
-- **TickStore** + **`LtpRestPoller`**: Fast REST refresh of LTP / CHG% for display; **`TickStore`** can retain the last **`change_pct`** when a source omits it.
+The "Observer." Terminal-based UI (TTY cursor + **`RenderLoop`**, ~4 Hz).
+- **Panels**: **`HeaderPanel`** (snapshot: mode, WS, PnL, paper balances), **`TriColumnPanel`** (tickers / positions / working orders), **`LtpPanel`** market watch ( **`TickStore`** for CHG% + age), **`EventLogPanel`** (journal events), **`KeybarPanel`** (keys + footer).
+- **TickStore** + **`LtpRestPoller`**: Fast REST refresh of LTP / CHG% for the market-watch table; **`TickStore`** can retain the last **`change_pct`** when a source omits it. Strategy and risk still read **`Engine#snapshot`** / **`PositionTracker`**.
 - **Benefit**: Low-overhead monitoring without needing a web browser.
 
 ### F. Paper exchange (`lib/coindcx_bot/paper_exchange/`)

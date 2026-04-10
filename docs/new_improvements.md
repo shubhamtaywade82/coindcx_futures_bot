@@ -45,10 +45,13 @@ This file replaces an earlier draft (`new_improvments.md`) that mixed chat trans
 - **`Tui::TickStore`**: Mutex-backed; WebSocket ticks forwarded from the engine (`forward_tick_to_store` / `mirror_tracker_into_tick_store`). Keys symbols with **`to_s`**; if **`change_pct`** is **`nil`** on update, **reuses** the previous value. **`stale?`** uses the same keying.
 - **`Tui::LtpRestPoller`**: Periodically batch-fetches **`MarketDataGateway#fetch_futures_rt_quotes`** (public RT **`ls`/`pc`**) and writes **`TickStore`**; falls back per pair to **`fetch_instrument_display_quote`**.
 - **`Tui::RenderLoop`**: Timer-driven redraw (~250ms); panels use `TTY::Cursor` and buffered `StringIO` output.
-- **`LtpPanel`**: In-place LTP rows, stale marking, **2-decimal** LTP; **STALE** badge follows WS staleness while **AGE** follows **`TickStore.updated_at`** (often REST-refreshed).
-- **`StatusPanel`**: Mode, engine status, **journal** positions line, daily PnL, errors; extra **`paper_metrics_line`** in paper mode.
+- **`HeaderPanel`**: Mode, time, WS/LAT, engine/kill/feed/error, balance + daily PnL + paper REAL/UNREAL/FEES (from **`Engine#snapshot`**).
+- **`TriColumnPanel`**: Tracker LTP tickers | journal positions (entry, LTP, uPnL, SL/TR) | **`tui_working_orders`** (paper).
+- **`LtpPanel` (`MARKET WATCH`)**: SYMBOL / LTP / CHG% / AGE / **STATUS** (`LIVE` / `LAG` / `STALE`); display quotes from **`TickStore`** (REST poller + WS mirror) while trading logic uses the engine snapshot / tracker.
+- **`EventLogPanel`**: Last rows from journal **`recent_events`** (via snapshot).
+- **`KeybarPanel`**: Control hints and footer (poll interval, render wake).
 - **`Tui::App`**: `COINDCX_TUI_POLL_ONLY=1` disables interactive keys.
-- **No** separate `OrdersPanel` / `PnlPanel`; paper extras are in **StatusPanel**.
+- **No** separate legacy `OrdersPanel` / `PnlPanel`; orders surface in **TriColumnPanel** when the broker exposes **`tui_working_orders`**.
 
 ### Other
 

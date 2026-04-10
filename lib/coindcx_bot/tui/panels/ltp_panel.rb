@@ -6,10 +6,10 @@ require 'stringio'
 module CoindcxBot
   module Tui
     module Panels
+      # REST/WS-derived quotes for display; engine snapshot remains authoritative for trading.
       class LtpPanel
-        HEADER_FMT = '  %-16s %12s %10s %9s  '
-        HEADER = format(HEADER_FMT, 'SYMBOL', 'LTP', 'CHG%', 'AGE')
-        SEPARATOR = ('-' * HEADER.length).freeze
+        HEADER_FMT = '  %-14s %10s %8s %7s  %-8s'
+        DATA_FMT = '  %-14s %10s %8s %7s  %-8s'
 
         def initialize(tick_store:, symbols:, origin_row:, stale_tick_seconds: 45, engine: nil, origin_col: 0,
                        output: $stdout)
@@ -26,14 +26,16 @@ module CoindcxBot
         def render
           ticks = @store.snapshot
           now   = Time.now
+          w = header_width
 
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row) << bold(HEADER)
-          buf << move(@row + 1) << SEPARATOR
+          buf << move(@row) << bold("MARKET WATCH") << dim("  #{'─' * [w - 14, 12].max}")
+          buf << move(@row + 1) << bold(format(HEADER_FMT, 'SYMBOL', 'LTP', 'CHG%', 'AGE', 'STATUS'))
+          buf << move(@row + 2) << dim('─' * [w, 40].max)
 
           @symbols.each_with_index do |sym, idx|
-            buf << move(@row + 2 + idx)
+            buf << move(@row + 3 + idx)
             buf << format_tick_row(ticks[sym], sym, now)
           end
 
@@ -43,38 +45,54 @@ module CoindcxBot
         end
 
         def row_count
-          2 + @symbols.length
+          3 + @symbols.length
         end
 
         private
 
-        # See StatusPanel#move — tty-cursor #move_to: pass column then row.
+        def header_width
+          # Width of header line for rule fill
+          56
+        end
+
         def move(row)
           @cursor.move_to(@col, row)
         end
 
         def format_tick_row(tick, symbol, now)
-          return dim(format(HEADER_FMT, symbol, '---', '---', '---')) if tick.nil?
+          return dim(format(DATA_FMT, symbol, '—', '—', '—', '—')) if tick.nil?
 
           age_sec = (now - tick.updated_at).to_f
           age_str = format('%.2fs', age_sec)
-          stale =
-            if @engine
-              @engine.ws_feed_stale?(symbol)
-            else
-              age_sec > @stale_tick_seconds
-            end
+          ws_stale = @engine&.ws_feed_stale?(symbol)
+          status = market_status(ws_stale, age_sec)
+          status_s = colorize_status(status)
 
           chg_str = tick.change_pct ? format('%+.2f%%', tick.change_pct) : 'n/a'
-          ltp_str = format('%12.2f', tick.ltp)
-          ltp_colored = colorize_ltp(ltp_str, tick, stale)
+          ltp_str = format('%10.2f', tick.ltp)
+          ltp_colored = colorize_ltp(ltp_str, tick, ws_stale)
 
-          line = format('  %-16s %s %10s %9s  ', symbol, ltp_colored, chg_str, age_str)
-          stale ? "#{line}  [STALE]" : line
+          format(DATA_FMT, symbol, ltp_colored, chg_str, age_str, status_s)
         end
 
-        def colorize_ltp(ltp_str, tick, stale)
-          return dim(ltp_str) if stale
+        def market_status(ws_stale, age_sec)
+          return 'STALE' if ws_stale
+          return 'STALE' if age_sec > 1.0
+          return 'LAG' if age_sec > 0.3
+
+          'LIVE'
+        end
+
+        def colorize_status(status)
+          case status
+          when 'LIVE' then green(status)
+          when 'LAG' then yellow(status)
+          else red(status)
+          end
+        end
+
+        def colorize_ltp(ltp_str, tick, ws_stale)
+          return dim(ltp_str) if ws_stale
           return red(ltp_str) if tick.change_pct&.negative?
 
           green(ltp_str)
@@ -83,6 +101,7 @@ module CoindcxBot
         def bold(str)  = "\e[1m#{str}\e[0m"
         def green(str) = "\e[32m#{str}\e[0m"
         def red(str)   = "\e[31m#{str}\e[0m"
+        def yellow(str) = "\e[33m#{str}\e[0m"
         def dim(str)   = "\e[2m#{str}\e[0m"
       end
     end

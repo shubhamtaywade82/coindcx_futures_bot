@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require 'json'
 require 'logger'
 
 module CoindcxBot
@@ -8,7 +9,9 @@ module CoindcxBot
     class Engine
       Snapshot = Struct.new(
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
-        :running, :dry_run, :stale_tick_seconds, :paper_metrics, keyword_init: true
+        :running, :dry_run, :stale_tick_seconds, :paper_metrics,
+        :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
+        keyword_init: true
       )
 
       def initialize(config:, logger: nil, tick_store: nil, on_tick: nil)
@@ -108,7 +111,11 @@ module CoindcxBot
           running: !@stop,
           dry_run: @config.dry_run?,
           stale_tick_seconds: @stale_seconds,
-          paper_metrics: pm
+          paper_metrics: pm,
+          capital_inr: snapshot_capital_inr,
+          recent_events: snapshot_recent_events,
+          working_orders: @broker.tui_working_orders,
+          ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago
         )
       end
 
@@ -157,6 +164,40 @@ module CoindcxBot
       end
 
       private
+
+      def snapshot_capital_inr
+        v = @config.raw[:capital_inr] || @config.raw['capital_inr']
+        return nil if v.nil? || v.to_s.strip.empty?
+
+        BigDecimal(v.to_s)
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def snapshot_recent_events(limit = 12)
+        rows = @journal.recent_events(limit).to_a
+        rows.reverse.map { |r| normalize_event_row(r) }
+      end
+
+      def normalize_event_row(r)
+        ts = r['ts'] || r[:ts]
+        type = (r['type'] || r[:type]).to_s
+        raw = r['payload'] || r[:payload] || '{}'
+        payload =
+          begin
+            JSON.parse(raw.to_s, symbolize_names: true)
+          rescue JSON::ParserError
+            {}
+          end
+        { ts: ts.to_i, type: type, payload: payload }
+      end
+
+      def snapshot_ws_last_tick_ms_ago
+        times = @config.pairs.filter_map { |p| @ws_tick_at[p] }
+        return nil if times.empty?
+
+        ((Time.now - times.max) * 1000).round
+      end
 
       def strategy_signal_trace_enabled?(config)
         return true if ENV['COINDCX_STRATEGY_SIGNALS'].to_s == '1'

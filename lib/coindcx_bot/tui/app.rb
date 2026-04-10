@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'fileutils'
-require 'stringio'
 require 'tty-cursor'
 require 'tty-logger'
 require 'tty-screen'
@@ -39,8 +38,6 @@ module CoindcxBot
 
         engine_thread = start_engine(engine)
 
-        status_panel, ltp_panel = panels
-        draw_chrome(symbols, keybar_row: status_panel.row_count + ltp_panel.row_count)
         @render_loop.start
 
         keyboard_loop(engine)
@@ -114,15 +111,28 @@ module CoindcxBot
 
       def build_panels(tick_store:, engine:, symbols:)
         stale_sec = engine.config.runtime.fetch(:stale_tick_seconds, 45).to_i
-        status = Panels::StatusPanel.new(engine: engine, origin_row: 0)
-        ltp    = Panels::LtpPanel.new(
+        origin = 0
+
+        header = Panels::HeaderPanel.new(engine: engine, origin_row: origin)
+        origin += header.row_count
+
+        tri = Panels::TriColumnPanel.new(engine: engine, symbols: symbols, origin_row: origin)
+        origin += tri.row_count
+
+        ltp = Panels::LtpPanel.new(
           tick_store: tick_store,
           symbols: symbols,
-          origin_row: status.row_count,
+          origin_row: origin,
           stale_tick_seconds: stale_sec,
           engine: engine
         )
-        [status, ltp]
+        origin += ltp.row_count
+
+        logs = Panels::EventLogPanel.new(engine: engine, origin_row: origin, max_lines: 6)
+        origin += logs.row_count
+
+        keybar = Panels::KeybarPanel.new(origin_row: origin, footer_text_proc: -> { footer_hint_text })
+        [header, tri, ltp, logs, keybar]
       end
 
       def start_engine(engine)
@@ -170,31 +180,6 @@ module CoindcxBot
             ''
           end
         "#{poll_part}WS tick wake · max #{(RENDER_INTERVAL * 1000).to_i}ms if idle · ^C or q to exit"
-      end
-
-      def draw_chrome(symbols, keybar_row:)
-        term_w = TTY::Screen.width || 80
-
-        buf = StringIO.new
-        buf << TTY::Cursor.move_to(0, keybar_row)
-        buf << "\e[2m#{'─' * [term_w - 1, 40].min}\e[0m\n"
-        buf << keybar_text
-        buf << "\n\e[2m#{footer_hint_text}\e[0m"
-
-        $stdout.print buf.string
-        $stdout.flush
-      end
-
-      def keybar_text
-        keys = [
-          ["\e[1mq\e[0m", 'quit'],
-          ["\e[1mp\e[0m", 'pause'],
-          ["\e[1mr\e[0m", 'resume'],
-          ["\e[1mk\e[0m", 'kill on'],
-          ["\e[1mo\e[0m", 'kill off'],
-          ["\e[1mf\e[0m", 'flatten']
-        ]
-        keys.map { |k, d| "#{k} \e[2m#{d}\e[0m" }.join("\e[2m  ·  \e[0m")
       end
 
       def keyboard_loop(engine)

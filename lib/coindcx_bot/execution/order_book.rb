@@ -99,6 +99,23 @@ module CoindcxBot
         @mutex.synchronize { @orders.size }
       end
 
+      # TUI / snapshot: serializable rows for working orders only.
+      def working_snapshot
+        @mutex.synchronize do
+          @orders.values.map do |wo|
+            {
+              id: wo.id,
+              pair: wo.pair,
+              side: wo.side,
+              order_type: wo.order_type,
+              quantity: wo.quantity.to_s('F'),
+              limit_price: wo.limit_price&.to_s('F'),
+              stop_price: wo.stop_price&.to_s('F')
+            }
+          end
+        end
+      end
+
       private
 
       def row_to_working(row)
