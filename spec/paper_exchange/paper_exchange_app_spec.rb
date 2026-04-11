@@ -136,7 +136,7 @@ RSpec.describe 'PaperExchange Rack app' do
     expect(j.dig('error', 'code')).to eq('no_mark')
   end
 
-  it 'serves public GET instrument without auth (CoinDCX client uses auth: false)' do
+  it 'serves public GET instrument without auth (paper skips auth middleware; live client may sign)' do
     signed_post('/exchange/v1/paper/simulation/tick', { pair: 'B-SOL_USDT', ltp: '123.45' })
     env = Rack::MockRequest.env_for(
       '/exchange/v1/derivatives/futures/data/instrument?pair=B-SOL_USDT&margin_currency_short_name=USDT',

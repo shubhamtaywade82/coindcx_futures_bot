@@ -1,4 +1,21 @@
-# Copy to config/bot.yml and adjust. Env overrides: COINDCX_BOT_CONFIG path.
+# Copy to config/bot.yml and adjust.
+#
+# Reference: commented blocks list optional keys the bot understands. Uncomment and edit as needed.
+# Scalper preset (runtime.mode: scalper or COINDCX_BOT_MODE=scalper) merges defaults only for keys you
+# omit — see lib/coindcx_bot/scalper_profile.rb for the canonical overlay.
+#
+# Environment (optional):
+#   COINDCX_BOT_CONFIG          — path to this YAML (default: config/bot.yml under the gem path)
+#   COINDCX_BOT_MODE            — scalper | swing | default (overrides YAML runtime.mode for preset)
+#   COINDCX_STRATEGY_SIGNALS=1  — log every strategy signal (same as runtime.log_strategy_signals)
+#   COINDCX_WS_TRACE=1          — verbose WebSocket tick logging
+#   COINDCX_API_KEY / COINDCX_API_SECRET — live / gateway paper (required when not dry_run or using paper exchange)
+#   COINDCX_SOCKET_BASE_URL     — optional Socket.IO base override
+#   COINDCX_SOCKET_EIO          — optional Engine.IO version for WS handshake
+#   COINDCX_TUI_LTP_POLL_SECONDS — override runtime.tui_ltp_poll_seconds
+#   COINDCX_TUI_VERBOSE=1       — TUI: engine logs to tmp/coindcx_tui.log (or COINDCX_TUI_LOG path)
+#   COINDCX_TUI_LOG             — custom path for TUI verbose log
+#   COINDCX_TUI_POLL_ONLY=1     — TUI: REST LTP poll only (no WS requirement for display)
 
 margin_currency_short_name: USDT
 
@@ -28,8 +45,14 @@ risk:
   # per_trade_inr_min_pct_of_capital: 0.25
   # per_trade_inr_max_pct_of_capital: 3.0
   # max_daily_loss_pct_of_capital: 3.5
+  # Legacy explicit INR band (omit if using *_pct_of_capital above).
+  # per_trade_inr_min: 250
+  # per_trade_inr_max: 500
+  # max_daily_loss_inr: 1500
 
 strategy:
+  # Engine strategy: trend_continuation (default), supertrend_profit, or regime_vol_tier (wraps inner_strategy).
+  # name: trend_continuation
   execution_resolution: 15m
   higher_timeframe_resolution: 1h
   ema_fast: 12
@@ -57,8 +80,18 @@ strategy:
   #   giveback_pct: 0.35
   #   # giveback_usdt: 5
 
-  # Optional: switch engine strategy (default = trend_continuation when omitted).
-  # Supertrend on execution_resolution (use 5m below); exits only at take_profit_pct — no Supertrend-based exit.
+  # Dynamic trailing (TrendContinuation + in-process PaperBroker when exec candles are passed).
+  # All optional; see lib/coindcx_bot/strategy/dynamic_trail.rb for behavior.
+  # trail_atr_period: 14
+  # trail_atr_fast_period: 5
+  # trail_velocity_lookback: 3
+  # trail_velocity_weight: 0.25
+  # trail_swing_lookback: 5
+  # trail_floor_mult: 0.40
+  # trail_breakeven_gate_mult: 0.10
+
+  # --- supertrend_profit (set strategy.name) ---
+  # Higher timeframe is optional for this strategy; execution_resolution drives bar size.
   # name: supertrend_profit
   # execution_resolution: 5m
   # higher_timeframe_resolution: 5m
@@ -97,8 +130,6 @@ runtime:
   # paper_rest_advances_ws_stale_clock: true
   # TUI only: REST poll interval (seconds) for LTP/CHG/AGE in the dashboard; does not drive strategy or `@ws_tick_at`. Set 0 to disable. Override: COINDCX_TUI_LTP_POLL_SECONDS=0
   # tui_ltp_poll_seconds: 0.5
-  # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
-  # log_strategy_signals: true
 
 # Regime: HMM (Ruby diagonal Gaussian), optional Ollama narrative, optional risk size multipliers.
 # See docs/hmm_regime_trading_spec.md. Ollama does not submit orders; strategy `regime_vol_tier` gates entries from HMM tier.
@@ -155,7 +186,11 @@ runtime:
 paper:
   slippage_bps: 5
   fee_bps: 4
+  # Accrued per funding interval (default 8h) before close; see PaperBroker::FUNDING_INTERVAL_SECONDS.
+  # funding_rate_bps: 1
   db_path: ./data/paper_trading.sqlite3
+  # Bracket take-profit distance as multiple of entry-vs-stop risk (coordinator / paper bracket orders).
+  # take_profit_r_multiple: 3
 
 # CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). When enabled with
 # `runtime.dry_run` / `runtime.paper`, the bot uses `OrderGateway` / `AccountGateway` against this
