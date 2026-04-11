@@ -3,6 +3,7 @@
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../term_width'
 
 module CoindcxBot
   module Tui
@@ -21,8 +22,8 @@ module CoindcxBot
 
         def render
           buf = StringIO.new
-          w = (TTY::Screen.width || 80) - 1
-          rule = dim('─' * [[w, 40].max, 0].max)
+          w = [TermWidth.columns - 1, 40].max
+          rule = dim('─' * w)
           foot = @footer_text_proc ? @footer_text_proc.call : @footer_text.to_s
           cmd_line = command_palette_row
 

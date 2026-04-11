@@ -375,20 +375,7 @@ module CoindcxBot
       end
 
       def unrealized_usdt(p, ltp)
-        return nil if ltp.nil?
-
-        q = BigDecimal((p[:quantity] || p['quantity']).to_s)
-        e = BigDecimal((p[:entry_price] || p['entry_price']).to_s)
-        case (p[:side] || p['side']).to_s
-        when 'long', 'buy'
-          (ltp - e) * q
-        when 'short', 'sell'
-          (e - ltp) * q
-        else
-          BigDecimal('0')
-        end
-      rescue ArgumentError, TypeError
-        nil
+        CoindcxBot::Strategy::UnrealizedPnl.position_usdt(p, ltp)
       end
 
       def unrealized_pct_str(p, ltp)

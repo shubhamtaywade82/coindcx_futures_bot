@@ -6,13 +6,15 @@ require 'tty-cursor'
 require 'tty-logger'
 require 'tty-screen'
 
+require_relative 'engine_log_filter'
+
 module CoindcxBot
   module Tui
     class App
       RENDER_INTERVAL = 0.25
       KEYBOARD_POLL   = 1
       MIN_TUI_COLS    = 100
-      MIN_TUI_ROWS    = 25
+      MIN_TUI_ROWS    = 26
 
       def self.start
         new.run
@@ -108,6 +110,7 @@ module CoindcxBot
           if tui_verbose?
             path = tui_engine_log_path
             FileUtils.mkdir_p(File.dirname(path))
+            maybe_rotate_engine_log(path)
             path
           else
             File::NULL
@@ -145,7 +148,26 @@ module CoindcxBot
           else
             @null_log_io ||= File.open(File::NULL, 'w')
           end
-        TTY::Logger.new(output: out)
+        inner = TTY::Logger.new(output: out)
+        return inner unless tui_verbose?
+
+        EngineLogFilter.new(inner)
+      end
+
+      # Set COINDCX_TUI_LOG_MAX_MB (e.g. 128) to rotate an oversized log once at TUI startup (path -> path.1).
+      def maybe_rotate_engine_log(path)
+        max_mb = ENV['COINDCX_TUI_LOG_MAX_MB'].to_s.to_f
+        return if max_mb <= 0
+        return unless File.file?(path)
+
+        limit = (max_mb * 1024 * 1024).to_i
+        return if File.size(path) < limit
+
+        rotated = "#{path}.1"
+        FileUtils.rm_f(rotated)
+        File.rename(path, rotated)
+      rescue StandardError
+        nil
       end
 
       def build_panels(tick_store:, order_book_store:, engine:, symbols:)
@@ -157,6 +179,9 @@ module CoindcxBot
           focus_pair_proc: -> { @focus&.current }
         )
         origin += header.row_count
+
+        regime_strip = Panels::RegimeStripPanel.new(engine: engine, origin_row: origin)
+        origin += regime_strip.row_count
 
         grid = Panels::DeskFuturesGridPanel.new(
           engine: engine,
@@ -173,7 +198,7 @@ module CoindcxBot
           footer_text_proc: -> { footer_hint_text },
           command_line_proc: -> { command_palette_line }
         )
-        [header, grid, keybar]
+        [header, regime_strip, grid, keybar]
       end
 
       def start_engine(engine)

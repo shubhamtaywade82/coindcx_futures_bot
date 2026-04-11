@@ -12,7 +12,8 @@ module CoindcxBot
     module Auth
       module_function
 
-      # CoinDCX::REST::Futures::MarketData uses `auth: false` for these GETs — no X-AUTH headers on the wire.
+      # CoinDCX live may require signed requests for some of these paths; the client uses auth where needed.
+      # Paper skips middleware for these GETs so unauthenticated curl/tests still work; signed GETs are also skipped.
       PUBLIC_MARKET_GET_PATHS = %w[
         /exchange/v1/derivatives/futures/data/instrument
         /exchange/v1/derivatives/futures/data/active_instruments

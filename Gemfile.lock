@@ -1,4 +1,12 @@
 PATH
+  remote: ../../../ai-workspace/ollama-client
+  specs:
+    ollama-client (1.1.0)
+      bigdecimal
+      dotenv (~> 2.8)
+      json-schema (~> 4.0)
+
+PATH
   remote: ../../../ai-workspace/ollama_agent
   specs:
     ollama_agent (1.0.0)
@@ -53,9 +61,6 @@ GEM
       bigdecimal (>= 3.1, < 5)
     net-http (0.9.1)
       uri (>= 0.11.1)
-    ollama-client (1.1.0)
-      bigdecimal
-      json-schema (~> 4.0)
     pastel (0.8.0)
       tty-color (~> 0.5)
     prism (1.9.0)
@@ -159,6 +164,7 @@ DEPENDENCIES
   bigdecimal
   coindcx-client!
   dotenv (~> 2.8)
+  ollama-client!
   ollama_agent!
   pastel
   rack (~> 3.1)
@@ -193,7 +199,7 @@ CHECKSUMS
   mini_mime (1.1.5) sha256=8681b7e2e4215f2a159f9400b5816d85e9d8c6c6b491e96a12797e798f8bccef
   multi_xml (0.8.1) sha256=addba0290bac34e9088bfe73dc4878530297a82a7bbd66cb44dcd0a4b86edf5a
   net-http (0.9.1) sha256=25ba0b67c63e89df626ed8fac771d0ad24ad151a858af2cc8e6a716ca4336996
-  ollama-client (1.1.0) sha256=c7539388530b240f8db3181c0f6e0a7595deec56f47a791821c304bce0fedd36
+  ollama-client (1.1.0)
   ollama_agent (1.0.0)
   pastel (0.8.0) sha256=481da9fb7d2f6e6b1a08faf11fa10363172dc40fd47848f096ae21209f805a75
   prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85

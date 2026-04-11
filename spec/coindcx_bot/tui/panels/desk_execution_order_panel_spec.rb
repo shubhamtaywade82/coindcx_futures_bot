@@ -29,7 +29,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
           stop_price: nil }
       ],
       ws_last_tick_ms_ago: 5,
-      strategy_last_by_pair: {}
+      strategy_last_by_pair: {},
+      regime: CoindcxBot::Regime::TuiState.disabled
     )
   end
   let(:config) do
@@ -55,7 +56,7 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
   end
 
   before do
-    allow(TTY::Screen).to receive(:width).and_return(120)
+    allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(120)
     tick_store.update(symbol: 'B-SOL_USDT', ltp: 150.0, change_pct: 0.5)
     allow(engine).to receive(:ws_feed_stale?).with('B-SOL_USDT').and_return(false)
   end
@@ -96,7 +97,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
           recent_events: [],
           working_orders: [],
           ws_last_tick_ms_ago: 5,
-          strategy_last_by_pair: {}
+          strategy_last_by_pair: {},
+          regime: CoindcxBot::Regime::TuiState.disabled
         )
       end
 

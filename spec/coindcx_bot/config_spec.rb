@@ -3,6 +3,26 @@
 require 'bigdecimal'
 
 RSpec.describe CoindcxBot::Config do
+  it 'reads risk.flatten_on_daily_loss_breach and pause_after_daily_loss_flatten' do
+    on = described_class.new(minimal_bot_config(risk: minimal_bot_config[:risk].merge(flatten_on_daily_loss_breach: true, pause_after_daily_loss_flatten: true)))
+    expect(on.flatten_on_daily_loss_breach?).to be(true)
+    expect(on.pause_after_daily_loss_flatten?).to be(true)
+  end
+
+  it 'reads regime.ai.enabled as regime_ai_enabled? only when regime is on' do
+    off = described_class.new(minimal_bot_config(regime: { enabled: false, ai: { enabled: true } }))
+    expect(off.regime_ai_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(regime: { enabled: true, ai: { enabled: true } }))
+    expect(on.regime_ai_enabled?).to be(true)
+  end
+
+  it 'reads regime.enabled as regime_enabled?' do
+    on = described_class.new(minimal_bot_config(regime: { enabled: true }))
+    expect(on.regime_enabled?).to be(true)
+    off = described_class.new(minimal_bot_config(regime: { enabled: false }))
+    expect(off.regime_enabled?).to be(false)
+  end
+
   it 'treats runtime.paper as dry_run (paper trading mode)' do
     cfg = described_class.new(
       minimal_bot_config(runtime: { journal_path: '/tmp/x.sqlite3', paper: true, dry_run: false })
@@ -114,6 +134,8 @@ RSpec.describe CoindcxBot::Config do
       expect(cfg.runtime[:refresh_candles_seconds]).to eq(12)
       expect(cfg.strategy[:execution_resolution]).to eq('5m')
       expect(cfg.strategy[:higher_timeframe_resolution]).to eq('15m')
+      expect(cfg.flatten_on_daily_loss_breach?).to be(true)
+      expect(cfg.pause_after_daily_loss_flatten?).to be(true)
     end
 
     it 'does not override explicit runtime or strategy keys when scalper' do
