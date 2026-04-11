@@ -22,7 +22,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
       recent_events: [],
       working_orders: [],
       ws_last_tick_ms_ago: 1,
-      strategy_last_by_pair: {}
+      strategy_last_by_pair: {},
+      regime: CoindcxBot::Regime::TuiState.disabled
     )
   end
   let(:config) do

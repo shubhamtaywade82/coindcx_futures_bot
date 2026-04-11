@@ -12,7 +12,7 @@ module CoindcxBot
       RENDER_INTERVAL = 0.25
       KEYBOARD_POLL   = 1
       MIN_TUI_COLS    = 100
-      MIN_TUI_ROWS    = 25
+      MIN_TUI_ROWS    = 26
 
       def self.start
         new.run
@@ -158,6 +158,9 @@ module CoindcxBot
         )
         origin += header.row_count
 
+        regime_strip = Panels::RegimeStripPanel.new(engine: engine, origin_row: origin)
+        origin += regime_strip.row_count
+
         grid = Panels::DeskFuturesGridPanel.new(
           engine: engine,
           tick_store: tick_store,
@@ -173,7 +176,7 @@ module CoindcxBot
           footer_text_proc: -> { footer_hint_text },
           command_line_proc: -> { command_palette_line }
         )
-        [header, grid, keybar]
+        [header, regime_strip, grid, keybar]
       end
 
       def start_engine(engine)

@@ -79,6 +79,10 @@ execution:
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 200
+  # Trading style preset: `scalper` merges faster candle refresh, 5m/15m strategy TFs, tighter stale
+  # tick window, and faster TUI LTP poll — only for keys you did not set explicitly below.
+  # Or: COINDCX_BOT_MODE=scalper / bin/bot tui --scalper
+  mode: scalper
   refresh_candles_seconds: 1
   # Seconds without a WebSocket price tick before the feed is stale (new entries blocked).
   stale_tick_seconds: 45
@@ -95,9 +99,15 @@ runtime:
   # paper_rest_advances_ws_stale_clock: true
   # TUI only: REST poll interval (seconds) for LTP/CHG/AGE in the dashboard; does not drive strategy or `@ws_tick_at`. Set 0 to disable. Override: COINDCX_TUI_LTP_POLL_SECONDS=0
   # tui_ltp_poll_seconds: 0.5
+  # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
+  # log_strategy_signals: true
 
-# Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true,
-# and paper_exchange.enabled is false). Slippage/fees; persisted to SQLite.
+# HMM regime detection (see docs/hmm_regime_trading_spec.md). TUI shows a REGIME strip; metrics fill in when HmmEngine is wired.
+regime:
+  enabled: true
+
+# Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
+# The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
 paper:
   slippage_bps: 5
   fee_bps: 4

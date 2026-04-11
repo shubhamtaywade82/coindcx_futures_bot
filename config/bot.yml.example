@@ -88,6 +88,10 @@ runtime:
   # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
   # log_strategy_signals: true
 
+# HMM regime detection (see docs/hmm_regime_trading_spec.md). TUI shows a REGIME strip; metrics fill in when HmmEngine is wired.
+# regime:
+#   enabled: false
+
 # Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
 paper:

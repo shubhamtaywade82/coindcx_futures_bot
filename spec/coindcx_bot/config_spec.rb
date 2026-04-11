@@ -3,6 +3,13 @@
 require 'bigdecimal'
 
 RSpec.describe CoindcxBot::Config do
+  it 'reads regime.enabled as regime_enabled?' do
+    on = described_class.new(minimal_bot_config(regime: { enabled: true }))
+    expect(on.regime_enabled?).to be(true)
+    off = described_class.new(minimal_bot_config(regime: { enabled: false }))
+    expect(off.regime_enabled?).to be(false)
+  end
+
   it 'treats runtime.paper as dry_run (paper trading mode)' do
     cfg = described_class.new(
       minimal_bot_config(runtime: { journal_path: '/tmp/x.sqlite3', paper: true, dry_run: false })

@@ -5,6 +5,7 @@ require 'json'
 require 'logger'
 
 require_relative '../display_ltp'
+require_relative '../regime/tui_state'
 require_relative '../synthetic_l1'
 
 module CoindcxBot
@@ -14,7 +15,7 @@ module CoindcxBot
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
         :running, :dry_run, :stale_tick_seconds, :paper_metrics,
         :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
-        :strategy_last_by_pair,
+        :strategy_last_by_pair, :regime,
         keyword_init: true
       )
 
@@ -124,7 +125,8 @@ module CoindcxBot
           recent_events: snapshot_recent_events,
           working_orders: @broker.tui_working_orders,
           ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago,
-          strategy_last_by_pair: @last_strategy_by_pair.dup
+          strategy_last_by_pair: @last_strategy_by_pair.dup,
+          regime: Regime::TuiState.build(@config)
         )
       end
 

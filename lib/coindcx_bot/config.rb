@@ -130,6 +130,14 @@ module CoindcxBot
       raw.fetch(:runtime, {})
     end
 
+    def regime_section
+      raw.fetch(:regime, {})
+    end
+
+    def regime_enabled?
+      truthy?(regime_section[:enabled])
+    end
+
     # Paper trading: no exchange orders or account exits. `runtime.paper` is an alias for `runtime.dry_run`.
     def dry_run?
       r = runtime

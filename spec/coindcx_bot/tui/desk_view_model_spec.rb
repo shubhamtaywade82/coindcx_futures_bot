@@ -38,7 +38,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
           limit_price: '160', stop_price: nil }
       ],
       ws_last_tick_ms_ago: 12,
-      strategy_last_by_pair: { 'B-SOL_USDT' => { action: :hold, reason: 'below_take_profit' } }
+      strategy_last_by_pair: { 'B-SOL_USDT' => { action: :hold, reason: 'below_take_profit' } },
+      regime: CoindcxBot::Regime::TuiState.disabled
     )
   end
 

@@ -27,7 +27,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
       recent_events: [{ ts: 1_700_000_000, type: 'tick', payload: { pair: 'B-SOL_USDT' } }],
       working_orders: [],
       ws_last_tick_ms_ago: 5,
-      strategy_last_by_pair: { 'B-SOL_USDT' => { action: :hold, reason: 'ok' } }
+      strategy_last_by_pair: { 'B-SOL_USDT' => { action: :hold, reason: 'ok' } },
+      regime: CoindcxBot::Regime::TuiState.disabled
     )
   end
   let(:config) do
