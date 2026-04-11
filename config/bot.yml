@@ -16,6 +16,7 @@ inr_per_usdt: 83.0
 capital_inr: 1_00_000
 
 risk:
+  # Scalping: fewer concurrent positions; raise max_leverage only if your account allows it.
   max_open_positions: 2
   max_leverage: 10
   # Optional (% of capital_inr). Defaults: per-trade 1.5% (when both per_trade_inr_min/max are omitted);
@@ -30,49 +31,31 @@ risk:
   # max_daily_loss_inr: 1500
 
 strategy:
-  execution_resolution: 15m
-  higher_timeframe_resolution: 1h
-  ema_fast: 12
-  ema_slow: 26
-  atr_period: 14
-  # |EMA_fast - EMA_slow| / ATR on execution timeframe; higher => stronger trend tape
-  trend_strength_min: 0.12
-  compression_lookback: 8
-  compression_ratio: 0.65
-  breakout_lookback: 4
-  pullback_ema_tolerance_pct: 0.0025
-  # Optional entry gates (defaults preserve original behavior)
-  volume_filter: false
-  volume_lookback: 20
-  volume_min_ratio: 1.0
-  structure_bars: 0
-  adx_period: 14
-  adx_min: 0
-
+  # --- Scalping: take profit on % gain only (no Supertrend flip exit) ---
+  # See Strategy::SupertrendProfit — manage_position closes only at take_profit_pct (+ optional HwmGiveback).
+  name: supertrend_profit
+  execution_resolution: 5m
+  higher_timeframe_resolution: 15m
+  supertrend_atr_period: 10
+  supertrend_multiplier: 3
+  # Fraction of price: 0.004 = 0.4% move from entry to hit TP. Tune per pair/volatility.
+  take_profit_pct: 0.004
+  # Used for initial stop distance / risk sizing (not the TP exit).
+  stop_distance_pct_for_sizing: 0.012
   hwm_giveback:
-    enabled: true
-    min_peak_usdt: 10
-    giveback_pct: 0.35
+    enabled: false
 
-  # Dynamic trailing (TrendContinuation + in-process PaperBroker when exec candles are passed).
-  # All optional; lib defaults apply when omitted.
-  # trail_atr_period: 14
-  # trail_atr_fast_period: 5
-  # trail_velocity_lookback: 3
-  # trail_velocity_weight: 0.25
-  # trail_swing_lookback: 5
-  # trail_floor_mult: 0.40
-  # trail_breakeven_gate_mult: 0.10
-
-  # Optional: switch engine strategy (default = trend_continuation when omitted).
-  # Supertrend on execution_resolution (use 5m below); exits only at take_profit_pct — no Supertrend-based exit.
-  # name: supertrend_profit
-  # execution_resolution: 5m
-  # higher_timeframe_resolution: 5m
-  # supertrend_atr_period: 10
-  # supertrend_multiplier: 3
-  # take_profit_pct: 0.10
-  # stop_distance_pct_for_sizing: 0.02
+  # TrendContinuation-only (ignored when name is supertrend_profit); keep for quick switch back.
+  # ema_fast: 12
+  # ema_slow: 26
+  # atr_period: 14
+  # trend_strength_min: 0.12
+  # compression_lookback: 8
+  # compression_ratio: 0.65
+  # breakout_lookback: 4
+  # pullback_ema_tolerance_pct: 0.0025
+  # volume_filter: false
+  # structure_bars: 0
 
 execution:
   # Merged into every futures `order:` hash; required keys depend on CoinDCX API.
@@ -84,15 +67,14 @@ execution:
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 200
-  # Trading style preset: `scalper` merges faster candle refresh, 5m/15m strategy TFs, tighter stale
-  # tick window, and faster TUI LTP poll — only for keys you did not set explicitly below.
+  # Preset merges only missing keys: stale 25s, TUI LTP poll 0.25s, flatten-on-daily-loss, etc.
   # Or: COINDCX_BOT_MODE=scalper / bin/bot tui --scalper
   mode: scalper
   refresh_candles_seconds: 1
-  # Seconds without a WebSocket price tick before the feed is stale (new entries blocked).
-  stale_tick_seconds: 45
-  # While WS is stale, wait this long between engine cycles instead of refresh_candles_seconds.
-  stale_recovery_sleep_seconds: 5
+  # Tighter than swing — new entries blocked sooner if WS is quiet (scalper preset default 25).
+  stale_tick_seconds: 25
+  # While WS is stale, wait this long between engine cycles (scalper preset default 2).
+  stale_recovery_sleep_seconds: 2
   # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
   ws_shutdown_join_seconds: 45
   # Paper trading: no futures orders / account exits. Same effect as dry_run (either key is enough).
@@ -108,34 +90,33 @@ runtime:
   # log_strategy_signals: true
 
 
-# Regime strip + optional AI analyst (local Ollama via ollama-client; retries via ollama_agent when use_retry_middleware).
-# See docs/hmm_regime_trading_spec.md. AI is advisory only — it does not route orders until you wire strategy logic.
-# HMM regime detection (see docs/hmm_regime_trading_spec.md). TUI shows a REGIME strip; metrics fill in when HmmEngine is wired.
-regime:
-  enabled: true
-  scope: per_pair
-  hmm:
-    enabled: true
-    persistence_path: ./data/regime_hmm.json
-    n_candidates: [3, 4, 5]
-    n_init: 3
-    em_iterations: 35
-    min_train_bars: 80
-    zscore_lookback: 60
-    retrain_every_bars: 0
-  ai:
-    enabled: false
-    include_hmm_context: true
-    mode: tui_narrative
-    model: llama3.2:3b
-    ollama_base_url: http://127.0.0.1:11434
-    timeout_seconds: 90
-    min_interval_seconds: 180
-    bars_per_pair: 24
-    max_pairs: 8
-    temperature: 0.15
-    use_retry_middleware: true
-    retry_attempts: 3
+# Regime/HMM: optional context for TUI + regime_vol_tier. Off by default for scalping (less CPU/REST per cycle).
+# Set enabled: true and hmm.enabled: true when you want the strip + persistence under ./data/regime_hmm*.json.
+# regime:
+#   enabled: true
+#   scope: per_pair
+#   hmm:
+#     enabled: true
+#     persistence_path: ./data/regime_hmm.json
+#     n_candidates: [3, 4, 5]
+#     n_init: 3
+#     em_iterations: 35
+#     min_train_bars: 80
+#     zscore_lookback: 60
+#     retrain_every_bars: 0
+#   ai:
+#     enabled: false
+#     include_hmm_context: true
+#     mode: tui_narrative
+#     model: llama3.2:3b
+#     ollama_base_url: http://127.0.0.1:11434
+#     timeout_seconds: 90
+#     min_interval_seconds: 180
+#     bars_per_pair: 24
+#     max_pairs: 8
+#     temperature: 0.15
+#     use_retry_middleware: true
+#     retry_attempts: 3
 
 # Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
