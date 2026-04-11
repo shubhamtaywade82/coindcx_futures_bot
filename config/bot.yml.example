@@ -106,6 +106,7 @@ execution:
   order_defaults:
     order_type: market_order
     margin_currency_short_name: USDT
+    # leverage: 5   # optional; TUI/header fall back to risk.max_leverage when omitted
 
 runtime:
   journal_path: ./data/bot_journal.sqlite3
