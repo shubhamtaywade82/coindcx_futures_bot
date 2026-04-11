@@ -49,6 +49,16 @@ strategy:
   adx_period: 14
   adx_min: 0
 
+  # Dynamic trailing (TrendContinuation + in-process PaperBroker when exec candles are passed).
+  # All optional; lib defaults apply when omitted.
+  # trail_atr_period: 14
+  # trail_atr_fast_period: 5
+  # trail_velocity_lookback: 3
+  # trail_velocity_weight: 0.25
+  # trail_swing_lookback: 5
+  # trail_floor_mult: 0.40
+  # trail_breakeven_gate_mult: 0.10
+
   # Optional: switch engine strategy (default = trend_continuation when omitted).
   # Supertrend on execution_resolution (use 5m below); exits only at take_profit_pct — no Supertrend-based exit.
   # name: supertrend_profit

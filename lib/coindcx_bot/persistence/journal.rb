@@ -78,15 +78,17 @@ module CoindcxBot
         @db.execute('SELECT * FROM positions WHERE state = ?', 'open').map { |row| symbolize_row(row) }
       end
 
-      def insert_position(pair:, side:, entry_price:, quantity:, stop_price:, trail_price: nil)
+      def insert_position(pair:, side:, entry_price:, quantity:, stop_price:, trail_price: nil,
+                          initial_stop_price: nil)
         now = Time.now.to_i
+        initial = (initial_stop_price || stop_price)&.to_s('F')
         @db.execute(
           <<~SQL,
-            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, partial_done, opened_at, state)
-            VALUES(?, ?, ?, ?, ?, ?, 0, ?, 'open')
+            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open')
           SQL
           [pair, side.to_s, entry_price.to_s('F'), quantity.to_s('F'),
-           stop_price&.to_s('F'), trail_price&.to_s('F'), now]
+           stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now]
         )
         @db.last_insert_row_id
       end
@@ -172,6 +174,7 @@ module CoindcxBot
             quantity TEXT NOT NULL,
             stop_price TEXT,
             trail_price TEXT,
+            initial_stop_price TEXT,
             partial_done INTEGER DEFAULT 0,
             opened_at INTEGER NOT NULL,
             state TEXT NOT NULL
@@ -184,6 +187,14 @@ module CoindcxBot
           );
           CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(type);
         SQL
+        migrate_positions_columns
+      end
+
+      def migrate_positions_columns
+        cols = @db.table_info('positions').map { |r| r['name'] }
+        return if cols.include?('initial_stop_price')
+
+        @db.execute('ALTER TABLE positions ADD COLUMN initial_stop_price TEXT')
       end
     end
   end

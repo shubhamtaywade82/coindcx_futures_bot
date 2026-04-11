@@ -9,7 +9,7 @@ module CoindcxBot
   module Persistence
     class PaperStore
       WORKING_ORDER_STATUSES = %w[new working accepted].freeze
-      MIGRATE_TABLE_ALLOWLIST = %w[paper_orders paper_fills].freeze
+      MIGRATE_TABLE_ALLOWLIST = %w[paper_orders paper_fills paper_positions].freeze
 
       def initialize(path)
         FileUtils.mkdir_p(File.dirname(path))
@@ -55,6 +55,13 @@ module CoindcxBot
 
       def update_order_status(id, status)
         @db.execute('UPDATE paper_orders SET status = ?, updated_at = ? WHERE id = ?', [status, now_iso, id])
+      end
+
+      def update_order_stop_price(id, stop_price)
+        @db.execute(
+          'UPDATE paper_orders SET stop_price = ?, updated_at = ? WHERE id = ?',
+          [bd_str(stop_price), now_iso, id]
+        )
       end
 
       def find_order(id)
@@ -203,6 +210,124 @@ module CoindcxBot
         symbolize(row)
       end
 
+      # --- Order Groups (OCO brackets) ---
+
+      def insert_order_group(pair:, entry_order_id:, sl_order_id: nil, tp_order_id: nil)
+        @db.execute(
+          <<~SQL,
+            INSERT INTO paper_order_groups (pair, status, entry_order_id, sl_order_id, tp_order_id, created_at)
+            VALUES (?, 'active', ?, ?, ?, ?)
+          SQL
+          [pair, entry_order_id, sl_order_id, tp_order_id, now_iso]
+        )
+        @db.last_insert_row_id
+      end
+
+      def update_order_group_sl(group_id, sl_order_id)
+        @db.execute(
+          'UPDATE paper_order_groups SET sl_order_id = ? WHERE id = ?',
+          [sl_order_id, group_id]
+        )
+      end
+
+      def update_order_group_tp(group_id, tp_order_id)
+        @db.execute(
+          'UPDATE paper_order_groups SET tp_order_id = ? WHERE id = ?',
+          [tp_order_id, group_id]
+        )
+      end
+
+      def find_order_group(id)
+        row = @db.get_first_row('SELECT * FROM paper_order_groups WHERE id = ?', id)
+        symbolize(row)
+      end
+
+      def find_active_group_for_pair(pair)
+        row = @db.get_first_row(
+          "SELECT * FROM paper_order_groups WHERE pair = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
+          pair
+        )
+        symbolize(row)
+      end
+
+      def find_group_by_order(order_id)
+        row = @db.get_first_row(
+          <<~SQL,
+            SELECT * FROM paper_order_groups
+            WHERE (entry_order_id = ? OR sl_order_id = ? OR tp_order_id = ?)
+              AND status = 'active'
+            LIMIT 1
+          SQL
+          [order_id, order_id, order_id]
+        )
+        symbolize(row)
+      end
+
+      def complete_order_group(id)
+        @db.execute(
+          "UPDATE paper_order_groups SET status = 'completed', completed_at = ? WHERE id = ?",
+          [now_iso, id]
+        )
+      end
+
+      def sibling_order_ids(group, filled_order_id)
+        ids = [group[:entry_order_id], group[:sl_order_id], group[:tp_order_id]].compact
+        ids.reject { |oid| oid == filled_order_id }
+      end
+
+      # --- Funding Fees ---
+
+      def insert_funding_fee(pair:, position_id:, amount:, rate:, position_value:)
+        @db.execute(
+          <<~SQL,
+            INSERT INTO paper_funding_fees (pair, position_id, amount, rate, position_value, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+          SQL
+          [pair, position_id, bd_str(amount), bd_str(rate), bd_str(position_value), now_iso]
+        )
+        @db.last_insert_row_id
+      end
+
+      def total_funding_fees(pair: nil)
+        if pair
+          v = @db.get_first_value(
+            'SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM paper_funding_fees WHERE pair = ?', pair
+          )
+        else
+          v = @db.get_first_value('SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM paper_funding_fees')
+        end
+        BigDecimal(v.to_s)
+      end
+
+      def funding_fees_for_position(position_id)
+        @db.execute(
+          'SELECT * FROM paper_funding_fees WHERE position_id = ? ORDER BY id', position_id
+        ).map { |r| symbolize(r) }
+      end
+
+      # --- Position stop/trail ---
+
+      def update_position_stop_price(id, stop_price:)
+        @db.execute(
+          'UPDATE paper_positions SET stop_price = ?, updated_at = ? WHERE id = ?',
+          [bd_str(stop_price), now_iso, id]
+        )
+      end
+
+      def update_position_initial_stop_price(id, initial_stop_price:)
+        @db.execute(
+          'UPDATE paper_positions SET initial_stop_price = ?, updated_at = ? WHERE id = ?',
+          [bd_str(initial_stop_price), now_iso, id]
+        )
+      end
+
+      def update_position_trail_price(id, trail_price:)
+        @db.execute(
+          'UPDATE paper_positions SET trail_price = ?, updated_at = ? WHERE id = ?',
+          [bd_str(trail_price), now_iso, id]
+        )
+      end
+
       # --- Aggregate queries ---
 
       def total_fees
@@ -320,10 +445,22 @@ module CoindcxBot
             completed_at TEXT
           );
 
+          CREATE TABLE IF NOT EXISTS paper_funding_fees (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pair TEXT NOT NULL,
+            position_id INTEGER NOT NULL,
+            amount TEXT NOT NULL,
+            rate TEXT NOT NULL,
+            position_value TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (position_id) REFERENCES paper_positions(id)
+          );
+
           CREATE INDEX IF NOT EXISTS idx_paper_orders_pair_status ON paper_orders(pair, status);
           CREATE INDEX IF NOT EXISTS idx_paper_positions_pair_status ON paper_positions(pair, status);
           CREATE INDEX IF NOT EXISTS idx_paper_fills_order_id ON paper_fills(order_id);
           CREATE INDEX IF NOT EXISTS idx_paper_order_groups_pair_status ON paper_order_groups(pair, status);
+          CREATE INDEX IF NOT EXISTS idx_paper_funding_fees_position ON paper_funding_fees(position_id);
         SQL
 
         migrate_legacy_columns
@@ -336,6 +473,9 @@ module CoindcxBot
         add_column_if_missing('paper_orders', 'group_role', 'TEXT')
         add_column_if_missing('paper_orders', 'metadata', "TEXT DEFAULT '{}'")
         add_column_if_missing('paper_fills', 'trigger', "TEXT NOT NULL DEFAULT 'market_order'")
+        add_column_if_missing('paper_positions', 'stop_price', 'TEXT')
+        add_column_if_missing('paper_positions', 'trail_price', 'TEXT')
+        add_column_if_missing('paper_positions', 'initial_stop_price', 'TEXT')
       end
 
       def add_column_if_missing(table, column, sql_type)

@@ -91,12 +91,14 @@ module CoindcxBot
           rest =
             if paper_metrics?(snap)
               pm = snap.paper_metrics
-              [
+              funding_s = pm[:total_funding_fees] ? "#{bold('FUND: ')}#{fmt_num(pm[:total_funding_fees])}" : nil
+              parts = [
                 "#{bold('REAL USDT: ')}#{fmt_num(pm[:total_realized_pnl])}",
                 "#{bold('UNREAL USDT: ')}#{colored_num(pm[:unrealized_pnl])}",
+                funding_s,
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
-              ].join(dim(' │ '))
+              ].compact.join(dim(' │ '))
             else
               [
                 dim('REAL USDT: —'),

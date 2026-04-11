@@ -33,7 +33,7 @@ module CoindcxBot
         true
       end
 
-      def process_tick(pair:, ltp:, high: nil, low: nil)
+      def process_tick(pair:, ltp:, high: nil, low: nil, candles: nil)
         return [] if @tick_base_url.empty? || ltp.nil?
 
         require 'coindcx'

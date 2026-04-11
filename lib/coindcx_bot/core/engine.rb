@@ -231,7 +231,26 @@ module CoindcxBot
           candle = (@candles_exec[pair] || []).last
           high = candle&.high
           low = candle&.low
-          @broker.process_tick(pair: pair, ltp: ltp, high: high, low: low)
+          results = @broker.process_tick(
+            pair: pair,
+            ltp: ltp,
+            high: high,
+            low: low,
+            candles: @candles_exec[pair]
+          )
+
+          # Sync broker-driven exits (SL/TP fills) back to journal + PnL
+          results.each do |r|
+            next unless r[:kind] == :exit
+
+            @coord.handle_broker_exit(
+              pair: r[:pair],
+              realized_pnl_usdt: r[:realized_pnl_usdt],
+              fill_price: r[:fill_price],
+              position_id: r[:position_id],
+              trigger: r[:trigger]
+            )
+          end
         end
       end
 
@@ -254,6 +273,7 @@ module CoindcxBot
           paper_cfg = config.raw.fetch(:paper, {})
           slippage = paper_cfg.fetch(:slippage_bps, 5)
           fee = paper_cfg.fetch(:fee_bps, 4)
+          funding = paper_cfg.fetch(:funding_rate_bps, 1)
           db_path = File.expand_path(
             paper_cfg.fetch(:db_path, './data/paper_trading.sqlite3'),
             Dir.pwd
@@ -262,7 +282,13 @@ module CoindcxBot
           fill_engine = Execution::FillEngine.new(slippage_bps: slippage, fee_bps: fee)
           store = Persistence::PaperStore.new(db_path)
 
-          Execution::PaperBroker.new(store: store, fill_engine: fill_engine, logger: @logger)
+          Execution::PaperBroker.new(
+            store: store,
+            fill_engine: fill_engine,
+            logger: @logger,
+            funding_rate_bps: funding,
+            trail_config: config.strategy
+          )
         else
           Execution::LiveBroker.new(
             order_gateway: @orders,
@@ -285,6 +311,10 @@ module CoindcxBot
         base = @broker.metrics
         base[:total_realized_pnl] = @journal.sum_paper_realized_pnl_usdt if base[:total_realized_pnl].nil?
         base[:unrealized_pnl] = @broker.unrealized_pnl(ltp_map)
+
+        # Record periodic equity snapshot for curve analysis
+        @broker.record_snapshot(ltp_map) if @broker.respond_to?(:record_snapshot)
+
         base
       end
 

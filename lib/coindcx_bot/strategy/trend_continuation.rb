@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require_relative 'dynamic_trail'
 
 module CoindcxBot
   module Strategy
@@ -198,10 +199,31 @@ module CoindcxBot
                               metadata: { position_id: id })
           end
 
-          trail = compute_trail_long(exec, stop)
-          if trail > stop
-            return Signal.new(action: :trail, pair: pair, side: side, stop_price: trail, reason: 'atr_trail',
-                              metadata: { position_id: id })
+          initial_stop = BigDecimal((position[:initial_stop_price] || position[:stop_price]).to_s)
+          out = trail_calculator.call(
+            DynamicTrail::Input.new(
+              side: :long,
+              candles: exec,
+              entry_price: entry,
+              initial_stop: initial_stop,
+              current_stop: stop,
+              ltp: price
+            )
+          )
+          if out.changed
+            return Signal.new(
+              action: :trail,
+              pair: pair,
+              side: side,
+              stop_price: out.stop_price,
+              reason: out.reason,
+              metadata: {
+                position_id: id,
+                tier: out.tier,
+                v_factor: out.v_factor,
+                vol_factor: out.vol_factor
+              }
+            )
           end
         else
           return close_signal(pair, side, id, 'stop') if price >= stop
@@ -212,10 +234,31 @@ module CoindcxBot
                               metadata: { position_id: id })
           end
 
-          trail = compute_trail_short(exec, stop)
-          if trail < stop
-            return Signal.new(action: :trail, pair: pair, side: side, stop_price: trail, reason: 'atr_trail',
-                              metadata: { position_id: id })
+          initial_stop = BigDecimal((position[:initial_stop_price] || position[:stop_price]).to_s)
+          out = trail_calculator.call(
+            DynamicTrail::Input.new(
+              side: :short,
+              candles: exec,
+              entry_price: entry,
+              initial_stop: initial_stop,
+              current_stop: stop,
+              ltp: price
+            )
+          )
+          if out.changed
+            return Signal.new(
+              action: :trail,
+              pair: pair,
+              side: side,
+              stop_price: out.stop_price,
+              reason: out.reason,
+              metadata: {
+                position_id: id,
+                tier: out.tier,
+                v_factor: out.v_factor,
+                vol_factor: out.vol_factor
+              }
+            )
           end
         end
 
@@ -227,18 +270,8 @@ module CoindcxBot
                    metadata: { position_id: id })
       end
 
-      def compute_trail_long(exec, current_stop)
-        swing = exec.last(5).map(&:low).min
-        atr_val = Indicators.atr(exec, atr_p) || BigDecimal('0')
-        chandelier = exec.last.close - atr_val * BigDecimal('1.5')
-        [swing, chandelier, current_stop].max
-      end
-
-      def compute_trail_short(exec, current_stop)
-        swing = exec.last(5).map(&:high).max
-        atr_val = Indicators.atr(exec, atr_p) || BigDecimal('0')
-        chandelier = exec.last.close + atr_val * BigDecimal('1.5')
-        [swing, chandelier, current_stop].min
+      def trail_calculator
+        @trail_calculator ||= DynamicTrail::Calculator.new(@cfg)
       end
     end
   end

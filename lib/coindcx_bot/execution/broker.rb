@@ -24,7 +24,7 @@ module CoindcxBot
       end
 
       # Paper: evaluate working orders against the latest tick. Live: no-op.
-      def process_tick(pair:, ltp:, high: nil, low: nil)
+      def process_tick(pair:, ltp:, high: nil, low: nil, candles: nil)
         []
       end
 
