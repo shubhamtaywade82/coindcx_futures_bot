@@ -2,6 +2,10 @@
 
 Authoritative reference for adding **Hidden Markov Model (HMM) regime detection** and **volatility-ranked allocation** to this repository (**coindcx_futures_bot**), using **Ruby-first** HMM math, the **coindcx-client** gem (`../coindcx-client` via Bundler path or published gem) for all CoinDCX HTTP/WebSocket I/O, and **long/short-capable** USDT-M futures logic.
 
+## Implementation status (codebase)
+
+Implemented in-repo: **diagonal Gaussian HMM** ([`lib/coindcx_bot/regime/gaussian_hmm_diag.rb`](lib/coindcx_bot/regime/gaussian_hmm_diag.rb)), **features + engine + runtime** ([`hmm_engine.rb`](lib/coindcx_bot/regime/hmm_engine.rb), [`hmm_runtime.rb`](lib/coindcx_bot/regime/hmm_runtime.rb)), **Engine** integration (train/load, forward filter each `tick_cycle` after candles), **TUI** `Mdl:` / `AI:` line ([`regime_strip_panel.rb`](lib/coindcx_bot/tui/panels/regime_strip_panel.rb)), **Ollama** context fusion ([`ai_brain.rb`](lib/coindcx_bot/regime/ai_brain.rb) + `regime.ai.include_hmm_context`), **RegimeVolTier** strategy + **RegimeSizer**, **CLI** `regime-backtest`, **Backtest::RegimeWalkForward**. Optional **`regime.ai.soft_veto`** (LLM blocking orders) is intentionally not implemented — keep execution deterministic unless you add explicit config + tests later.
+
 ## 1. Project overview
 
 The bot classifies **volatility regimes** from observable market features, maps regimes to **target exposure, side, and leverage**, and routes orders through the existing execution stack. **Risk and circuit breakers operate on realized PnL and portfolio state**, not on HMM beliefs: the HMM may suggest size; risk may veto or modify.

@@ -118,6 +118,14 @@ module CoindcxBot
       raw.fetch(:risk, {})
     end
 
+    def flatten_on_daily_loss_breach?
+      truthy?(risk[:flatten_on_daily_loss_breach])
+    end
+
+    def pause_after_daily_loss_flatten?
+      truthy?(risk[:pause_after_daily_loss_flatten])
+    end
+
     def strategy
       raw.fetch(:strategy, {})
     end
@@ -188,6 +196,69 @@ module CoindcxBot
     def regime_ai_retry_attempts
       n = regime_ai_section.fetch(:retry_attempts, 3).to_i
       [[n, 1].max, 8].min
+    end
+
+    def regime_ai_include_hmm_context?
+      return false unless regime_ai_enabled?
+
+      truthy?(regime_ai_section.fetch(:include_hmm_context, true))
+    end
+
+    def regime_ai_mode
+      regime_ai_section.fetch(:mode, 'tui_narrative').to_s.strip
+    end
+
+    def regime_hmm_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:hmm, {})
+    end
+
+    def regime_hmm_enabled?
+      regime_enabled? && truthy?(regime_hmm_section[:enabled])
+    end
+
+    def regime_hmm_hash
+      regime_hmm_section
+    end
+
+    def regime_hmm_persistence_path_for(pair = nil)
+      base = regime_hmm_section.fetch(:persistence_path, './data/regime_hmm.json').to_s
+      expanded = File.expand_path(base, Dir.pwd)
+      return expanded if pair.nil? || pair.to_s.strip.empty?
+
+      dir = File.dirname(expanded)
+      stem = File.basename(expanded, '.*')
+      ext = File.extname(expanded)
+      ext = '.json' if ext.empty?
+      File.join(dir, "#{stem}_#{pair}#{ext}")
+    end
+
+    def regime_scope
+      regime_hmm_section.fetch(:scope, 'per_pair').to_s.strip.downcase
+    end
+
+    def regime_strategy_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:strategy, {})
+    end
+
+    def regime_backtest_section
+      raw.fetch(:regime_backtest, {})
+    end
+
+    def regime_risk_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:risk, {})
+    end
+
+    def regime_risk_enabled?
+      regime_enabled? && truthy?(regime_risk_section[:enabled])
     end
 
     # Paper trading: no exchange orders or account exits. `runtime.paper` is an alias for `runtime.dry_run`.

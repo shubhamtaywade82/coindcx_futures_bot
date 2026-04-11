@@ -18,6 +18,10 @@ capital_inr: 1_00_000
 risk:
   max_open_positions: 2
   max_leverage: 10
+  # When daily *realized* loss hits max_daily_loss_* , flatten all open positions (entries are already blocked).
+  # Scalper preset sets these true by default for keys you omit. Pause stops new signals until you resume (r).
+  # flatten_on_daily_loss_breach: false
+  # pause_after_daily_loss_flatten: false
   # Optional (% of capital_inr). Defaults: per-trade 1.5% (when both per_trade_inr_min/max are omitted);
   # clamp floor/ceiling 0.25% / 3%; daily loss halt 3.5%. TUI UTIL = loss vs daily cap, not margin use.
   # per_trade_capital_pct: 1.5
@@ -44,6 +48,14 @@ strategy:
   structure_bars: 0
   adx_period: 14
   adx_min: 0
+
+  # Optional: exit when unrealized USDT falls from the session peak (see engine bump + Strategy::HwmGiveback).
+  # Default off unless you set enabled: true (scalper preset may merge defaults for omitted keys).
+  # hwm_giveback:
+  #   enabled: false
+  #   min_peak_usdt: 10
+  #   giveback_pct: 0.35
+  #   # giveback_usdt: 5
 
   # Optional: switch engine strategy (default = trend_continuation when omitted).
   # Supertrend on execution_resolution (use 5m below); exits only at take_profit_pct — no Supertrend-based exit.
@@ -88,12 +100,36 @@ runtime:
   # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
   # log_strategy_signals: true
 
-# Regime strip + optional AI analyst (local Ollama via ollama-client; retries via ollama_agent when use_retry_middleware).
-# See docs/hmm_regime_trading_spec.md. AI is advisory only — it does not route orders until you wire strategy logic.
+# Regime: HMM (Ruby diagonal Gaussian), optional Ollama narrative, optional risk size multipliers.
+# See docs/hmm_regime_trading_spec.md. Ollama does not submit orders; strategy `regime_vol_tier` gates entries from HMM tier.
 # regime:
 #   enabled: false
+#   scope: per_pair
+#   hmm:
+#     enabled: false
+#     persistence_path: ./data/regime_hmm.json
+#     n_candidates: [3, 4, 5]
+#     n_init: 3
+#     em_iterations: 40
+#     min_train_bars: 80
+#     zscore_lookback: 60
+#     stability_bars: 3
+#     flicker_window: 20
+#     flicker_threshold: 4
+#     min_confidence: 0.55
+#     retrain_every_bars: 0
+#   strategy:
+#     block_entries_high_vol: true
+#     block_on_flicker: false
+#   risk:
+#     enabled: false
+#     daily_dd_reduce_pct_of_capital: 2
+#     daily_dd_halt_pct_of_capital: 3
+#     size_reduce_factor: 0.5
 #   ai:
 #     enabled: false
+#     include_hmm_context: true
+#     mode: tui_narrative
 #     model: llama3.2:3b
 #     ollama_base_url: http://127.0.0.1:11434
 #     timeout_seconds: 90
@@ -103,6 +139,16 @@ runtime:
 #     temperature: 0.15
 #     use_retry_middleware: true
 #     retry_attempts: 3
+#
+# regime_backtest:
+#   n_candidates: [3, 4]
+#   n_init: 2
+#   em_iterations: 25
+#   zscore_lookback: 40
+#
+# strategy:
+#   name: regime_vol_tier
+#   inner_strategy: trend_continuation
 
 # Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.

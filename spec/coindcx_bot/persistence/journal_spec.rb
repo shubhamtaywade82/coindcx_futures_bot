@@ -79,6 +79,29 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(BigDecimal(row[:entry_price])).to eq(BigDecimal('100.05'))
   end
 
+  it 'migrates peak_unrealized_usdt and bumps monotonically' do
+    journal = described_class.new(path)
+    id = journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil
+    )
+    expect(journal.bump_peak_unrealized_usdt(id, BigDecimal('-2'))).to eq(BigDecimal('-2'))
+    expect(journal.bump_peak_unrealized_usdt(id, BigDecimal('5'))).to eq(BigDecimal('5'))
+    expect(journal.bump_peak_unrealized_usdt(id, BigDecimal('3'))).to eq(BigDecimal('5'))
+
+    row = journal.open_positions.first
+    expect(BigDecimal(row[:peak_unrealized_usdt])).to eq(BigDecimal('5'))
+  end
+
+  it 'returns nil from bump_peak_unrealized_usdt when position is missing' do
+    journal = described_class.new(path)
+    expect(journal.bump_peak_unrealized_usdt(99_999, BigDecimal('1'))).to be_nil
+  end
+
   it 'stores initial_stop_price and leaves it unchanged when stop is trailed' do
     journal = described_class.new(path)
     id = journal.insert_position(

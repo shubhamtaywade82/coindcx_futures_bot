@@ -3,6 +3,7 @@
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../term_width'
 
 module CoindcxBot
   module Tui
@@ -251,10 +252,7 @@ module CoindcxBot
         end
 
         def term_width
-          tw = TTY::Screen.width
-          tw = tw.to_i if tw
-          tw = 100 if tw.nil? || tw < 100
-          tw
+          TermWidth.columns
         end
 
         def column_widths(total_w)

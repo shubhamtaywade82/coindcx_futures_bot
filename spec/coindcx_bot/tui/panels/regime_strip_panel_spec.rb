@@ -31,7 +31,7 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
   let(:panel) { described_class.new(engine: engine, origin_row: 2, output: output) }
 
-  before { allow(TTY::Screen).to receive(:width).and_return(100) }
+  before { allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(100) }
 
   describe '#render' do
     it 'draws the regime frame and OFF state when regime is disabled', :aggregate_failures do
@@ -39,7 +39,8 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
       s = output.string
       expect(s).to include('REGIME')
       expect(s).to include('OFF')
-      expect(s).to include('HMM:off')
+      expect(s).to include('Mdl:')
+      expect(s).to include('AI:off')
     end
 
     it 'shows STANDBY and n/a placeholders when regime is enabled in config' do

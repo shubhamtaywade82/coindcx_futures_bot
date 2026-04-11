@@ -108,7 +108,7 @@ If `bin/bot run` logs `CoinDCX::Errors::SocketConnectionError` with retries:
 
 The repo can bundle **[ollama_agent](https://github.com/shubhamtaywade82/ollama_agent)** under **`group :development`** (path gem → `../../../ai-workspace/ollama_agent` from this checkout). It runs a **local Ollama** coding agent: read/search the tree, patches, **`self_review`**, **`improve`** (sandbox + tests + optional `--apply`). Use it to **iterate on strategy/risk code and specs**, not to drive live trades.
 
-**Not integrated into the engine:** there is **no** Ollama call on the tick or order path; execution stays deterministic.
+**Regime + Ollama (runtime, optional):** when `regime.enabled` and `regime.ai.enabled` are true, the engine calls **Ollama** on a **throttled** timer (see `min_interval_seconds`) for a **JSON regime narrative** only — **no LLM on order submission**. Quantitative **HMM** filtering (`regime.hmm.enabled`) runs on candle refresh; use `strategy.name: regime_vol_tier` to gate new entries by vol tier. **`bundle exec bin/bot regime-backtest [PAIR]`** runs a deterministic walk-forward HMM fit (REST candles, no Ollama).
 
 **Prerequisites:** Ollama running with a tool-capable model; **`patch`** on `PATH`; **`rg`** or **`grep`** for search. See the upstream README for env vars (`OLLAMA_AGENT_MODEL`, cloud URL/key, etc.).
 

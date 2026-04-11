@@ -49,6 +49,11 @@ strategy:
   adx_period: 14
   adx_min: 0
 
+  hwm_giveback:
+    enabled: true
+    min_peak_usdt: 10
+    giveback_pct: 0.35
+
   # Dynamic trailing (TrendContinuation + in-process PaperBroker when exec candles are passed).
   # All optional; lib defaults apply when omitted.
   # trail_atr_period: 14
@@ -108,8 +113,20 @@ runtime:
 # HMM regime detection (see docs/hmm_regime_trading_spec.md). TUI shows a REGIME strip; metrics fill in when HmmEngine is wired.
 regime:
   enabled: true
+  scope: per_pair
+  hmm:
+    enabled: true
+    persistence_path: ./data/regime_hmm.json
+    n_candidates: [3, 4, 5]
+    n_init: 3
+    em_iterations: 35
+    min_train_bars: 80
+    zscore_lookback: 60
+    retrain_every_bars: 0
   ai:
-    enabled: trye
+    enabled: false
+    include_hmm_context: true
+    mode: tui_narrative
     model: llama3.2:3b
     ollama_base_url: http://127.0.0.1:11434
     timeout_seconds: 90

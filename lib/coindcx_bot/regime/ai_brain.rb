@@ -24,6 +24,14 @@ module CoindcxBot
         notes (one short sentence rationale).
       PROMPT
 
+      SYSTEM_PROMPT_WITH_HMM = <<~PROMPT.gsub(/\s+/, ' ').strip.freeze
+        You review OHLCV plus a **quantitative HMM regime summary** already computed by the bot.
+        Narrate agreement or tension with that summary in your notes; do not invent different state probabilities.
+        Same JSON keys as the base analyst (regime_label, probability_pct, stability_bars, flicker_hint, confirmed,
+        vol_rank, vol_rank_total, transition_summary, notes). If you disagree with the HMM, say so briefly in notes
+        and set confirmed to false.
+      PROMPT
+
       def initialize(config:, logger: nil)
         @config = config
         @logger = logger
@@ -32,8 +40,15 @@ module CoindcxBot
 
       def analyze!(context)
         ensure_ollama_loaded!
+        hmm = context[:hmm]
+        sys =
+          if hmm.is_a?(Hash) && !hmm.empty?
+            SYSTEM_PROMPT_WITH_HMM
+          else
+            SYSTEM_PROMPT
+          end
         messages = [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: sys },
           { role: 'user', content: build_user_message(context) }
         ]
         model = resolved_model
@@ -182,6 +197,11 @@ module CoindcxBot
             lines << "  #{idx} o=#{b[:o]} h=#{b[:h]} l=#{b[:l]} c=#{b[:c]} v=#{b[:v]}"
           end
           lines << ''
+        end
+        if context[:hmm].is_a?(Hash) && context[:hmm].any?
+          lines << ''
+          lines << 'HMM summary (from Ruby forward filter; do not contradict state_id without saying so in notes):'
+          context[:hmm].each { |pair, h| lines << "  #{pair}: #{h.inspect}" }
         end
         lines << 'Respond with ONLY the JSON object, no markdown fences.'
         lines.join("\n")

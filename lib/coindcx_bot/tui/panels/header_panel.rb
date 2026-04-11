@@ -4,6 +4,7 @@ require 'bigdecimal'
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../term_width'
 
 module CoindcxBot
   module Tui
@@ -53,7 +54,7 @@ module CoindcxBot
         end
 
         def term_width
-          TTY::Screen.width || 80
+          TermWidth.columns
         end
 
         def move(row)

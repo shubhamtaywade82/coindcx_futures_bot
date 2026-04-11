@@ -112,6 +112,29 @@ module CoindcxBot
         @db.execute('UPDATE positions SET partial_done = 1 WHERE id = ?', id)
       end
 
+      # Monotonic max unrealized USDT (MFE) for HWM giveback; persists peak_unrealized_usdt.
+      def bump_peak_unrealized_usdt(id, current_usdt)
+        return nil if id.nil?
+
+        cur = BigDecimal(current_usdt.to_s)
+        row = @db.get_first_row(
+          'SELECT peak_unrealized_usdt FROM positions WHERE id = ? AND state = ?',
+          [id, 'open']
+        )
+        return nil unless row
+
+        raw = row['peak_unrealized_usdt']
+        prev = blank?(raw) ? nil : BigDecimal(raw.to_s)
+        new_peak = prev.nil? ? cur : [prev, cur].max
+        return new_peak if prev == new_peak
+
+        @db.execute(
+          'UPDATE positions SET peak_unrealized_usdt = ? WHERE id = ? AND state = ?',
+          [new_peak.to_s('F'), id, 'open']
+        )
+        new_peak
+      end
+
       def close_position(id)
         return if id.nil?
 
@@ -192,9 +215,13 @@ module CoindcxBot
 
       def migrate_positions_columns
         cols = @db.table_info('positions').map { |r| r['name'] }
-        return if cols.include?('initial_stop_price')
+        unless cols.include?('initial_stop_price')
+          @db.execute('ALTER TABLE positions ADD COLUMN initial_stop_price TEXT')
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        return if cols.include?('peak_unrealized_usdt')
 
-        @db.execute('ALTER TABLE positions ADD COLUMN initial_stop_price TEXT')
+        @db.execute('ALTER TABLE positions ADD COLUMN peak_unrealized_usdt TEXT')
       end
     end
   end

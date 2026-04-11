@@ -49,7 +49,7 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
   end
 
   before do
-    allow(TTY::Screen).to receive(:width).and_return(100)
+    allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(100)
     allow(engine).to receive(:ws_feed_stale?).with('B-SOL_USDT').and_return(false)
   end
 

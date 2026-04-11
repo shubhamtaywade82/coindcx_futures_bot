@@ -17,6 +17,8 @@ module CoindcxBot
         exit(Doctor.run ? 0 : 1)
       when 'paper-status'
         exit(PaperStatus.run ? 0 : 1)
+      when 'regime-backtest'
+        exit(regime_backtest(argv) ? 0 : 1)
       when 'help', '--help', '-h'
         help
       else
@@ -37,6 +39,45 @@ module CoindcxBot
       return if last.nil?
 
       ENV[CoindcxBot::ScalperProfile::ENV_KEY] = last == '--scalper' ? 'scalper' : 'swing'
+    end
+
+    def self.regime_backtest(argv)
+      pair = argv[0]
+      logger = Logger.new($stdout)
+      config = Config.load
+      pair ||= config.pairs.first
+      raise 'no pair' if pair.nil? || pair.to_s.strip.empty?
+
+      CoinDCX.configure do |c|
+        c.api_key = ENV.fetch('COINDCX_API_KEY').to_s.strip
+        c.api_secret = ENV.fetch('COINDCX_API_SECRET').to_s.strip
+        c.logger = logger
+      end
+      client = CoinDCX.client
+      md = Gateways::MarketDataGateway.new(
+        client: client,
+        margin_currency_short_name: config.margin_currency_short_name
+      )
+      lookback = config.runtime.fetch(:candle_lookback, 200).to_i
+      res = config.strategy.fetch(:execution_resolution, '15m').to_s
+      mult = Core::Engine.resolution_seconds(res)
+      to = Time.now.to_i
+      from = to - (lookback * mult)
+      candles_res = md.list_candlesticks(pair: pair, resolution: res, from: from, to: to)
+      unless candles_res.ok?
+        warn("candles: #{candles_res.message}")
+        return false
+      end
+
+      candles = candles_res.value
+      hmm_cfg = config.regime_hmm_hash.merge(config.regime_backtest_section)
+      result = Backtest::RegimeWalkForward.run(candles: candles, hmm_config: hmm_cfg)
+      puts "pair=#{pair} train=#{result.train_bars} oos=#{result.oos_bars} states=#{result.n_states} BIC=#{result.bic.round(2)} oos_loglik=#{result.log_lik.round(4)}"
+      true
+    rescue StandardError => e
+      warn e.message
+      warn e.backtrace.first(5).join("\n")
+      false
     end
 
     def self.run_engine
@@ -61,6 +102,7 @@ module CoindcxBot
           tui     — engine + TTY dashboard (auto-refresh + single-key commands)
           doctor        — verify credentials and list SOL/ETH futures instruments
           paper-status  — print journal open positions + today's INR PnL + recent paper_realized events
+          regime-backtest [PAIR] — fetch exec candles, walk-forward HMM fit (read-only; no Ollama)
           help          — this message
 
         Environment: COINDCX_API_KEY, COINDCX_API_SECRET (optional: .env / .env.local in repo root)

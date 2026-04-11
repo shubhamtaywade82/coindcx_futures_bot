@@ -3,6 +3,7 @@
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../term_width'
 
 module CoindcxBot
   module Tui
@@ -46,10 +47,7 @@ module CoindcxBot
         end
 
         def term_width
-          tw = TTY::Screen.width
-          tw = tw.to_i if tw
-          tw = 100 if tw.nil? || tw < 100
-          tw
+          TermWidth.columns
         end
 
         def top_rule(w)
@@ -84,12 +82,18 @@ module CoindcxBot
 
         def line_secondary(r, w)
           text_w = w - 4
+          q = r[:quant_display].to_s
+          q = '—' if q.strip.empty?
+          ai = r[:hmm_display].to_s
+          ai = '—' if ai.strip.empty?
           plain = [
             "VolRank:#{display_vol_rank(r)}",
             "A:#{display_transition(r)}",
-            "HMM:#{r[:hmm_display]}"
+            "Mdl:#{q}",
+            "AI:#{ai}"
           ].join(' ')
-          dim(box_line(plain, text_w))
+          line = plain.length > text_w ? "#{plain[0, text_w - 1]}…" : plain.ljust(text_w)
+          "│ #{dim(line)} │"
         end
 
         def standby_waiting?(r)
@@ -147,7 +151,7 @@ module CoindcxBot
         end
 
         def clear_line(content)
-          "#{content}\e[K"
+          "\e[0m#{content}\e[K"
         end
 
         def dim(str) = "\e[2m#{str}\e[0m"
