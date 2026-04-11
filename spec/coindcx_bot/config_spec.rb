@@ -88,4 +88,58 @@ RSpec.describe CoindcxBot::Config do
       described_class.new(minimal_bot_config(pairs: too_many))
     end.to raise_error(CoindcxBot::Config::ConfigurationError, /got #{CoindcxBot::Config::MAX_PAIRS + 1}/)
   end
+
+  describe 'scalper mode' do
+    around do |ex|
+      prev = ENV[CoindcxBot::ScalperProfile::ENV_KEY]
+      ENV.delete(CoindcxBot::ScalperProfile::ENV_KEY)
+      ex.run
+      if prev
+        ENV[CoindcxBot::ScalperProfile::ENV_KEY] = prev
+      else
+        ENV.delete(CoindcxBot::ScalperProfile::ENV_KEY)
+      end
+    end
+
+    it 'applies scalper defaults for missing keys when runtime.mode is scalper' do
+      base = minimal_bot_config
+      cfg = described_class.new(
+        base.merge(
+          runtime: base[:runtime].except(:refresh_candles_seconds).merge(mode: 'scalper'),
+          strategy: base[:strategy].except(:execution_resolution, :higher_timeframe_resolution)
+        )
+      )
+      expect(cfg.scalper_mode?).to be(true)
+      expect(cfg.trading_mode_label).to eq('SCALP')
+      expect(cfg.runtime[:refresh_candles_seconds]).to eq(12)
+      expect(cfg.strategy[:execution_resolution]).to eq('5m')
+      expect(cfg.strategy[:higher_timeframe_resolution]).to eq('15m')
+    end
+
+    it 'does not override explicit runtime or strategy keys when scalper' do
+      cfg = described_class.new(
+        minimal_bot_config(
+          runtime: minimal_bot_config[:runtime].merge(mode: 'scalper', refresh_candles_seconds: 30),
+          strategy: minimal_bot_config[:strategy].merge(execution_resolution: '1h')
+        )
+      )
+      expect(cfg.runtime[:refresh_candles_seconds]).to eq(30)
+      expect(cfg.strategy[:execution_resolution]).to eq('1h')
+      expect(cfg.strategy[:higher_timeframe_resolution]).to eq('1h')
+    end
+
+    it 'enables scalper via ENV and forces swing off via COINDCX_BOT_MODE=swing' do
+      ENV[CoindcxBot::ScalperProfile::ENV_KEY] = 'scalper'
+      expect(described_class.new(minimal_bot_config).scalper_mode?).to be(true)
+
+      ENV[CoindcxBot::ScalperProfile::ENV_KEY] = 'swing'
+      cfg = described_class.new(
+        minimal_bot_config(
+          runtime: minimal_bot_config[:runtime].merge(mode: 'scalper')
+        )
+      )
+      expect(cfg.scalper_mode?).to be(false)
+      expect(cfg.runtime[:refresh_candles_seconds]).to eq(60)
+    end
+  end
 end

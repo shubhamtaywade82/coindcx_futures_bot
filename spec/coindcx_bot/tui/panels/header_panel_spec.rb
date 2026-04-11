@@ -8,10 +8,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
   let(:config) do
     instance_double(
       CoindcxBot::Config,
-      risk: { max_daily_loss_inr: 1500 },
+      risk: { max_daily_loss_inr: 1500, max_leverage: 10 },
       strategy: { name: 'trend_continuation' },
       inr_per_usdt: BigDecimal('83'),
-      resolved_max_daily_loss_inr: BigDecimal('1500')
+      resolved_max_daily_loss_inr: BigDecimal('1500'),
+      execution: { order_defaults: { leverage: 5 } },
+      scalper_mode?: false
     )
   end
   let(:snapshot) do
@@ -60,6 +62,25 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       expect(rendered).to include('POS:')
       expect(rendered).to include('ORD:')
       expect(rendered).to include('LAST:')
+    end
+
+    it 'shows LAT after FEED on the first status line' do
+      panel.render
+      rendered = output.string
+      expect(rendered.index('FEED:')).to be < rendered.index('LAT:')
+    end
+
+    it 'renders SCALP when config is in scalper mode' do
+      allow(config).to receive(:scalper_mode?).and_return(true)
+      panel.render
+      expect(output.string).to include('SCALP')
+    end
+
+    it 'shows LEV from max_leverage when order_defaults omit leverage (nil.to_i is not 0)' do
+      allow(config).to receive(:execution).and_return({ order_defaults: { margin_currency_short_name: 'USDT' } })
+      allow(config).to receive(:risk).and_return({ max_daily_loss_inr: 1500, max_leverage: 10 })
+      panel.render
+      expect(output.string).to match(/LEV:.*10x/m)
     end
 
     context 'when engine is paused with kill switch' do

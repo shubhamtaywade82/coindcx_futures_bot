@@ -18,13 +18,16 @@ module CoindcxBot
         keyword_init: true
       )
 
-      def initialize(config:, logger: nil, tick_store: nil, on_tick: nil)
+      def initialize(config:, logger: nil, tick_store: nil, on_tick: nil, order_book_store: nil,
+                     on_market_data: nil)
         @config = config
         @logger = logger || Logger.new($stdout)
         @journal = Persistence::Journal.new(config.journal_path)
         @bus = EventBus.new
         @tick_store = tick_store
         @on_tick = on_tick
+        @order_book_store = order_book_store
+        @on_market_data = on_market_data
         @stale_seconds = config.runtime.fetch(:stale_tick_seconds, 45).to_i
         @stale_recovery_sleep = config.runtime.fetch(:stale_recovery_sleep_seconds, 5).to_f
         @tracker = PositionTracker.new(
@@ -338,7 +341,8 @@ module CoindcxBot
           change_pct: tick.change_pct,
           updated_at: tick.received_at,
           bid: bid,
-          ask: ask
+          ask: ask,
+          mark: tick.mark_price
         )
       end
 
@@ -370,7 +374,8 @@ module CoindcxBot
             change_pct: t.change_pct,
             updated_at: t.received_at,
             bid: bid,
-            ask: ask
+            ask: ask,
+            mark: t.mark_price
           )
         end
       end
@@ -418,6 +423,21 @@ module CoindcxBot
         end
       end
 
+      def order_book_ltp_hint(pair)
+        row = @tick_store&.snapshot&.dig(pair)
+        if row&.ltp&.to_f&.positive?
+          return row.ltp
+        end
+
+        px = @tracker.ltp(pair)
+        return nil if px.nil?
+
+        bd = BigDecimal(px.to_s)
+        bd.positive? ? bd.to_f : nil
+      rescue ArgumentError, TypeError
+        nil
+      end
+
       def run_ws_loop
         conn = @ws.connect
         unless conn.ok?
@@ -439,6 +459,24 @@ module CoindcxBot
           @logger.warn("order ws: #{e.message}")
         end
         @last_error = "ws order sub: #{ou.message}" if ou.failure?
+
+        if @order_book_store
+          @config.pairs.each do |pair|
+            ob = @ws.subscribe_futures_order_book(instrument: pair, depth: 10) do |book|
+              ltp_hint = order_book_ltp_hint(pair)
+              @order_book_store.update(
+                pair: book[:pair],
+                bids: book[:bids],
+                asks: book[:asks],
+                ltp_hint: ltp_hint
+              )
+              @on_market_data&.call
+            rescue StandardError => e
+              @logger&.warn("order book ws #{pair}: #{e.message}")
+            end
+            @last_error = "ws orderbook #{pair}: #{ob.message}" if ob.failure?
+          end
+        end
 
         until @stop
           sleep 0.1

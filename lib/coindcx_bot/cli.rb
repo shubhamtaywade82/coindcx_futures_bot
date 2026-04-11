@@ -5,7 +5,9 @@ require 'logger'
 module CoindcxBot
   class CLI
     def self.start(argv)
+      argv = Array(argv).dup
       cmd = argv.shift || 'help'
+      apply_mode_cli_flags!(argv)
       case cmd
       when 'run'
         run_engine
@@ -22,6 +24,19 @@ module CoindcxBot
         help
         exit 1
       end
+    end
+
+    def self.apply_mode_cli_flags!(argv)
+      last = nil
+      argv.delete_if do |a|
+        next false unless a == '--scalper' || a == '--swing'
+
+        last = a
+        true
+      end
+      return if last.nil?
+
+      ENV[CoindcxBot::ScalperProfile::ENV_KEY] = last == '--scalper' ? 'scalper' : 'swing'
     end
 
     def self.run_engine
@@ -52,6 +67,9 @@ module CoindcxBot
         Config: config/bot.yml (see config/bot.yml.example)
         Paper trading: runtime.dry_run or runtime.paper — journals positions, no exchange orders
         CoinDCX-shaped paper exchange: run bin/paper-exchange (see config/bot.yml.example paper_exchange)
+
+        Scalper preset: runtime.mode: scalper in config, or COINDCX_BOT_MODE=scalper, or append --scalper to run/tui.
+        Swing (default overlay off): COINDCX_BOT_MODE=swing or --swing (overrides YAML mode).
       HELP
     end
   end

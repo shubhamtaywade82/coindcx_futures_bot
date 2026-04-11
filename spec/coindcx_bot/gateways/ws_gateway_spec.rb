@@ -69,6 +69,26 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
       expect(tick.change_pct).to eq(BigDecimal('2.5'))
     end
 
+    it 'accepts order book payload when instrument hint is absent' do
+      g = gateway
+      h = g.send(:normalize_payload_hash, { 'bids' => { '1' => '1' }, 'asks' => { '2' => '1' } })
+      expect(g.send(:order_book_payload_applies_to_instrument?, 'B-SOL_USDT', h)).to be true
+    end
+
+    it 'rejects order book payload when instrument hint targets another pair' do
+      g = gateway
+      raw = { 's' => 'B-ETH_USDT', 'bids' => { '2200' => '1' }, 'asks' => { '2210' => '1' } }
+      h = g.send(:normalize_payload_hash, raw)
+      expect(g.send(:order_book_payload_applies_to_instrument?, 'B-SOL_USDT', h)).to be false
+    end
+
+    it 'extracts mark_price from mp when present' do
+      tick = gateway.send(:normalize_tick, 'B-SOL_USDT', { 'p' => '100', 'mp' => '99.75' })
+
+      expect(tick.price).to eq(BigDecimal('100'))
+      expect(tick.mark_price).to eq(BigDecimal('99.75'))
+    end
+
     it 'extracts bid and ask when present on the payload' do
       tick = gateway.send(
         :normalize_tick,
