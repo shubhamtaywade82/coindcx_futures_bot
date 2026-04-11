@@ -5,7 +5,7 @@
 # omit — see lib/coindcx_bot/scalper_profile.rb for the canonical overlay.
 #
 # Environment (optional):
-#   COINDCX_BOT_CONFIG          — path to this YAML (default: config/bot.yml under the gem path)
+#   COINDCX_BOT_CONFIG          — path to this YAML (default: ./config/bot.yml from repo root when running locally)
 #   COINDCX_BOT_MODE            — scalper | swing | default (overrides YAML runtime.mode for preset)
 #   COINDCX_STRATEGY_SIGNALS=1  — log every strategy signal (same as runtime.log_strategy_signals)
 #   COINDCX_WS_TRACE=1          — verbose WebSocket tick logging
