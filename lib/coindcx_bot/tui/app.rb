@@ -18,6 +18,11 @@ module CoindcxBot
         new.run
       end
 
+      # Strips leading slashes so `/focus 1` and `focus 1` both work.
+      def self.normalize_palette_command(buf)
+        buf.to_s.strip.downcase.sub(%r{\A/+}, '').strip
+      end
+
       def initialize
         @cmd_mode = false
         @cmd_buf = +''
@@ -229,7 +234,7 @@ module CoindcxBot
           if fb && !fb.empty?
             "#{prompt}\e[33m#{fb}\e[0m"
           else
-            "#{prompt}#{dim('press / then type a command · help · pause · resume · kill · kill off · flatten · focus 0')}"
+            "#{prompt}#{dim('type a command (/ optional) · help · pause · flatten · /focus 0')}"
           end
         end
       end
@@ -283,7 +288,7 @@ module CoindcxBot
       end
 
       def run_command_buffer(engine)
-        raw = @cmd_buf.strip.downcase
+        raw = self.class.normalize_palette_command(@cmd_buf)
         @cmd_buf.clear
         @cmd_mode = false
         case raw
@@ -295,7 +300,7 @@ module CoindcxBot
         when 'kill off', 'killoff', 'kill-off' then engine.kill_switch_off!; @cmd_feedback = 'kill off'
         when 'flatten', 'flat', 'f' then engine.flatten_all!; @cmd_feedback = 'flatten sent'
         when 'help', 'h', '?'
-          @cmd_feedback = 'pause resume kill kill-off flatten focus N n'
+          @cmd_feedback = 'pause resume kill kill-off flatten focus 0 n (optional leading /)'
         when /\Afocus\s+(\d+)\z/
           @focus&.select_absolute!(Regexp.last_match(1))
           @cmd_feedback = "focus #{Regexp.last_match(1)}"
