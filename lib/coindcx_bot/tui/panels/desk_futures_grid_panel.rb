@@ -32,8 +32,8 @@ module CoindcxBot
           w = term_width
 
           left_w, mid_w, right_w = column_widths(w)
-          ew = (mid_w - 1) / 2
-          ow = mid_w - 1 - ew
+          ew, ow = execution_order_widths(mid_w)
+          wide_exec = ew >= 58
 
           exec_rows = pad_rows(vm.execution_rows, h)
           ord_rows = pad_rows(vm.order_flow_rows, h)
@@ -51,12 +51,12 @@ module CoindcxBot
           r += 1
           buf << move(r) << clear_line(mid_rule(left_w, mid_w, right_w))
           r += 1
-          buf << move(r) << clear_line(header_row(left_w, ew, ow, right_w))
+          buf << move(r) << clear_line(header_row(left_w, ew, ow, right_w, wide_exec: wide_exec))
           r += 1
 
           h.times do |i|
             left = format_book_cell(book_rows[i], left_w)
-            ex = pad_visible(format_exec_cell(exec_rows[i]), ew)
+            ex = pad_visible(format_exec_cell(exec_rows[i], ew, wide_exec: wide_exec), ew)
             ord = pad_visible(format_ord_cell(ord_rows[i]), ow)
             mid = "#{ex}│#{ord}"
             right = format_sidebar_row(sidebar, events, i, h, right_w)
@@ -102,23 +102,106 @@ module CoindcxBot
           pad_visible(line, w)
         end
 
-        def format_exec_cell(row)
+        def format_exec_cell(row, max_visible, wide_exec:)
           return dim('·') if row.nil?
 
-          sym = truncate(row[:symbol].to_s, 8)
+          sym = compact_pair_symbol(row[:symbol])
+          if wide_exec
+            line = format_exec_cell_wide(row, sym)
+            line = shrink_exec_line_to_fit(row, sym) if visible_len(line) > max_visible
+            line = format_exec_cell_compact(row, sym) if visible_len(line) > max_visible
+            line
+          else
+            format_exec_cell_compact(row, sym)
+          end
+        end
+
+        def format_exec_cell_wide(row, sym)
           lst = (row[:last] || row[:ltp]).to_s
           mrk = row[:mark].to_s
-          parts = [
-            yellow(sym),
-            dim(row[:side].to_s[0, 4].ljust(4)),
-            dim(row[:qty].to_s.ljust(4)),
-            dim(row[:entry].to_s.ljust(6)),
-            cyan(lst.ljust(6)),
-            dim(mrk.ljust(6)),
-            dim(row[:sl].to_s.ljust(5)),
+          side = row[:side].to_s.upcase
+          side = side[0, 5].ljust(5) if side.length > 5
+          side = side.ljust(5)
+          [
+            yellow(truncate(sym, 6).ljust(6)),
+            dim(side),
+            dim(format_exec_qty(row[:qty], 10).ljust(10)),
+            dim(row[:entry].to_s.ljust(8)),
+            cyan(lst.ljust(8)),
+            dim(mrk.ljust(8)),
+            dim(row[:sl].to_s.ljust(7)),
             format_pnl_cell(row[:pnl_usdt], row[:pnl_label])
-          ]
-          parts.join(dim(' '))
+          ].join(dim(' '))
+        end
+
+        def format_exec_cell_compact(row, sym)
+          mrk = row[:mark].to_s
+          px = mrk.strip.empty? || mrk == '—' ? (row[:last] || row[:ltp]).to_s : mrk
+          [
+            yellow(truncate(sym, 5).ljust(5)),
+            dim(side_abbrev(row[:side])),
+            dim(format_exec_qty(row[:qty], 9).ljust(9)),
+            dim(row[:entry].to_s.ljust(7)),
+            dim(px.ljust(8)),
+            format_pnl_cell(row[:pnl_usdt], pnl_short_label(row))
+          ].join(dim(' '))
+        end
+
+        def shrink_exec_line_to_fit(row, sym)
+          lst = (row[:last] || row[:ltp]).to_s
+          mrk = row[:mark].to_s
+          side = row[:side].to_s.upcase
+          side = side[0, 5].ljust(5)
+          [
+            yellow(truncate(sym, 6).ljust(6)),
+            dim(side),
+            dim(format_exec_qty(row[:qty], 10).ljust(10)),
+            dim(row[:entry].to_s.ljust(8)),
+            cyan(lst.ljust(8)),
+            dim(mrk.ljust(8)),
+            dim(row[:sl].to_s.ljust(7)),
+            format_pnl_cell(row[:pnl_usdt], pnl_short_label(row))
+          ].join(dim(' '))
+        end
+
+        def pnl_short_label(row)
+          u = row[:pnl_usdt]
+          return '—' if u.nil?
+
+          format('%+.2f', u.to_f)
+        end
+
+        def compact_pair_symbol(pair)
+          pair.to_s.sub(/^B-/, '').sub(/_USDT\z/i, '')
+        end
+
+        def side_abbrev(side)
+          s = side.to_s.downcase
+          return '·' if s == 'flat'
+
+          return 'L' if %w[long buy].include?(s)
+          return 'S' if %w[short sell].include?(s)
+
+          side.to_s[0] || '·'
+        end
+
+        def format_exec_qty(raw, max_chars)
+          s = raw.to_s
+          return '—' if s.strip.empty? || s == '—'
+          return s if s.length <= max_chars
+
+          f = Float(s)
+          if f.abs >= 100_000
+            t = format('%.2e', f)
+          elsif f.abs >= 1000
+            t = format('%.2f', f)
+          else
+            t = format('%.6g', f)
+          end
+          t = t[0, max_chars]
+          t.length < s.length ? t : s[0, max_chars]
+        rescue ArgumentError, TypeError
+          truncate(s, max_chars)
         end
 
         def format_ord_cell(row)
@@ -176,17 +259,30 @@ module CoindcxBot
 
         def column_widths(total_w)
           inner = [total_w - 4, 60].max
-          right = (inner * 0.30).to_i.clamp(24, 48)
-          left = (inner * 0.24).to_i.clamp(22, 34)
+          # Favor a wider center column so positions + orders stay readable.
+          right = (inner * 0.24).to_i.clamp(20, 44)
+          left = (inner * 0.20).to_i.clamp(18, 30)
           mid = inner - left - right
           if mid < 30
             mid = 30
-            left = [inner - mid - right, 20].max
+            left = [inner - mid - right, 18].max
             right = inner - left - mid
-            right = [right, 22].max
+            right = [right, 20].max
             left = inner - mid - right
           end
           [left, mid, right]
+        end
+
+        # Split middle column: positions need more width than the order strip.
+        def execution_order_widths(mid_w)
+          inner = [mid_w - 1, 18].max
+          ow = (inner * 0.28).to_i.clamp(18, 26)
+          ew = inner - ow
+          if ew < 34
+            ow = [inner - 34, 16].max
+            ew = inner - ow
+          end
+          [ew, ow]
         end
 
         def outer_top_rule(lw, mw, rw)
@@ -210,18 +306,30 @@ module CoindcxBot
           "│#{l}│#{m}│#{r}│"
         end
 
-        def header_row(lw, ew, ow, rw)
+        def header_row(lw, ew, ow, rw, wide_exec:)
           lh = [dim('S'), dim('PRICE'.ljust(8)), dim('QTY'.rjust(6))].join(dim(' '))
-          eh = [
-            dim('SYM'.ljust(8)),
-            dim('SD'.ljust(4)),
-            dim('QTY'.ljust(4)),
-            dim('ENT'.ljust(6)),
-            dim('LAST'.ljust(6)),
-            dim('MARK'.ljust(6)),
-            dim('SL'.ljust(5)),
-            dim('PNL')
-          ].join(dim(' '))
+          eh =
+            if wide_exec
+              [
+                dim('SYM'.ljust(6)),
+                dim('SIDE'.ljust(5)),
+                dim('QTY'.ljust(10)),
+                dim('ENT'.ljust(8)),
+                dim('LAST'.ljust(8)),
+                dim('MARK'.ljust(8)),
+                dim('SL'.ljust(7)),
+                dim('PNL')
+              ].join(dim(' '))
+            else
+              [
+                dim('SYM'.ljust(5)),
+                dim('S'),
+                dim('QTY'.ljust(9)),
+                dim('ENT'.ljust(7)),
+                dim('MARK'.ljust(8)),
+                dim('PNL')
+              ].join(dim(' '))
+            end
           oh = [
             dim('T'.ljust(3)),
             dim('PAIR'.ljust(9)),
