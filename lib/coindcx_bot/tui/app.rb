@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'fileutils'
+require 'io/console'
 require 'tty-cursor'
 require 'tty-logger'
 require 'tty-screen'
@@ -22,6 +23,7 @@ module CoindcxBot
         @cmd_buf = +''
         @cmd_feedback = nil
         @focus = nil
+        @stdin_raw_mode = false
       end
 
       def run
@@ -76,6 +78,7 @@ module CoindcxBot
         $stdout.sync = true
         $stderr.sync = true
         redirect_stderr_for_tui!
+        enable_stdin_raw_if_interactive!
         print TTY::Cursor.hide
         print "\e[2J\e[H"
       end
@@ -329,8 +332,31 @@ module CoindcxBot
         @null_log_io&.close
         @null_log_io = nil
         restore_stderr!
+        disable_stdin_raw!
         print TTY::Cursor.show
         print "\e[?25h"
+      end
+
+      # Canonical (cooked) tty input is line-buffered: getc sees nothing until Enter. Raw mode delivers
+      # each byte immediately so the command palette can echo while typing.
+      def enable_stdin_raw_if_interactive!
+        return unless stdin_interactive?
+        return unless $stdin.respond_to?(:raw!)
+
+        $stdin.raw!(intr: true)
+        @stdin_raw_mode = true
+      rescue StandardError
+        @stdin_raw_mode = false
+      end
+
+      def disable_stdin_raw!
+        return unless @stdin_raw_mode
+        return unless $stdin.respond_to?(:cooked!)
+
+        $stdin.cooked!
+        @stdin_raw_mode = false
+      rescue StandardError
+        @stdin_raw_mode = false
       end
     end
   end

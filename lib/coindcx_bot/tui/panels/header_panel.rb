@@ -8,7 +8,7 @@ require 'stringio'
 module CoindcxBot
   module Tui
     module Panels
-      # Top status strip: execution-first summary (mode, engine, kill, feed, latency, balances, desk counts).
+      # Top status strip: execution-first summary (mode, engine, kill, feed, then FOCUS/LEV, latency last).
       class HeaderPanel
         def initialize(engine:, origin_row: 0, origin_col: 0, output: $stdout, focus_pair_proc: nil)
           @engine = engine
@@ -62,6 +62,7 @@ module CoindcxBot
 
         def line_mode_engine_kill_ws_lat_feed(snap, w)
           mode = snap.dry_run ? bold_magenta('PAPER') : bold_red('LIVE')
+          profile = trading_profile_fragment
           eng =
             if snap.running
               green('ENGINE: RUN')
@@ -85,7 +86,7 @@ module CoindcxBot
           feed = snap.stale ? on_yellow(' FEED: STALE ') : green('FEED: OK')
           join_compact(
             w,
-            ["MODE: #{mode}", eng, pause, kill, ws, lat, feed, focus_fragment, leverage_fragment].compact
+            ["MODE: #{mode}", profile, eng, pause, kill, ws, feed, focus_fragment, leverage_fragment, lat].compact
           )
         end
 
@@ -204,6 +205,13 @@ module CoindcxBot
           '0.00'
         end
 
+        def trading_profile_fragment
+          cfg = @engine.config
+          return nil unless cfg.respond_to?(:scalper_mode?) && cfg.scalper_mode?
+
+          yellow('SCALP')
+        end
+
         def focus_fragment
           p = @focus_pair_proc&.call
           return nil if p.nil? || p.to_s.strip.empty?
@@ -215,10 +223,20 @@ module CoindcxBot
           od = @engine.config.execution[:order_defaults] || {}
           lev = od[:leverage] || od['leverage']
           cap = @engine.config.risk[:max_leverage]
-          return nil if lev.nil? && cap.nil?
+          a = optional_positive_int(lev)
+          b = optional_positive_int(cap)
+          return nil if a.nil? && b.nil?
 
-          v = [lev.to_i, cap.to_i].compact.min
+          v = [a, b].compact.min
+          return nil if v.nil? || v <= 0
+
           dim('LEV: ') + yellow("#{v}x")
+        end
+
+        def optional_positive_int(raw)
+          return nil if raw.nil? || raw.to_s.strip.empty?
+
+          Integer(raw)
         rescue ArgumentError, TypeError
           nil
         end

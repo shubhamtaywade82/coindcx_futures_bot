@@ -16,8 +16,14 @@ module CoindcxBot
 
       # @param bids [Array<Hash>] e.g. [{ price: "65000", quantity: "1.2" }, ...]
       # @param asks [Array<Hash>]
-      def update(pair:, bids:, asks:)
+      # @param ltp_hint [Numeric, nil] last/mid price for this pair — rejects cross-instrument fan-out garbage.
+      def update(pair:, bids:, asks:, ltp_hint: nil)
         sym = pair.to_s
+        if ltp_hint && !plausible_depth_vs_ltp?(bids, asks, ltp_hint)
+          @mutex.synchronize { @books.delete(sym) }
+          return
+        end
+
         b = normalize_levels(bids).first(MAX_LEVELS).sort_by { |l| -bd(l[:price]) }
         a = normalize_levels(asks).first(MAX_LEVELS).sort_by { |l| bd(l[:price]) }
         @mutex.synchronize do
@@ -48,6 +54,33 @@ module CoindcxBot
       end
 
       private
+
+      # Wide band: catch ETH book (~2200) stored under SOL (~84) when wire hints are missing.
+      RATIO_MIN = 0.12
+      RATIO_MAX = 8.0
+
+      def plausible_depth_vs_ltp?(bids, asks, ltp)
+        ltp_f = ltp.to_f
+        return true if ltp_f <= 0
+
+        mid = mid_price_from_book(bids, asks)
+        return true if mid.nil?
+
+        r = mid.to_f / ltp_f
+        r >= RATIO_MIN && r <= RATIO_MAX
+      end
+
+      def mid_price_from_book(bids, asks)
+        bs = normalize_levels(bids)
+        as = normalize_levels(asks)
+        return nil if bs.empty? || as.empty?
+
+        best_bid_p = bs.max_by { |l| bd(l[:price]) }&.fetch(:price, nil)
+        best_ask_p = as.min_by { |l| bd(l[:price]) }&.fetch(:price, nil)
+        return nil if best_bid_p.nil? || best_ask_p.nil?
+
+        (bd(best_bid_p) + bd(best_ask_p)) / 2
+      end
 
       def normalize_levels(rows)
         Array(rows).filter_map do |r|

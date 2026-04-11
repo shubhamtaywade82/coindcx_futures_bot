@@ -103,17 +103,20 @@ module CoindcxBot
       end
 
       # Last engine-cycle evaluation per configured pair (hold reasons = strategy is working; flips are rare).
+      def trading_mode_label
+        @config.trading_mode_label
+      end
+
       def configured_leverage_label
         od = @config.execution[:order_defaults] || {}
-        lev = od[:leverage] || od['leverage']
-        cap = @config.risk[:max_leverage]
-        a = lev&.to_i
-        b = cap&.to_i
+        a = optional_positive_int(od[:leverage] || od['leverage'])
+        b = optional_positive_int(@config.risk[:max_leverage])
         return '—' if a.nil? && b.nil?
 
-        "#{[a, b].compact.min}x"
-      rescue ArgumentError, TypeError
-        '—'
+        v = [a, b].compact.min
+        return '—' if v.nil? || v <= 0
+
+        "#{v}x"
       end
 
       def grid_sidebar_lines
@@ -126,7 +129,7 @@ module CoindcxBot
         sig = strategy_signal_summary
         sig = sig.length > 40 ? "#{sig[0, 37]}…" : sig
         [
-          "DD #{dd_s} │ #{risk_band} │ UTIL #{u_s}",
+          "DD #{dd_s} │ #{risk_band} │ UTIL #{u_s} │ #{trading_mode_label}",
           "OPEN #{pos_n} │ ORD #{ord_n} │ #{strategy_name}",
           "#{strategy_position_state} │ #{sig}"
         ]
@@ -166,6 +169,14 @@ module CoindcxBot
       end
 
       private
+
+      def optional_positive_int(raw)
+        return nil if raw.nil? || raw.to_s.strip.empty?
+
+        Integer(raw)
+      rescue ArgumentError, TypeError
+        nil
+      end
 
       def compact_pair_symbol(pair)
         pair.to_s.sub(/^B-/, '').sub(/_USDT\z/i, '')

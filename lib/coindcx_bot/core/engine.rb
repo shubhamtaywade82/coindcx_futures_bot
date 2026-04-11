@@ -423,6 +423,21 @@ module CoindcxBot
         end
       end
 
+      def order_book_ltp_hint(pair)
+        row = @tick_store&.snapshot&.dig(pair)
+        if row&.ltp&.to_f&.positive?
+          return row.ltp
+        end
+
+        px = @tracker.ltp(pair)
+        return nil if px.nil?
+
+        bd = BigDecimal(px.to_s)
+        bd.positive? ? bd.to_f : nil
+      rescue ArgumentError, TypeError
+        nil
+      end
+
       def run_ws_loop
         conn = @ws.connect
         unless conn.ok?
@@ -448,7 +463,13 @@ module CoindcxBot
         if @order_book_store
           @config.pairs.each do |pair|
             ob = @ws.subscribe_futures_order_book(instrument: pair, depth: 10) do |book|
-              @order_book_store.update(pair: book[:pair], bids: book[:bids], asks: book[:asks])
+              ltp_hint = order_book_ltp_hint(pair)
+              @order_book_store.update(
+                pair: book[:pair],
+                bids: book[:bids],
+                asks: book[:asks],
+                ltp_hint: ltp_hint
+              )
               @on_market_data&.call
             rescue StandardError => e
               @logger&.warn("order book ws #{pair}: #{e.message}")

@@ -36,7 +36,9 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
       risk: { max_daily_loss_inr: 1500, max_leverage: 10 },
       strategy: { name: 'trend' },
       resolved_max_daily_loss_inr: BigDecimal('1500'),
-      execution: { order_defaults: { leverage: 5 } }
+      execution: { order_defaults: { leverage: 5 } },
+      trading_mode_label: 'SWING',
+      scalper_mode?: false
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }

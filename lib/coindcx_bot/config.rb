@@ -2,6 +2,7 @@
 
 require 'bigdecimal'
 require 'yaml'
+require_relative 'scalper_profile'
 
 module CoindcxBot
   class Config
@@ -11,6 +12,14 @@ module CoindcxBot
     MAX_PAIRS = 32
 
     attr_reader :raw
+
+    def self.scalper_mode_requested?(raw_hash)
+      env = ENV[ScalperProfile::ENV_KEY].to_s.strip.downcase
+      return false if %w[swing default].include?(env)
+      return true if env == 'scalper'
+
+      raw_hash.dig(:runtime, :mode)&.to_s&.strip&.downcase == 'scalper'
+    end
 
     def self.load(path = nil)
       path ||= ENV.fetch('COINDCX_BOT_CONFIG', DEFAULT_PATH)
@@ -22,10 +31,20 @@ module CoindcxBot
 
     def initialize(hash)
       @raw = deep_symbolize(hash || {})
+      @scalper_mode = self.class.scalper_mode_requested?(@raw)
+      @raw = deep_merge_defaults(@raw, ScalperProfile::OVERLAY) if @scalper_mode
       validate_whitelist!
       validate_risk_pct_sanity!
       validate_risk_band!
       validate_risk_capital_pct!
+    end
+
+    def scalper_mode?
+      @scalper_mode
+    end
+
+    def trading_mode_label
+      @scalper_mode ? 'SCALP' : 'SWING'
     end
 
     def pairs
@@ -141,6 +160,21 @@ module CoindcxBot
     class ConfigurationError < StandardError; end
 
     private
+
+    # Fills in missing keys only (user YAML always wins on explicit keys).
+    def deep_merge_defaults(base, defaults)
+      return base if defaults.nil? || defaults.empty?
+
+      b = base.is_a?(Hash) ? base.dup : {}
+      defaults.each do |k, dv|
+        if dv.is_a?(Hash) && b[k].is_a?(Hash)
+          b[k] = deep_merge_defaults(b[k], dv)
+        elsif !b.key?(k)
+          b[k] = dv
+        end
+      end
+      b
+    end
 
     def truthy?(v)
       v == true || v.to_s.downcase == 'true' || v.to_s == '1'

@@ -69,7 +69,12 @@ module CoindcxBot
         channel = CoinDCX::WS::PublicChannels.futures_order_book(instrument: instrument, depth: depth_i)
         event = CoinDCX::WS::PublicChannels::DEPTH_SNAPSHOT_EVENT
         @ws.subscribe_public(channel_name: channel, event_name: event) do |payload|
-          h = CoinDCX::WS::Parsers::OrderBookSnapshot.parse(coerce_book_payload(payload))
+          raw = normalize_payload_hash(coerce_book_payload(payload))
+          next if raw.empty?
+          # Same Socket.IO fan-out as price-change: drop payloads whose instrument hint targets another market.
+          next unless order_book_payload_applies_to_instrument?(instrument, raw)
+
+          h = CoinDCX::WS::Parsers::OrderBookSnapshot.parse(raw)
           block.call(
             pair: instrument.to_s,
             bids: h[:bids] || [],
@@ -109,6 +114,13 @@ module CoindcxBot
         end
       rescue JSON::ParserError
         {}
+      end
+
+      def order_book_payload_applies_to_instrument?(instrument, normalized_hash)
+        hint = instrument_hint_from_payload(normalized_hash)
+        return true if hint.nil? || hint.to_s.strip.empty?
+
+        payload_instrument_matches?(instrument, normalized_hash)
       end
 
       def ticks_from_current_prices_payload(payload, pairs)

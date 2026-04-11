@@ -37,7 +37,10 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
       CoindcxBot::Config,
       risk: { max_daily_loss_inr: 1500 },
       strategy: { name: 'trend' },
-      resolved_max_daily_loss_inr: BigDecimal('1500')
+      resolved_max_daily_loss_inr: BigDecimal('1500'),
+      execution: { order_defaults: {} },
+      trading_mode_label: 'SWING',
+      scalper_mode?: false
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }

@@ -9,7 +9,9 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
       strategy: { name: 'supertrend_profit' },
       resolved_max_daily_loss_inr: BigDecimal('1500'),
-      execution: { order_defaults: { leverage: 5 } }
+      execution: { order_defaults: { leverage: 5 } },
+      trading_mode_label: 'SWING',
+      scalper_mode?: false
     )
   end
 
@@ -119,6 +121,26 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
     it 'returns the effective leverage cap from config' do
       expect(vm.configured_leverage_label).to eq('5x')
     end
+
+    it 'uses max_leverage when order_defaults omit leverage' do
+      cfg2 = instance_double(
+        CoindcxBot::Config,
+        risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
+        strategy: { name: 'supertrend_profit' },
+        resolved_max_daily_loss_inr: BigDecimal('1500'),
+        execution: { order_defaults: { margin_currency_short_name: 'USDT' } },
+        trading_mode_label: 'SWING',
+        scalper_mode?: false
+      )
+      vm2 = described_class.new(
+        snapshot: snapshot,
+        tick_ticks: tick_ticks,
+        symbols: %w[B-SOL_USDT],
+        ws_stale_fn: ->(_) { false },
+        config: cfg2
+      )
+      expect(vm2.configured_leverage_label).to eq('10x')
+    end
   end
 
   describe '#grid_sidebar_lines' do
@@ -126,6 +148,7 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       lines = vm.grid_sidebar_lines
       expect(lines.size).to eq(3)
       expect(lines[0]).to include('DD')
+      expect(lines[0]).to include('SWING')
       expect(lines[1]).to include('OPEN')
     end
   end

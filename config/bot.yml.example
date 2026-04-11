@@ -65,6 +65,10 @@ execution:
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 120
+  # Trading style preset: `scalper` merges faster candle refresh, 5m/15m strategy TFs, tighter stale
+  # tick window, and faster TUI LTP poll — only for keys you did not set explicitly below.
+  # Or: COINDCX_BOT_MODE=scalper / bin/bot tui --scalper
+  # mode: scalper
   refresh_candles_seconds: 60
   # Seconds without a WebSocket price tick before the feed is stale (new entries blocked).
   stale_tick_seconds: 45

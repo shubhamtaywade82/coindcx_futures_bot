@@ -23,5 +23,26 @@ RSpec.describe CoindcxBot::Tui::OrderBookStore do
       rows = store.display_rows(pair: 'B-ETH_USDT', max_lines: 3)
       expect(rows).to eq(%i[empty empty empty])
     end
+
+    it 'drops depth whose mid is wildly off LTP (Socket.IO cross-pair bleed)' do
+      store.update(
+        pair: 'B-SOL_USDT',
+        bids: [{ price: '2230', quantity: '1' }],
+        asks: [{ price: '2232', quantity: '1' }],
+        ltp_hint: 84.0
+      )
+      expect(store.display_rows(pair: 'B-SOL_USDT', max_lines: 3)).to eq(%i[empty empty empty])
+    end
+
+    it 'stores depth when mid is consistent with LTP hint' do
+      store.update(
+        pair: 'B-SOL_USDT',
+        bids: [{ price: '83.9', quantity: '1' }],
+        asks: [{ price: '84.1', quantity: '1' }],
+        ltp_hint: 84.0
+      )
+      rows = store.display_rows(pair: 'B-SOL_USDT', max_lines: 2)
+      expect(rows[0]).to include(side: :ask, price: '84.1')
+    end
   end
 end
