@@ -8,10 +8,11 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
   let(:config) do
     instance_double(
       CoindcxBot::Config,
-      risk: { max_daily_loss_inr: 1500 },
+      risk: { max_daily_loss_inr: 1500, max_leverage: 10 },
       strategy: { name: 'trend_continuation' },
       inr_per_usdt: BigDecimal('83'),
-      resolved_max_daily_loss_inr: BigDecimal('1500')
+      resolved_max_daily_loss_inr: BigDecimal('1500'),
+      execution: { order_defaults: { leverage: 5 } }
     )
   end
   let(:snapshot) do

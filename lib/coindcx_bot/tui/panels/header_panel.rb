@@ -10,8 +10,9 @@ module CoindcxBot
     module Panels
       # Top status strip: execution-first summary (mode, engine, kill, feed, latency, balances, desk counts).
       class HeaderPanel
-        def initialize(engine:, origin_row: 0, origin_col: 0, output: $stdout)
+        def initialize(engine:, origin_row: 0, origin_col: 0, output: $stdout, focus_pair_proc: nil)
           @engine = engine
+          @focus_pair_proc = focus_pair_proc
           @row = origin_row
           @col = origin_col
           @output = output
@@ -82,7 +83,10 @@ module CoindcxBot
               dim('LAT: —')
             end
           feed = snap.stale ? on_yellow(' FEED: STALE ') : green('FEED: OK')
-          join_compact(w, ["MODE: #{mode}", eng, pause, kill, ws, lat, feed].compact)
+          join_compact(
+            w,
+            ["MODE: #{mode}", eng, pause, kill, ws, lat, feed, focus_fragment, leverage_fragment].compact
+          )
         end
 
         def line_balance_net_real_unreal_dd_risk(snap, vm, w)
@@ -198,6 +202,29 @@ module CoindcxBot
           format('%.2f', BigDecimal((v || 0).to_s))
         rescue ArgumentError, TypeError
           '0.00'
+        end
+
+        def focus_fragment
+          p = @focus_pair_proc&.call
+          return nil if p.nil? || p.to_s.strip.empty?
+
+          dim('FOCUS: ') + cyan(compact_instrument_label(p))
+        end
+
+        def leverage_fragment
+          od = @engine.config.execution[:order_defaults] || {}
+          lev = od[:leverage] || od['leverage']
+          cap = @engine.config.risk[:max_leverage]
+          return nil if lev.nil? && cap.nil?
+
+          v = [lev.to_i, cap.to_i].compact.min
+          dim('LEV: ') + yellow("#{v}x")
+        rescue ArgumentError, TypeError
+          nil
+        end
+
+        def compact_instrument_label(pair)
+          pair.to_s.sub(/\AB-/, '').sub(/_USDT\z/i, '')
         end
 
         def join_compact(_w, parts)

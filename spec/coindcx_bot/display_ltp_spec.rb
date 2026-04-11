@@ -5,7 +5,13 @@ RSpec.describe CoindcxBot::DisplayLtp do
     it 'prefers TickStore LTP when present' do
       ticks = {
         'B-SOL_USDT' => CoindcxBot::Tui::TickStore::Tick.new(
-          'B-SOL_USDT', 99.0, 0.1, Time.now, nil, nil
+          symbol: 'B-SOL_USDT',
+          ltp: 99.0,
+          change_pct: 0.1,
+          updated_at: Time.now,
+          bid: nil,
+          ask: nil,
+          mark: nil
         )
       }
       tracker = { 'B-SOL_USDT' => { price: BigDecimal('50'), at: Time.now } }

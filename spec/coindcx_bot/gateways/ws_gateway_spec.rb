@@ -69,6 +69,13 @@ RSpec.describe CoindcxBot::Gateways::WsGateway do
       expect(tick.change_pct).to eq(BigDecimal('2.5'))
     end
 
+    it 'extracts mark_price from mp when present' do
+      tick = gateway.send(:normalize_tick, 'B-SOL_USDT', { 'p' => '100', 'mp' => '99.75' })
+
+      expect(tick.price).to eq(BigDecimal('100'))
+      expect(tick.mark_price).to eq(BigDecimal('99.75'))
+    end
+
     it 'extracts bid and ask when present on the payload' do
       tick = gateway.send(
         :normalize_tick,

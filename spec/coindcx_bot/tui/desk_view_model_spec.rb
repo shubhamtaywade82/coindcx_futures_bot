@@ -6,9 +6,10 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
   let(:config) do
     instance_double(
       CoindcxBot::Config,
-      risk: { max_daily_loss_inr: 1_500 },
+      risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
       strategy: { name: 'supertrend_profit' },
-      resolved_max_daily_loss_inr: BigDecimal('1500')
+      resolved_max_daily_loss_inr: BigDecimal('1500'),
+      execution: { order_defaults: { leverage: 5 } }
     )
   end
 
@@ -17,7 +18,7 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       pairs: %w[B-SOL_USDT],
       ticks: { 'B-SOL_USDT' => { price: '150.0', at: Time.now } },
       positions: [
-        { pair: 'B-SOL_USDT', side: 'long', quantity: '0.1', entry_price: '140.0' }
+        { pair: 'B-SOL_USDT', side: 'long', quantity: '0.1', entry_price: '140.0', stop_price: '135.0' }
       ],
       paused: false,
       kill_switch: false,
@@ -47,7 +48,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         change_pct: 1.2,
         updated_at: Time.now,
         bid: 149.9,
-        ask: 150.1
+        ask: 150.1,
+        mark: nil
       )
     }
   end
@@ -82,6 +84,49 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         config: config
       )
       expect(vm2.execution_rows.first[:side]).to eq('FLAT')
+    end
+
+    it 'uses mark price for uPnL when the tick store carries mark' do
+      ticks = {
+        'B-SOL_USDT' => CoindcxBot::Tui::TickStore::Tick.new(
+          symbol: 'B-SOL_USDT',
+          ltp: 150.0,
+          change_pct: 1.2,
+          updated_at: Time.now,
+          bid: 149.9,
+          ask: 150.1,
+          mark: 160.0
+        )
+      }
+      vm2 = described_class.new(
+        snapshot: snapshot,
+        tick_ticks: ticks,
+        symbols: %w[B-SOL_USDT],
+        ws_stale_fn: ->(_) { false },
+        config: config
+      )
+      row = vm2.execution_rows.first
+      expect(row[:mark]).to eq('160.00')
+      expect(row[:pnl_label]).to include('+2.00')
+    end
+
+    it 'surfaces journal stop price in the SL column' do
+      expect(vm.execution_rows.first[:sl]).to eq('135.00')
+    end
+  end
+
+  describe '#configured_leverage_label' do
+    it 'returns the effective leverage cap from config' do
+      expect(vm.configured_leverage_label).to eq('5x')
+    end
+  end
+
+  describe '#grid_sidebar_lines' do
+    it 'returns three sidebar lines for the futures grid' do
+      lines = vm.grid_sidebar_lines
+      expect(lines.size).to eq(3)
+      expect(lines[0]).to include('DD')
+      expect(lines[1]).to include('OPEN')
     end
   end
 

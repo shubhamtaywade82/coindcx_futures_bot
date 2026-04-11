@@ -103,6 +103,35 @@ module CoindcxBot
       end
 
       # Last engine-cycle evaluation per configured pair (hold reasons = strategy is working; flips are rare).
+      def configured_leverage_label
+        od = @config.execution[:order_defaults] || {}
+        lev = od[:leverage] || od['leverage']
+        cap = @config.risk[:max_leverage]
+        a = lev&.to_i
+        b = cap&.to_i
+        return '—' if a.nil? && b.nil?
+
+        "#{[a, b].compact.min}x"
+      rescue ArgumentError, TypeError
+        '—'
+      end
+
+      def grid_sidebar_lines
+        pos_n = Array(@snap.positions).size
+        ord_n = Array(@snap.working_orders).size
+        dd = drawdown_pct
+        dd_s = dd.nil? ? '—' : format('%+.2f%%', dd.to_f)
+        u = loss_utilization_pct
+        u_s = u.nil? ? '—' : format('%.1f%%', u.to_f)
+        sig = strategy_signal_summary
+        sig = sig.length > 40 ? "#{sig[0, 37]}…" : sig
+        [
+          "DD #{dd_s} │ #{risk_band} │ UTIL #{u_s}",
+          "OPEN #{pos_n} │ ORD #{ord_n} │ #{strategy_name}",
+          "#{strategy_position_state} │ #{sig}"
+        ]
+      end
+
       def strategy_signal_summary
         return '—' if @snap.paused || @snap.kill_switch
 
@@ -163,17 +192,31 @@ module CoindcxBot
         )
       end
 
+      def mark_price_bd_for_sym(sym)
+        tick = @tick_ticks[sym]
+        m = optional_bd(tick&.mark)
+        return m if m
+
+        optional_bd(merged_display_ltps[sym])
+      end
+
       def execution_row_for(sym, pos_by_pair)
         p = pos_by_pair[sym]
         ltp_bd = optional_bd(merged_display_ltps[sym])
+        mark_bd = mark_price_bd_for_sym(sym)
 
         if p.nil?
+          last_s = fmt_price(ltp_bd)
           return {
             symbol: sym,
             side: 'FLAT',
             qty: '—',
             entry: '—',
-            ltp: fmt_price(ltp_bd),
+            ltp: last_s,
+            last: last_s,
+            mark: fmt_price(mark_bd),
+            sl: '—',
+            liq: '—',
             pnl_usdt: nil,
             pnl_label: '—'
           }
@@ -182,16 +225,28 @@ module CoindcxBot
         side = position_side_label(p)
         qty = (p[:quantity] || p['quantity']).to_s
         entry = optional_bd(p[:entry_price] || p['entry_price'])
-        u = unrealized_usdt(p, ltp_bd)
+        u = unrealized_usdt(p, mark_bd)
+        last_s = fmt_price(ltp_bd)
         {
           symbol: sym,
           side: side,
           qty: qty,
           entry: fmt_price(entry),
-          ltp: fmt_price(ltp_bd),
+          ltp: last_s,
+          last: last_s,
+          mark: fmt_price(mark_bd),
+          sl: fmt_stop_price(p),
+          liq: '—',
           pnl_usdt: u,
-          pnl_label: fmt_pnl_label(u, p, ltp_bd)
+          pnl_label: fmt_pnl_label(u, p, mark_bd)
         }
+      end
+
+      def fmt_stop_price(p)
+        sp = p[:stop_price] || p['stop_price']
+        return '—' if sp.nil? || sp.to_s.strip.empty?
+
+        fmt_price(optional_bd(sp))
       end
 
       def position_side_label(p)
