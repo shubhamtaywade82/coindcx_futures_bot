@@ -44,6 +44,7 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
 
     it 'shows STANDBY and n/a placeholders when regime is enabled in config' do
       allow(config).to receive(:regime_enabled?).and_return(true)
+      allow(config).to receive(:regime_ai_enabled?).and_return(false)
       snap = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(regime: CoindcxBot::Regime::TuiState.build(config)))
       eng = double('engine', snapshot: snap, broker: broker_double, config: config)
       described_class.new(engine: eng, origin_row: 0, output: output).render

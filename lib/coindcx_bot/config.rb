@@ -138,6 +138,58 @@ module CoindcxBot
       truthy?(regime_section[:enabled])
     end
 
+    def regime_ai_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:ai, {})
+    end
+
+    def regime_ai_enabled?
+      regime_enabled? && truthy?(regime_ai_section[:enabled])
+    end
+
+    def regime_ai_model
+      regime_ai_section[:model].to_s.strip
+    end
+
+    def regime_ai_min_interval_seconds
+      regime_ai_section.fetch(:min_interval_seconds, 180).to_f
+    end
+
+    def regime_ai_timeout_seconds
+      regime_ai_section.fetch(:timeout_seconds, 90).to_i
+    end
+
+    def regime_ai_bars_per_pair
+      n = regime_ai_section.fetch(:bars_per_pair, 24).to_i
+      [[n, 8].max, 96].min
+    end
+
+    def regime_ai_max_pairs
+      n = regime_ai_section.fetch(:max_pairs, 8).to_i
+      [[n, 1].max, MAX_PAIRS].min
+    end
+
+    def regime_ai_ollama_base_url
+      regime_ai_section[:ollama_base_url].to_s.strip
+    end
+
+    def regime_ai_temperature
+      Float(regime_ai_section.fetch(:temperature, 0.15))
+    rescue ArgumentError, TypeError
+      0.15
+    end
+
+    def regime_ai_use_retry_middleware?
+      truthy?(regime_ai_section.fetch(:use_retry_middleware, true))
+    end
+
+    def regime_ai_retry_attempts
+      n = regime_ai_section.fetch(:retry_attempts, 3).to_i
+      [[n, 1].max, 8].min
+    end
+
     # Paper trading: no exchange orders or account exits. `runtime.paper` is an alias for `runtime.dry_run`.
     def dry_run?
       r = runtime

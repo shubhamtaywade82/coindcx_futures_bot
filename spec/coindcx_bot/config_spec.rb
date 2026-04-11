@@ -3,6 +3,13 @@
 require 'bigdecimal'
 
 RSpec.describe CoindcxBot::Config do
+  it 'reads regime.ai.enabled as regime_ai_enabled? only when regime is on' do
+    off = described_class.new(minimal_bot_config(regime: { enabled: false, ai: { enabled: true } }))
+    expect(off.regime_ai_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(regime: { enabled: true, ai: { enabled: true } }))
+    expect(on.regime_ai_enabled?).to be(true)
+  end
+
   it 'reads regime.enabled as regime_enabled?' do
     on = described_class.new(minimal_bot_config(regime: { enabled: true }))
     expect(on.regime_enabled?).to be(true)

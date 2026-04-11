@@ -70,6 +70,9 @@ module CoindcxBot
         @lookback = config.runtime.fetch(:candle_lookback, 120).to_i
         @ws_tick_at = {}
         @last_strategy_by_pair = {}
+        @regime_ai_mutex = Mutex.new
+        @regime_ai_state = { updated_at: nil, payload: nil, error: nil }
+        @regime_ai_brain = nil
 
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
@@ -126,7 +129,7 @@ module CoindcxBot
           working_orders: @broker.tui_working_orders,
           ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago,
           strategy_last_by_pair: @last_strategy_by_pair.dup,
-          regime: Regime::TuiState.build(@config)
+          regime: regime_snapshot_for_tui
         )
       end
 
@@ -175,6 +178,62 @@ module CoindcxBot
       end
 
       private
+
+      def regime_snapshot_for_tui
+        base = Regime::TuiState.build(@config)
+        return base unless @config.regime_ai_enabled?
+
+        snap = @regime_ai_mutex.synchronize { @regime_ai_state.dup }
+        base.merge(Regime::AiBrain.overlay_from_state(snap))
+      end
+
+      def refresh_regime_ai_if_due
+        return unless @config.regime_ai_enabled?
+
+        now = Time.now
+        @regime_ai_mutex.synchronize do
+          last = @regime_ai_state[:updated_at]
+          return if last && (now - last) < @config.regime_ai_min_interval_seconds
+        end
+
+        ctx = build_regime_ai_context
+        return if ctx[:pairs].empty?
+
+        brain = (@regime_ai_brain ||= Regime::AiBrain.new(config: @config, logger: @logger))
+        res = brain.analyze!(ctx)
+        @regime_ai_mutex.synchronize do
+          @regime_ai_state[:updated_at] = now
+          if res.ok && res.payload
+            @regime_ai_state[:payload] = res.payload
+            @regime_ai_state[:error] = nil
+          else
+            @regime_ai_state[:error] = res.error_message
+          end
+        end
+      rescue StandardError => e
+        @logger&.warn("[regime_ai] #{e.class}: #{e.message}")
+        @regime_ai_mutex.synchronize { @regime_ai_state[:error] = e.message }
+      end
+
+      def build_regime_ai_context
+        max_pairs = @config.regime_ai_max_pairs
+        n = @config.regime_ai_bars_per_pair
+        pairs = @config.pairs.first(max_pairs)
+        candles_by_pair = pairs.to_h do |p|
+          arr = Array(@candles_exec[p]).last(n)
+          rows = arr.map do |c|
+            { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
+          end
+          [p, rows]
+        end
+        {
+          pairs: pairs,
+          candles_by_pair: candles_by_pair,
+          positions: @journal.open_positions,
+          exec_resolution: @exec_res,
+          htf_resolution: @htf_res
+        }
+      end
 
       def snapshot_capital_inr
         v = @config.raw[:capital_inr] || @config.raw['capital_inr']
@@ -499,6 +558,7 @@ module CoindcxBot
         # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
         @last_strategy_by_pair = {}
         @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
+        refresh_regime_ai_if_due
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)

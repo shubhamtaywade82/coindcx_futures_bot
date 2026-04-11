@@ -9,6 +9,10 @@ ruby '>= 3.2'
 # gem 'coindcx-client', git: 'https://github.com/shubhamtaywade82/coindcx-client.git', branch: 'main'
 gem 'coindcx-client', path: '../coindcx-client'
 
+# Regime AI (local Ollama): trading analyst via ollama-client; optional retries via ollama_agent.
+gem 'ollama-client', path: '../../../ai-workspace/ollama-client'
+gem 'ollama_agent', path: '../../../ai-workspace/ollama_agent'
+
 gem 'bigdecimal'
 # ~> 2.8 aligns with optional ollama_agent (dev); Dotenv.load usage is unchanged from 3.x
 gem 'dotenv', '~> 2.8'
@@ -32,9 +36,3 @@ group :development, :test do
   gem 'rspec', '~> 3.13'
 end
 
-# Optional: local Ollama coding agent (self_review / improve). Path is project-relative:
-# trading-workspace/coindcx/coindcx_futures_bot → ../../../ai-workspace/ollama_agent
-# Override: bundle config set local.ollama_agent /absolute/path/to/ollama_agent
-group :development do
-  gem 'ollama_agent', path: '../../../ai-workspace/ollama_agent', require: false
-end

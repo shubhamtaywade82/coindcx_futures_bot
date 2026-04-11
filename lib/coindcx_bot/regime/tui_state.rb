@@ -35,6 +35,11 @@ module CoindcxBot
         hint: 'Phase 2: wire Regime::HmmEngine → Engine'
       ).freeze
 
+      STANDBY_AI = STANDBY.merge(
+        hmm_display: 'AI: pending',
+        hint: 'Regime::AiBrain (ollama-client + ollama_agent retry)'
+      ).freeze
+
       def self.disabled
         DISABLED
       end
@@ -42,7 +47,11 @@ module CoindcxBot
       def self.build(config)
         return DISABLED unless config.respond_to?(:regime_enabled?) && config.regime_enabled?
 
-        STANDBY
+        if config.respond_to?(:regime_ai_enabled?) && config.regime_ai_enabled?
+          STANDBY_AI
+        else
+          STANDBY
+        end
       end
     end
   end

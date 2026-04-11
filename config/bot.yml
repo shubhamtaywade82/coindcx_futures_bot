@@ -102,9 +102,23 @@ runtime:
   # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
   # log_strategy_signals: true
 
+
+# Regime strip + optional AI analyst (local Ollama via ollama-client; retries via ollama_agent when use_retry_middleware).
+# See docs/hmm_regime_trading_spec.md. AI is advisory only — it does not route orders until you wire strategy logic.
 # HMM regime detection (see docs/hmm_regime_trading_spec.md). TUI shows a REGIME strip; metrics fill in when HmmEngine is wired.
 regime:
   enabled: true
+  ai:
+    enabled: trye
+    model: llama3.2:3b
+    ollama_base_url: http://127.0.0.1:11434
+    timeout_seconds: 90
+    min_interval_seconds: 180
+    bars_per_pair: 24
+    max_pairs: 8
+    temperature: 0.15
+    use_retry_middleware: true
+    retry_attempts: 3
 
 # Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
