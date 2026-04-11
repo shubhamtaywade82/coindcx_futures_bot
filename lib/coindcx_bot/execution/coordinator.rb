@@ -178,7 +178,8 @@ module CoindcxBot
           entry_price: entry_price,
           quantity: quantity,
           stop_price: signal.stop_price,
-          trail_price: nil
+          trail_price: nil,
+          initial_stop_price: signal.stop_price
         )
       end
 

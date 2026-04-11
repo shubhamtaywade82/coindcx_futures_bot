@@ -314,6 +314,13 @@ module CoindcxBot
         )
       end
 
+      def update_position_initial_stop_price(id, initial_stop_price:)
+        @db.execute(
+          'UPDATE paper_positions SET initial_stop_price = ?, updated_at = ? WHERE id = ?',
+          [bd_str(initial_stop_price), now_iso, id]
+        )
+      end
+
       def update_position_trail_price(id, trail_price:)
         @db.execute(
           'UPDATE paper_positions SET trail_price = ?, updated_at = ? WHERE id = ?',
@@ -468,6 +475,7 @@ module CoindcxBot
         add_column_if_missing('paper_fills', 'trigger', "TEXT NOT NULL DEFAULT 'market_order'")
         add_column_if_missing('paper_positions', 'stop_price', 'TEXT')
         add_column_if_missing('paper_positions', 'trail_price', 'TEXT')
+        add_column_if_missing('paper_positions', 'initial_stop_price', 'TEXT')
       end
 
       def add_column_if_missing(table, column, sql_type)

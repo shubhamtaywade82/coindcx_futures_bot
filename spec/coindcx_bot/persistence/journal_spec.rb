@@ -78,4 +78,21 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     row = journal.open_positions.first
     expect(BigDecimal(row[:entry_price])).to eq(BigDecimal('100.05'))
   end
+
+  it 'stores initial_stop_price and leaves it unchanged when stop is trailed' do
+    journal = described_class.new(path)
+    id = journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('90'),
+      trail_price: nil,
+      initial_stop_price: BigDecimal('90')
+    )
+    journal.update_position_stop(id, BigDecimal('98'))
+    row = journal.open_positions.first
+    expect(BigDecimal(row[:stop_price])).to eq(BigDecimal('98'))
+    expect(BigDecimal(row[:initial_stop_price])).to eq(BigDecimal('90'))
+  end
 end

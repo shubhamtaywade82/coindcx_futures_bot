@@ -231,7 +231,13 @@ module CoindcxBot
           candle = (@candles_exec[pair] || []).last
           high = candle&.high
           low = candle&.low
-          results = @broker.process_tick(pair: pair, ltp: ltp, high: high, low: low)
+          results = @broker.process_tick(
+            pair: pair,
+            ltp: ltp,
+            high: high,
+            low: low,
+            candles: @candles_exec[pair]
+          )
 
           # Sync broker-driven exits (SL/TP fills) back to journal + PnL
           results.each do |r|
@@ -276,8 +282,13 @@ module CoindcxBot
           fill_engine = Execution::FillEngine.new(slippage_bps: slippage, fee_bps: fee)
           store = Persistence::PaperStore.new(db_path)
 
-          Execution::PaperBroker.new(store: store, fill_engine: fill_engine, logger: @logger,
-                                     funding_rate_bps: funding)
+          Execution::PaperBroker.new(
+            store: store,
+            fill_engine: fill_engine,
+            logger: @logger,
+            funding_rate_bps: funding,
+            trail_config: config.strategy
+          )
         else
           Execution::LiveBroker.new(
             order_gateway: @orders,

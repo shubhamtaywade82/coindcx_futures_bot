@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require_relative '../strategy/dynamic_trail'
 
 module CoindcxBot
   module Execution
@@ -8,11 +9,13 @@ module CoindcxBot
       # Default funding rate per 8-hour interval (0.01% = 1 bps).
       DEFAULT_FUNDING_RATE_BPS = BigDecimal('1')
       FUNDING_INTERVAL_SECONDS = 8 * 3600
+      DYNAMIC_TRAIL_MIN_CANDLES = 16
 
-      def initialize(store:, fill_engine:, logger: nil, funding_rate_bps: nil)
+      def initialize(store:, fill_engine:, logger: nil, funding_rate_bps: nil, trail_config: nil)
         @store = store
         @fill_engine = fill_engine
         @logger = logger
+        @trail_config = trail_config || {}
         @order_book = OrderBook.new
         @funding_rate = BigDecimal((funding_rate_bps || DEFAULT_FUNDING_RATE_BPS).to_s) / 10_000
         @last_funding_at = Time.now
@@ -30,7 +33,7 @@ module CoindcxBot
       # Runs FillEngine against each working order for the pair. Returns an array of result hashes.
       # Handles OCO group cancellation: when SL fills, TP is canceled and vice versa.
       # Also runs trailing stop logic for open positions with active SL working orders.
-      def process_tick(pair:, ltp:, high: nil, low: nil)
+      def process_tick(pair:, ltp:, high: nil, low: nil, candles: nil)
         return [] if ltp.nil?
 
         pair_s = pair.to_s
@@ -40,7 +43,7 @@ module CoindcxBot
         results = []
 
         # Phase 1: Trail working stops before evaluating fills
-        trail_working_stops(pair_s, ltp, high_v)
+        trail_working_stops(pair_s, ltp, high_v, candles)
 
         # Phase 2: Evaluate working orders for fills
         @order_book.working_for(pair_s).dup.each do |wo|
@@ -187,7 +190,9 @@ module CoindcxBot
         # 5. Store stop/trail on position
         pos = @store.open_position_for(pair)
         if pos
-          @store.update_position_stop_price(pos[:id], stop_price: BigDecimal(sl_price.to_s))
+          sl_bd = BigDecimal(sl_price.to_s)
+          @store.update_position_stop_price(pos[:id], stop_price: sl_bd)
+          @store.update_position_initial_stop_price(pos[:id], initial_stop_price: sl_bd)
         end
 
         @logger&.info("[paper] bracket #{side} #{pair} qty=#{quantity.to_s('F')} @ #{fill[:fill_price].to_s('F')} SL=#{sl_price} TP=#{tp_price || 'none'} group=#{group_id}")
@@ -343,7 +348,7 @@ module CoindcxBot
 
       # Auto-trails working SL orders based on price movement. Uses ATR-style chandelier trail:
       # for longs, trail = max(current_stop, high - trail_distance). Trail only ratchets up (long) or down (short).
-      def trail_working_stops(pair, ltp, high)
+      def trail_working_stops(pair, ltp, high, candles = nil)
         group = @store.find_active_group_for_pair(pair)
         return unless group && group[:sl_order_id]
 
@@ -360,41 +365,92 @@ module CoindcxBot
         ltp_bd = BigDecimal(ltp.to_s)
         side = pos[:side].to_s
 
-        new_stop = compute_auto_trail(side, entry, current_stop, ltp_bd, high)
-        return unless new_stop && new_stop != current_stop
+        out = compute_auto_trail(side, entry, current_stop, ltp_bd, high, candles, pos)
+        return unless out
+
+        new_stop = out.stop_price
+        return if new_stop == current_stop
 
         @order_book.update_stop(group[:sl_order_id], new_stop)
         @store.update_order_stop_price(group[:sl_order_id], new_stop)
         @store.update_position_stop_price(pos[:id], stop_price: new_stop)
         @store.update_position_trail_price(pos[:id], trail_price: new_stop)
-        @logger&.info("[paper] auto-trail #{pair} SL #{current_stop.to_s('F')} → #{new_stop.to_s('F')}")
+        log_auto_trail(pair, current_stop, new_stop, out)
       end
 
-      # Trail logic: ratchet stop toward price once in profit. Uses breakeven + trailing distance.
-      # Trail distance = 50% of (current_price - entry) once price moves > 1R from entry.
-      def compute_auto_trail(side, entry, current_stop, ltp, high)
-        case side
-        when 'long', 'buy'
-          risk = (entry - current_stop).abs
-          return nil if risk <= 0
+      def log_auto_trail(pair, old_stop, new_stop, out)
+        parts = []
+        parts << "tier=#{out.tier}" unless out.tier.nil?
+        parts << "v=#{out.v_factor.to_s('F')}" if out.v_factor
+        parts << "vol=#{out.vol_factor.to_s('F')}" if out.vol_factor
+        suffix = parts.empty? ? '' : " (#{parts.join(', ')})"
+        @logger&.info("[paper] auto-trail #{pair} SL #{old_stop.to_s('F')} → #{new_stop.to_s('F')}#{suffix}")
+      end
 
-          ref_price = high || ltp
-          profit = ref_price - entry
-          return nil if profit < risk # not yet 1R in profit
+      def trail_calculator
+        @trail_calculator ||= Strategy::DynamicTrail::Calculator.new(@trail_config)
+      end
 
-          # Trail at 50% of profit from entry
-          candidate = entry + (profit * BigDecimal('0.5'))
-          candidate > current_stop ? candidate : nil
-        when 'short', 'sell'
-          risk = (current_stop - entry).abs
-          return nil if risk <= 0
+      def compute_auto_trail(side, entry, current_stop, ltp, high, candles, pos)
+        if candles && candles.size >= DYNAMIC_TRAIL_MIN_CANDLES
+          raw_initial = pos[:initial_stop_price] || pos[:stop_price]
+          return nil if raw_initial.nil? || raw_initial.to_s.strip.empty?
 
-          profit = entry - ltp
-          return nil if profit < risk
+          side_sym = side.to_s == 'long' || side.to_s == 'buy' ? :long : :short
+          output = trail_calculator.call(
+            Strategy::DynamicTrail::Input.new(
+              side: side_sym,
+              candles: candles,
+              entry_price: entry,
+              initial_stop: BigDecimal(raw_initial.to_s),
+              current_stop: current_stop,
+              ltp: high || ltp
+            )
+          )
+          return output if output.changed
 
-          candidate = entry - (profit * BigDecimal('0.5'))
-          candidate < current_stop ? candidate : nil
+          return nil
         end
+
+        legacy_auto_trail_output(side, entry, current_stop, ltp, high)
+      end
+
+      # Legacy: ratchet stop once > 1R in profit; trail at 50% of profit from entry.
+      def legacy_auto_trail_output(side, entry, current_stop, ltp, high)
+        new_stop =
+          case side
+          when 'long', 'buy'
+            risk = (entry - current_stop).abs
+            return nil if risk <= 0
+
+            ref_price = high || ltp
+            profit = ref_price - entry
+            return nil if profit < risk
+
+            candidate = entry + (profit * BigDecimal('0.5'))
+            candidate > current_stop ? candidate : nil
+          when 'short', 'sell'
+            risk = (current_stop - entry).abs
+            return nil if risk <= 0
+
+            profit = entry - ltp
+            return nil if profit < risk
+
+            candidate = entry - (profit * BigDecimal('0.5'))
+            candidate < current_stop ? candidate : nil
+          end
+
+        return nil if new_stop.nil?
+
+        Strategy::DynamicTrail::Output.new(
+          stop_price: new_stop,
+          changed: true,
+          tier: nil,
+          v_factor: nil,
+          vol_factor: nil,
+          trail_distance: nil,
+          reason: 'legacy_trail'
+        )
       end
 
       # --- OCO group management ---

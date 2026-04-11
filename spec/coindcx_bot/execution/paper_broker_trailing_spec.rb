@@ -38,7 +38,7 @@ RSpec.describe CoindcxBot::Execution::PaperBroker, 'trailing stops' do
   end
 
   describe 'auto-trailing via process_tick' do
-    it 'ratchets SL up for long when price moves > 1R into profit' do
+    it 'ratchets SL up for long when price moves > 1R into profit (legacy trail when candles omitted)' do
       broker.place_bracket_order(
         { pair: 'B-SOL_USDT', side: 'long', quantity: BigDecimal('1'), ltp: BigDecimal('100') },
         sl_price: BigDecimal('90')
@@ -46,7 +46,7 @@ RSpec.describe CoindcxBot::Execution::PaperBroker, 'trailing stops' do
 
       # Risk = 10 (100-90). Price at 115 = 1.5R profit.
       # Trail should move stop: entry + 50% of profit = 100 + 7.5 = 107.5
-      broker.process_tick(pair: 'B-SOL_USDT', ltp: BigDecimal('115'))
+      broker.process_tick(pair: 'B-SOL_USDT', ltp: BigDecimal('115'), candles: nil)
 
       pos = store.open_position_for('B-SOL_USDT')
       new_stop = BigDecimal(pos[:stop_price])
@@ -125,6 +125,36 @@ RSpec.describe CoindcxBot::Execution::PaperBroker, 'trailing stops' do
 
       # PnL should be positive (exited above entry via trail)
       expect(fills.first[:realized_pnl_usdt]).to be > BigDecimal('0')
+    end
+
+    context 'when passing enough exec candles' do
+      def uptrend_candles_for_dynamic_trail(n: 20)
+        n.times.map do |i|
+          base = BigDecimal('95') + BigDecimal(i) * BigDecimal('1')
+          CoindcxBot::Dto::Candle.new(
+            time: Time.at(i * 60),
+            open: base,
+            high: base + BigDecimal('2'),
+            low: base - BigDecimal('1'),
+            close: base + BigDecimal('0.8'),
+            volume: BigDecimal('100')
+          )
+        end
+      end
+
+      it 'uses dynamic trail, ratchets SL up, and keeps initial_stop_price frozen' do
+        broker.place_bracket_order(
+          { pair: 'B-SOL_USDT', side: 'long', quantity: BigDecimal('1'), ltp: BigDecimal('100') },
+          sl_price: BigDecimal('90')
+        )
+
+        candles = uptrend_candles_for_dynamic_trail(n: 20)
+        broker.process_tick(pair: 'B-SOL_USDT', ltp: BigDecimal('115'), high: BigDecimal('116'), candles: candles)
+
+        pos = store.open_position_for('B-SOL_USDT')
+        expect(BigDecimal(pos[:initial_stop_price])).to eq(BigDecimal('90'))
+        expect(BigDecimal(pos[:stop_price])).to be > BigDecimal('90')
+      end
     end
   end
 end
