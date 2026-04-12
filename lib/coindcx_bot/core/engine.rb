@@ -429,6 +429,8 @@ module CoindcxBot
           Strategy::RegimeVolTier.new(merged, inner: inner)
         when 'supertrend_profit'
           Strategy::SupertrendProfit.new(strategy_cfg)
+        when 'smc_confluence'
+          Strategy::SmcConfluence.new(strategy_cfg)
         else
           Strategy::TrendContinuation.new(strategy_cfg)
         end
@@ -439,6 +441,8 @@ module CoindcxBot
         case inner_name
         when 'supertrend_profit'
           Strategy::SupertrendProfit.new(strategy_cfg)
+        when 'smc_confluence'
+          Strategy::SmcConfluence.new(strategy_cfg)
         else
           Strategy::TrendContinuation.new(strategy_cfg)
         end
