@@ -39,12 +39,15 @@ module CoindcxBot
       def run_loop
         until stopped?
           cycle_started = Time.now
-          refresh_all_pairs
-          @render_loop&.request_redraw unless stopped?
-          sleep_remaining(cycle_started) unless stopped?
+          begin
+            refresh_all_pairs
+            @render_loop&.request_redraw unless stopped?
+            sleep_remaining(cycle_started) unless stopped?
+          rescue StandardError => e
+            @logger&.warn("TUI LTP poll cycle: #{e.class}: #{e.message}")
+            error_cycle_backoff unless stopped?
+          end
         end
-      rescue StandardError => e
-        @logger&.warn("TUI LTP poll: #{e.message}")
       end
 
       def refresh_all_pairs
@@ -140,6 +143,10 @@ module CoindcxBot
 
       def stopped?
         @mutex.synchronize { @stop }
+      end
+
+      def error_cycle_backoff
+        sleep(1)
       end
     end
   end

@@ -80,6 +80,7 @@ module CoindcxBot
         @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
         @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
         @daily_loss_flatten_warned = false
+        @engine_loop_crashed = false
         @exchange_positions_tui_mutex = Mutex.new
         @exchange_positions_tui = { rows: [], error: nil, fetched_at: nil }
         @smc_setup_store = nil
@@ -140,7 +141,7 @@ module CoindcxBot
           stale: stale,
           last_error: @last_error,
           daily_pnl: @journal.daily_pnl_inr,
-          running: !@stop,
+          running: !@stop && !@engine_loop_crashed,
           dry_run: @config.dry_run?,
           stale_tick_seconds: @stale_seconds,
           paper_metrics: pm,
@@ -159,6 +160,17 @@ module CoindcxBot
 
       def request_stop!
         @stop = true
+      end
+
+      # Called from the TUI when the main engine thread terminates with an error (after `run` re-raises).
+      def engine_loop_failed!(message)
+        @engine_loop_crashed = true
+        @last_error = message.to_s
+        @logger&.error("[engine] loop terminated: #{message}")
+      end
+
+      def engine_loop_crashed?
+        @engine_loop_crashed
       end
 
       def pause!
@@ -260,6 +272,7 @@ module CoindcxBot
         @journal.set_paused(true) if @config.pause_after_daily_loss_flatten?
       rescue StandardError => e
         @logger&.error("[engine] Daily loss flatten failed: #{e.message}")
+        @journal.set_paused(true) if @config.pause_after_daily_loss_flatten?
       end
 
       def build_regime_ai_context

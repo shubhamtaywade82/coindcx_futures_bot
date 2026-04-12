@@ -38,27 +38,14 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
     end
   end
 
-  describe '#parse_json_object (via successful analyze flow)' do
-    let(:config) do
-      instance_double(
-        CoindcxBot::Config,
-        regime_ai_model: 'dummy',
-        regime_ai_ollama_base_url: '',
-        regime_ai_timeout_seconds: 5,
-        regime_ai_temperature: 0.1,
-        regime_ai_use_retry_middleware?: false,
-        regime_ai_retry_attempts: 2
-      )
-    end
-    let(:brain) { described_class.new(config: config, logger: nil) }
-
-    it 'parses JSON wrapped in markdown fences' do
+  describe 'JSON parsing (shared SmcSetup::JsonSlice)' do
+    it 'parses regime JSON wrapped in markdown fences' do
       raw = <<~JSON
         ```json
         {"regime_label":"X","probability_pct":50,"stability_bars":1,"flicker_hint":"low","confirmed":false,"vol_rank":1,"vol_rank_total":5,"transition_summary":"t","notes":"n"}
         ```
       JSON
-      h = brain.send(:parse_json_object, raw)
+      h = CoindcxBot::SmcSetup::JsonSlice.parse_object(raw)
       expect(h[:regime_label]).to eq('X')
       expect(h[:probability_pct]).to eq(50)
     end

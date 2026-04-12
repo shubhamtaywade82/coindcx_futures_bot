@@ -62,7 +62,7 @@ module CoindcxBot
       end
 
       def synthetic_row(price_bd)
-        now_ms = (Time.now.to_f * 1000).to_i
+        now_ms = (Time.now.utc.to_f * 1000).to_i
         {
           'symbol' => 'USDTINR',
           'margin_currency_short_name' => 'INR',

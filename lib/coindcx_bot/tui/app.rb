@@ -209,7 +209,10 @@ module CoindcxBot
           Thread.current.report_on_exception = false
           engine.run
         rescue StandardError => e
-          warn "[Engine] #{e.class}: #{e.message}"
+          msg = "#{e.class}: #{e.message}"
+          warn "[Engine] #{msg}"
+          engine.engine_loop_failed!(msg)
+          @render_loop&.request_redraw
         end
       end
 

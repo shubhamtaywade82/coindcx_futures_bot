@@ -65,7 +65,9 @@ module CoindcxBot
           mode = snap.dry_run ? bold_magenta('PAPER') : bold_red('LIVE')
           profile = trading_profile_fragment
           eng =
-            if snap.running
+            if @engine.engine_loop_crashed?
+              on_red(' ENGINE: CRASHED ')
+            elsif snap.running
               green('ENGINE: RUN')
             else
               red('ENGINE: STOP')

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'json'
+require_relative '../smc_setup/json_slice'
 
 module CoindcxBot
   module Regime
@@ -60,7 +61,7 @@ module CoindcxBot
           options: { temperature: @config.regime_ai_temperature }
         )
         raw = resp.content.to_s
-        hash = parse_json_object(raw)
+        hash = SmcSetup::JsonSlice.parse_object(raw)
         payload = normalize_payload(hash)
         Result.new(ok: true, payload: payload, error_message: nil)
       rescue StandardError => e
@@ -205,16 +206,6 @@ module CoindcxBot
         end
         lines << 'Respond with ONLY the JSON object, no markdown fences.'
         lines.join("\n")
-      end
-
-      def parse_json_object(raw)
-        s = raw.to_s.strip
-        s = s.sub(/\A```(?:json)?\s*/i, '').sub(/```\s*\z/m, '')
-        i = s.index('{')
-        j = s.rindex('}')
-        raise 'no JSON object in model output' if i.nil? || j.nil? || j < i
-
-        JSON.parse(s[i..j], symbolize_names: true)
       end
 
       def normalize_payload(h)

@@ -50,9 +50,16 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
   before do
     allow(engine).to receive(:ws_feed_stale?).and_return(false)
     allow(engine).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+    allow(engine).to receive(:engine_loop_crashed?).and_return(false)
   end
 
   describe '#render' do
+    it 'renders ENGINE: CRASHED when the engine loop has failed' do
+      allow(engine).to receive(:engine_loop_crashed?).and_return(true)
+      panel.render
+      expect(output.string).to include('ENGINE: CRASHED')
+    end
+
     it 'renders mode, ws, engine, net pnl, balance, and desk counts' do
       panel.render
       rendered = output.string
@@ -90,6 +97,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       eng_on = double('engine', snapshot: snap_on, broker: broker_double, config: config)
       allow(eng_on).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
       allow(eng_on).to receive(:ws_feed_stale?).and_return(false)
+      allow(eng_on).to receive(:engine_loop_crashed?).and_return(false)
       described_class.new(engine: eng_on, origin_row: 0, output: output).render
       expect(output.string).to include('REGIME·ON')
     end
