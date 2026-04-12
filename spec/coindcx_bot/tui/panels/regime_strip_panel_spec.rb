@@ -1,0 +1,76 @@
+# frozen_string_literal: true
+
+RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
+  let(:output) { StringIO.new }
+  let(:broker_double) { double('broker', paper?: false, tui_working_orders: []) }
+  let(:config) do
+    instance_double(CoindcxBot::Config, regime_enabled?: false)
+  end
+  let(:snapshot) do
+    CoindcxBot::Core::Engine::Snapshot.new(
+      pairs: %w[B-SOL_USDT],
+      ticks: {},
+      positions: [],
+      paused: false,
+      kill_switch: false,
+      stale: false,
+      last_error: nil,
+      daily_pnl: 0,
+      running: true,
+      dry_run: true,
+      stale_tick_seconds: 45,
+      paper_metrics: {},
+      capital_inr: nil,
+      recent_events: [],
+      working_orders: [],
+      ws_last_tick_ms_ago: 1,
+      strategy_last_by_pair: {},
+      regime: CoindcxBot::Regime::TuiState.build(config),
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
+    )
+  end
+  let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
+  let(:panel) { described_class.new(engine: engine, origin_row: 2, output: output) }
+
+  before { allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(100) }
+
+  describe '#render' do
+    it 'uses one compact line when regime is disabled in the snapshot', :aggregate_failures do
+      panel.render
+      s = output.string
+      expect(s).to include('REGIME')
+      expect(s).to include('off')
+      expect(s).to include('regime.enabled')
+      expect(s).not_to include('Mdl:')
+    end
+
+    it 'shows STANDBY and n/a placeholders when regime is enabled in config' do
+      allow(config).to receive(:regime_enabled?).and_return(true)
+      allow(config).to receive(:regime_ai_enabled?).and_return(false)
+      snap = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(regime: CoindcxBot::Regime::TuiState.build(config)))
+      eng = double('engine', snapshot: snap, broker: broker_double, config: config)
+      described_class.new(engine: eng, origin_row: 0, output: output).render
+      expect(output.string).to include('STANDBY')
+      expect(output.string).to include('Pn/a')
+      expect(output.string).to include('PIPE:IDLE')
+      expect(output.string).to include('awaiting HmmEngine')
+    end
+  end
+
+  describe '#row_count' do
+    it 'is one row when regime is disabled' do
+      expect(panel.row_count).to eq(1)
+    end
+
+    it 'is four rows when regime is enabled in config' do
+      allow(config).to receive(:regime_enabled?).and_return(true)
+      allow(config).to receive(:regime_ai_enabled?).and_return(false)
+      snap_on = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(regime: CoindcxBot::Regime::TuiState.build(config)))
+      eng_on = double('engine', snapshot: snap_on, broker: broker_double, config: config)
+      expect(described_class.new(engine: eng_on, origin_row: 0, output: output).row_count).to eq(4)
+    end
+  end
+end

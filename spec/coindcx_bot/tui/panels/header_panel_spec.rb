@@ -34,7 +34,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       recent_events: [{ ts: 1, type: 'tick', payload: {} }],
       working_orders: [],
       ws_last_tick_ms_ago: 42,
-      strategy_last_by_pair: {}
+      strategy_last_by_pair: {},
+      regime: CoindcxBot::Regime::TuiState.disabled,
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
@@ -44,6 +49,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
 
   before do
     allow(engine).to receive(:ws_feed_stale?).and_return(false)
+    allow(engine).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
   end
 
   describe '#render' do
@@ -52,6 +58,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       rendered = output.string
 
       expect(rendered).to include('PAPER')
+      expect(rendered).not_to include('REGIME·')
       expect(rendered).to include('MODE:')
       expect(rendered).to include('WS:')
       expect(rendered).to include('ENGINE: RUN')
@@ -61,7 +68,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       expect(rendered).to include('50000')
       expect(rendered).to include('POS:')
       expect(rendered).to include('ORD:')
-      expect(rendered).to include('LAST:')
+      expect(rendered).to include('LAST EVT:')
     end
 
     it 'shows LAT after FEED on the first status line' do
@@ -74,6 +81,17 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       allow(config).to receive(:scalper_mode?).and_return(true)
       panel.render
       expect(output.string).to include('SCALP')
+    end
+
+    it 'renders REGIME·ON when snapshot.regime.enabled and not yet active' do
+      snap_on = CoindcxBot::Core::Engine::Snapshot.new(
+        **snapshot.to_h.merge(regime: CoindcxBot::Regime::TuiState::STANDBY)
+      )
+      eng_on = double('engine', snapshot: snap_on, broker: broker_double, config: config)
+      allow(eng_on).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+      allow(eng_on).to receive(:ws_feed_stale?).and_return(false)
+      described_class.new(engine: eng_on, origin_row: 0, output: output).render
+      expect(output.string).to include('REGIME·ON')
     end
 
     it 'shows LEV from max_leverage when order_defaults omit leverage (nil.to_i is not 0)' do
@@ -102,7 +120,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           recent_events: [],
           working_orders: [],
           ws_last_tick_ms_ago: nil,
-          strategy_last_by_pair: {}
+          strategy_last_by_pair: {},
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+          exchange_positions: [],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: nil
         )
       end
 
@@ -150,7 +173,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           recent_events: [],
           working_orders: [],
           ws_last_tick_ms_ago: 10,
-          strategy_last_by_pair: {}
+          strategy_last_by_pair: {},
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+          exchange_positions: [],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: nil
         )
       end
 

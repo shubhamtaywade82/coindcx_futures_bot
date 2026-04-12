@@ -57,18 +57,18 @@ Override config path:
 COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 ```
 
-### Paper mode (`dry_run` / `paper`)
+### Paper mode (`runtime.dry_run`)
 
 **Roadmap** for in-process working orders, limits/stops, OCO: [`docs/paper_broker_simulation.md`](docs/paper_broker_simulation.md).
 
 **Optional HTTP simulator:** run `bundle exec bin/paper-exchange` and set **`paper_exchange.enabled`** + **`paper_exchange.api_base_url`** so the bot uses **`GatewayPaperBroker`** against a local CoinDCX-shaped API (signed simulation ticks). See [`docs/paper_exchange.md`](docs/paper_exchange.md).
 
-Use **`runtime.dry_run: true`** or **`runtime.paper: true`** (alias) until order payloads are validated. In paper mode the bot:
+Use **`runtime.dry_run: true`** until order payloads are validated. In paper mode the bot:
 
 - **Journals opens and closes** in SQLite (`positions` + `event_log`) so strategy state matches a live run.
 - **Does not** call `futures.orders.create` or account exit APIs.
 - **Simulated fills** go to a separate **`paper:`** SQLite file (`paper_orders`, `paper_fills`, `paper_positions`, …). On a paper **open**, the journal row’s **`entry_price`** is updated to the **slipped fill** from the paper broker so sizing and display track the simulator.
-- **`f` flatten (paper):** the engine passes per-pair **LTP** from the last WebSocket tick, else the **latest execution candle close**. The coordinator closes the **paper position** at that price (fees/slippage in the paper DB), books **daily INR** from the paper position’s **realized USDT** × **`inr_per_usdt`**, then closes journal rows. If no LTP is available for a pair, the journal is still flattened but the paper row may stay open (check logs).
+- **`f` flatten (paper):** the engine passes per-pair **LTP** from the last WebSocket tick, else the **latest execution candle close**. The coordinator closes the **paper position** at that price (fees/slippage in the paper DB), books **daily INR** from the paper position’s **realized USDT** × **live USDT/INR** (CoinDCX futures **conversions** API, cached; falls back to **`inr_per_usdt`** in config if disabled or unreachable), then closes journal rows. If no LTP is available for a pair, the journal is still flattened but the paper row may stay open (check logs).
 - **Strategy closes (paper):** same rule — daily INR comes from **`PaperBroker`** realized USDT on the close fill, not a separate journal-only formula.
 - **Resolves closes** by `position_id` when present; if it is missing in paper mode, uses the **single open row for that pair** (still requires a matching row or the close returns **`:failed`**).
 
@@ -79,6 +79,8 @@ REST candles and WebSocket ticks still require valid API credentials for market 
 ## TUI (`bin/bot tui`)
 
 The dashboard and the trading **engine share one Ruby process** — `engine.snapshot` reads live `PositionTracker` / journal state. **No Redis or separate cache** is required for the numbers to update.
+
+**Exchange positions (read-only):** set **`runtime.tui_exchange_positions: true`** to add an **`EXCH …`** line on the futures desk sidebar. The engine calls **`AccountGateway#list_positions`** on a throttle (default 25s) with **`tui_exchange_positions_margins`** (default: top-level **`margin_currency_short_name`**, or **`[USDT, INR]`** if blank). This is **display only** — it does not place, cancel, or exit orders (those paths still go through the coordinator / broker only).
 
 If the screen **never refreshes** (clock / LTP stuck) in **Cursor’s or another IDE’s embedded terminal**, stdin is often **not a real TTY**: `IO.select` can report stdin readable and the UI thread then **blocks on `getc`**, so the redraw loop never runs. The TUI detects non-TTY stdin and switches to **timer-only refresh** (about once per second). In that mode use **Ctrl+C** to exit; single-letter hotkeys may not work. For full keybindings, run `bin/bot tui` in a normal terminal (Windows Terminal, GNOME Terminal, iTerm, etc.). To **force** poll-only mode: `COINDCX_TUI_POLL_ONLY=1`.
 
@@ -108,7 +110,7 @@ If `bin/bot run` logs `CoinDCX::Errors::SocketConnectionError` with retries:
 
 The repo can bundle **[ollama_agent](https://github.com/shubhamtaywade82/ollama_agent)** under **`group :development`** (path gem → `../../../ai-workspace/ollama_agent` from this checkout). It runs a **local Ollama** coding agent: read/search the tree, patches, **`self_review`**, **`improve`** (sandbox + tests + optional `--apply`). Use it to **iterate on strategy/risk code and specs**, not to drive live trades.
 
-**Not integrated into the engine:** there is **no** Ollama call on the tick or order path; execution stays deterministic.
+**Regime + Ollama (runtime, optional):** when `regime.enabled` and `regime.ai.enabled` are true, the engine calls **Ollama** on a **throttled** timer (see `min_interval_seconds`) for a **JSON regime narrative** only — **no LLM on order submission**. Quantitative **HMM** filtering (`regime.hmm.enabled`) runs on candle refresh; use `strategy.name: regime_vol_tier` to gate new entries by vol tier. **`bundle exec bin/bot regime-backtest [PAIR]`** runs a deterministic walk-forward HMM fit (REST candles, no Ollama).
 
 **Prerequisites:** Ollama running with a tool-capable model; **`patch`** on `PATH`; **`rg`** or **`grep`** for search. See the upstream README for env vars (`OLLAMA_AGENT_MODEL`, cloud URL/key, etc.).
 

@@ -4,7 +4,7 @@
 
 This document is the **source of truth** for turning the current **immediate-fill** paper broker into a **working-order, tick-driven** simulator. Implement **one phase at a time**; update the **status** lines below as you complete each phase.
 
-**Next step:** Phase C — `Coordinator` journal sync on paper tick fills (`handle_paper_fill`) and optional `paper.fill_timing` config.
+**Next step:** Phase D+ (limit/stop matrix, OCO on HTTP path) or optional `paper.fill_timing`; tick-driven **exit** journal sync is done for both in-process and gateway paper.
 
 **Related code today:** [`PaperBroker`](../lib/coindcx_bot/execution/paper_broker.rb), [`GatewayPaperBroker`](../lib/coindcx_bot/execution/gateway_paper_broker.rb), [`FillEngine`](../lib/coindcx_bot/execution/fill_engine.rb), [`PaperStore`](../lib/coindcx_bot/persistence/paper_store.rb), [`Coordinator`](../lib/coindcx_bot/execution/coordinator.rb), [`Engine`](../lib/coindcx_bot/core/engine.rb).
 
@@ -16,7 +16,7 @@ This document is the **source of truth** for turning the current **immediate-fil
 |-------|-------------|--------|
 | **A** | Schema migrations, `paper_order_groups`, extended `insert_order` / `insert_fill`, `OrderBook`, reconcile on `PaperBroker` boot | **Done** |
 | **B** | `FillEngine#evaluate`, `PaperBroker#process_tick`, `Broker#process_tick` (live returns `[]`) | **Done** |
-| **C** | Engine `tick_cycle` calls `process_tick`; `Coordinator#handle_paper_fill`; journal-on-fill + `paper.fill_timing` config | **Partial** — `Engine#tick_cycle` calls `process_tick` when paper; coordinator/journal wiring still planned |
+| **C** | Engine `tick_cycle` calls `process_tick`; journal sync when tick-driven exits fill | **Done (exits)** — `Coordinator#handle_broker_exit` + `Engine#run_paper_process_tick`; in-process `PaperBroker` returns `kind: :exit`; HTTP paper returns `position_exits` on `POST …/simulation/tick` and `GatewayPaperBroker#process_tick` maps them. Optional: `paper.fill_timing`; deferred **entry** on HTTP still unsupported (see below). |
 | **D** | Limit / stop / take-profit touch rules + RSpec matrix | Planned |
 | **E** | OCO / `paper_order_groups` API, cancel sibling on fill | Planned |
 | **F** | Trailing → `OrderBook#update_stop` + store persist | Planned |
@@ -29,7 +29,7 @@ This document is the **source of truth** for turning the current **immediate-fil
 1. **Deterministic** fills from the same ticks and config.
 2. **Restart-safe:** working orders live in SQLite; in-memory `OrderBook` rebuilt on boot.
 3. **Live path unchanged:** only `PaperBroker` + engine `broker.paper?` branches grow.
-4. **Journal stays strategy-facing:** eventually paper **fills** drive journal updates (Phase C); until then behavior is documented per phase.
+4. **Journal stays strategy-facing:** tick-driven **full position closes** sync to the journal (Phase C exits); deferred limit **entries** on the HTTP simulator do not insert journal rows yet.
 
 ---
 
@@ -59,11 +59,13 @@ This document is the **source of truth** for turning the current **immediate-fil
 
 ---
 
-## Phase C — Engine + coordinator (**partial**)
+## Phase C — Engine + coordinator (**exit sync done**)
 
-- **Done:** `Engine#tick_cycle` runs `run_paper_process_tick` after mirroring the tracker into the tick store: for each pair with an LTP, calls `@broker.process_tick` with execution candle high/low when available.
-- **Todo:** `Coordinator#handle_paper_fill` (or equivalent) so journal rows stay aligned when working orders fill on a later tick; config e.g. `paper.fill_timing: instant_market | next_tick` if we split immediate vs deferred market behavior.
-- **Caveat:** Until journal sync exists, deferred **entry** fills from `process_tick` update the paper store only — strategy journal can drift if you seed working entry orders manually.
+- **Done:** `Engine#tick_cycle` runs `run_paper_process_tick` after mirroring the tracker: per pair, `@broker.process_tick` with execution candle high/low when available.
+- **Done:** `Coordinator#handle_broker_exit` closes the journal row and books INR when results include `kind: :exit` (same shape for `PaperBroker` and `GatewayPaperBroker`).
+- **HTTP paper:** `OrdersService#process_tick` returns `position_exits` for fills that **fully** close an exchange position (partial closes do not emit a journal sync row). The Rack tick handler includes them in the JSON body; `GatewayPaperBroker` parses `position_exits` into engine rows.
+- **Todo (optional):** `paper.fill_timing: instant_market | next_tick` for in-process market semantics.
+- **Not done:** Deferred **entry** (working limit opens position on a later tick) on the **HTTP** path — no `handle_broker_entry`; journal can drift if you rely on resting entry orders only on the simulator. In-process `PaperBroker` `kind: :entry` from `process_tick` is still not wired to the journal.
 
 ---
 

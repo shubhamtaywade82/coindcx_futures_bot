@@ -127,12 +127,35 @@ module CoindcxBot
         u = loss_utilization_pct
         u_s = u.nil? ? '—' : format('%.1f%%', u.to_f)
         sig = strategy_signal_summary
-        sig = sig.length > 40 ? "#{sig[0, 37]}…" : sig
-        [
+        sig = sig.length > 68 ? "#{sig[0, 65]}…" : sig
+        lines = [
           "DD #{dd_s} │ #{risk_band} │ UTIL #{u_s} │ #{trading_mode_label}",
           "OPEN #{pos_n} │ ORD #{ord_n} │ #{strategy_name}",
           "#{strategy_position_state} │ #{sig}"
         ]
+        ex = exchange_positions_sidebar_line
+        lines << ex if ex
+        lines
+      end
+
+      # CoinDCX account futures (read-only REST); optional — see runtime.tui_exchange_positions.
+      def exchange_positions_sidebar_line
+        return nil unless @config.tui_exchange_positions_enabled?
+
+        err = @snap.exchange_positions_error.to_s.strip
+        return "EXCH ERR #{err[0, 36]}#{'…' if err.length > 36}" unless err.empty?
+
+        if @snap.exchange_positions_fetched_at.nil?
+          return 'EXCH …'
+        end
+
+        open_rows = Array(@snap.exchange_positions).select { |r| exchange_position_open?(r) }
+        return 'EXCH FLAT' if open_rows.empty?
+
+        parts = open_rows.map { |r| format_exchange_position_compact(r) }
+        body = parts.join(' ')
+        body = "#{body[0, 44]}…" if body.length > 44
+        "EXCH #{body}"
       end
 
       def strategy_signal_summary
@@ -158,7 +181,7 @@ module CoindcxBot
         return '—' if parts.empty?
 
         line = parts.join(' · ')
-        line.length > 72 ? "#{line[0, 69]}…" : line
+        line.length > 120 ? "#{line[0, 117]}…" : line
       end
 
       def paper_slippage_total
@@ -193,6 +216,26 @@ module CoindcxBot
           pair = (p[:pair] || p['pair']).to_s
           h[pair] = p
         end
+      end
+
+      def exchange_position_open?(row)
+        ap = row[:active_pos] || row['active_pos']
+        bd = BigDecimal(ap.to_s)
+        !bd.abs.zero?
+      rescue ArgumentError, TypeError
+        false
+      end
+
+      def format_exchange_position_compact(row)
+        pair = (row[:pair] || row['pair']).to_s
+        sym = compact_pair_symbol(pair)
+        ap = BigDecimal((row[:active_pos] || row['active_pos']).to_s)
+        side = ap.positive? ? 'L' : 'S'
+        qty = ap.abs.to_s('F')
+        qty = qty.sub(/\.?0+\z/, '')
+        "#{sym}#{side}#{qty}"
+      rescue ArgumentError, TypeError
+        sym
       end
 
       def merged_display_ltps
@@ -375,20 +418,7 @@ module CoindcxBot
       end
 
       def unrealized_usdt(p, ltp)
-        return nil if ltp.nil?
-
-        q = BigDecimal((p[:quantity] || p['quantity']).to_s)
-        e = BigDecimal((p[:entry_price] || p['entry_price']).to_s)
-        case (p[:side] || p['side']).to_s
-        when 'long', 'buy'
-          (ltp - e) * q
-        when 'short', 'sell'
-          (e - ltp) * q
-        else
-          BigDecimal('0')
-        end
-      rescue ArgumentError, TypeError
-        nil
+        CoindcxBot::Strategy::UnrealizedPnl.position_usdt(p, ltp)
       end
 
       def unrealized_pct_str(p, ltp)

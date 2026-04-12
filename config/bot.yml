@@ -1,4 +1,8 @@
 # Copy to config/bot.yml and adjust. Env overrides: COINDCX_BOT_CONFIG path.
+#
+# Scalping profile: runtime.mode scalper + SMC-CE (smc_confluence) on 5m / 15m.
+# Switch back: strategy.name supertrend_profit and uncomment supertrend keys below.
+# Set dry_run: false only for live after risk checks.
 
 margin_currency_short_name: USDT
 
@@ -16,8 +20,12 @@ inr_per_usdt: 83.0
 capital_inr: 1_00_000
 
 risk:
+  # Scalping: fewer concurrent positions; raise max_leverage only if your account allows it.
   max_open_positions: 2
   max_leverage: 10
+  # Scalper preset also sets these if omitted; explicit here for clarity.
+  flatten_on_daily_loss_breach: true
+  pause_after_daily_loss_flatten: true
   # Optional (% of capital_inr). Defaults: per-trade 1.5% (when both per_trade_inr_min/max are omitted);
   # clamp floor/ceiling 0.25% / 3%; daily loss halt 3.5%. TUI UTIL = loss vs daily cap, not margin use.
   # per_trade_capital_pct: 1.5
@@ -30,44 +38,54 @@ risk:
   # max_daily_loss_inr: 1500
 
 strategy:
-  execution_resolution: 15m
-  higher_timeframe_resolution: 1h
-  ema_fast: 12
-  ema_slow: 26
-  atr_period: 14
-  # |EMA_fast - EMA_slow| / ATR on execution timeframe; higher => stronger trend tape
-  trend_strength_min: 0.12
-  compression_lookback: 8
-  compression_ratio: 0.65
-  breakout_lookback: 4
-  pullback_ema_tolerance_pct: 0.0025
-  # Optional entry gates (defaults preserve original behavior)
-  volume_filter: false
-  volume_lookback: 20
-  volume_min_ratio: 1.0
-  structure_bars: 0
-  adx_period: 14
-  adx_min: 0
+  # SMC-CE (Pine-parity confluence); relaxed tuning for more frequent entries than strict CHOCH+3.
+  name: smc_confluence
+  execution_resolution: 5m
+  higher_timeframe_resolution: 15m
+  stop_distance_pct_for_sizing: 0.012
+  # Fraction of price from entry; also closes on opposite SMC signal. Use 0 for TP-off (exit on flip only).
+  take_profit_pct: 0.004
+  htf_alignment: false
+  # Looser CE = more signals (more chop). Tighten min_score / swings if over-trading.
+  smc_confluence:
+    min_score: 1
+    sig_cooldown: 1
+    smc_swing: 6
+    ms_swing: 6
+    tl_pivot_len: 6
+    ob_body_pct: 0.15
+    ob_expire: 90
+    liq_lookback: 18
+    liq_wick_pct: 0.25
+    poc_zone_pct: 0.35
+    sess_liq_pct: 0.18
+    tl_retest_pct: 0.22
+    vp_bars: 60
+    signal_mode: bos_relaxed
+    # Flip on opposite SMC only when mark is green vs entry (omit min_gain = flip even when red).
+    close_on_opposite_smc: true
+    opposite_smc_min_gain_pct: 0
 
-  # Dynamic trailing (TrendContinuation + in-process PaperBroker when exec candles are passed).
-  # All optional; lib defaults apply when omitted.
-  # trail_atr_period: 14
-  # trail_atr_fast_period: 5
-  # trail_velocity_lookback: 3
-  # trail_velocity_weight: 0.25
-  # trail_swing_lookback: 5
-  # trail_floor_mult: 0.40
-  # trail_breakeven_gate_mult: 0.10
-
-  # Optional: switch engine strategy (default = trend_continuation when omitted).
-  # Supertrend on execution_resolution (use 5m below); exits only at take_profit_pct — no Supertrend-based exit.
+  # --- Supertrend scalper (switch name to supertrend_profit) ---
   # name: supertrend_profit
-  # execution_resolution: 5m
-  # higher_timeframe_resolution: 5m
   # supertrend_atr_period: 10
   # supertrend_multiplier: 3
-  # take_profit_pct: 0.10
-  # stop_distance_pct_for_sizing: 0.02
+  # take_profit_pct: 0.004
+  # stop_distance_pct_for_sizing: 0.012
+  # hwm_giveback:
+  #   enabled: false
+
+  # TrendContinuation (switch name to trend_continuation or omit name)
+  # ema_fast: 12
+  # ema_slow: 26
+  # atr_period: 14
+  # trend_strength_min: 0.12
+  # compression_lookback: 8
+  # compression_ratio: 0.65
+  # breakout_lookback: 4
+  # pullback_ema_tolerance_pct: 0.0025
+  # volume_filter: false
+  # structure_bars: 0
 
 execution:
   # Merged into every futures `order:` hash; required keys depend on CoinDCX API.
@@ -79,32 +97,81 @@ execution:
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 200
-  refresh_candles_seconds: 1
-  # Seconds without a WebSocket price tick before the feed is stale (new entries blocked).
-  stale_tick_seconds: 45
-  # While WS is stale, wait this long between engine cycles instead of refresh_candles_seconds.
-  stale_recovery_sleep_seconds: 5
+  # Scalper preset fills stale/LTP/flatten if you omit them; COINDCX_BOT_MODE=scalper forces preset too.
+  mode: scalper
+  # Balanced vs API load; use 1–5 only if you accept heavier REST use.
+  refresh_candles_seconds: 12
+  stale_tick_seconds: 25
+  stale_recovery_sleep_seconds: 2
+  tui_ltp_poll_seconds: 0.25
+  # TUI: read-only CoinDCX futures positions (list API only; no orders/exits). Needs COINDCX_API_*.
+  tui_exchange_positions: true
+  tui_exchange_positions_refresh_seconds: 25
+  tui_exchange_positions_margins: [USDT, INR]
   # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
   ws_shutdown_join_seconds: 45
-  # Paper trading: no futures orders / account exits. Same effect as dry_run (either key is enough).
+  # Paper: no exchange orders. Flip to false only when going live with credentials + risk checks.
   dry_run: true
-  # paper: true
-  # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.
+  # Verbose strategy line per cycle — COINDCX_STRATEGY_SIGNALS=1 or:
   # log_strategy_signals: true
-  # Paper only: when true (default), mirroring REST candles into LTP also refreshes the WS staleness clock so STALE/AGE match the UI. Live ignores this.
   # paper_rest_advances_ws_stale_clock: true
-  # TUI only: REST poll interval (seconds) for LTP/CHG/AGE in the dashboard; does not drive strategy or `@ws_tick_at`. Set 0 to disable. Override: COINDCX_TUI_LTP_POLL_SECONDS=0
-  # tui_ltp_poll_seconds: 0.5
 
-# Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true,
-# and paper_exchange.enabled is false). Slippage/fees; persisted to SQLite.
+# SMC AI TradeSetups: Ollama planner writes validated JSON plans to the journal; tick FSM evaluates LTP vs zones.
+# This is NOT regime.ai (TUI narrative) — that lives under regime: ai: when enabled.
+smc_setup:
+  enabled: true
+  planner_enabled: true
+  planner_interval_seconds: 120
+  planner_reset_state: false
+  auto_execute: false
+  disable_strategy_entries: false
+  gatekeeper_enabled: false
+  max_active_setups_per_pair: 2
+  sweep_consecutive_ticks: 1
+  model: llama3.2:3b
+  ollama_base_url: http://127.0.0.1:11434
+  timeout_seconds: 90
+  temperature: 0.1
+  use_retry_middleware: true
+  retry_attempts: 3
+
+# Regime/HMM: optional context for TUI + regime_vol_tier. Off by default for scalping (less CPU/REST per cycle).
+# Set enabled: true and hmm.enabled: true when you want the strip + persistence under ./data/regime_hmm*.json.
+# regime:
+#   enabled: true
+#   scope: per_pair
+#   hmm:
+#     enabled: true
+#     persistence_path: ./data/regime_hmm.json
+#     n_candidates: [3, 4, 5]
+#     n_init: 3
+#     em_iterations: 35
+#     min_train_bars: 80
+#     zscore_lookback: 60
+#     retrain_every_bars: 0
+#   ai:
+#     enabled: false
+#     include_hmm_context: true
+#     mode: tui_narrative
+#     model: llama3.2:3b
+#     ollama_base_url: http://127.0.0.1:11434
+#     timeout_seconds: 90
+#     min_interval_seconds: 180
+#     bars_per_pair: 24
+#     max_pairs: 8
+#     temperature: 0.15
+#     use_retry_middleware: true
+#     retry_attempts: 3
+
+# Paper broker simulation settings (only active when runtime.dry_run is true).
+# The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
 paper:
   slippage_bps: 5
   fee_bps: 4
   db_path: ./data/paper_trading.sqlite3
 
 # CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). When enabled with
-# `runtime.dry_run` / `runtime.paper`, the bot uses `OrderGateway` / `AccountGateway` against this
+# With `runtime.dry_run: true`, the bot uses `OrderGateway` / `AccountGateway` against this
 # base URL instead of the in-process `PaperBroker`. Set `COINDCX_API_*` to match the seeded keys.
 paper_exchange:
   enabled: true

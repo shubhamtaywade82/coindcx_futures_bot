@@ -19,6 +19,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
   end
 
   let(:guard) { CoindcxBot::Risk::ExposureGuard.new(config: config) }
+  let(:fx) { instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: config.inr_per_usdt) }
 
   let(:broker) do
     CoindcxBot::Execution::LiveBroker.new(
@@ -37,7 +38,8 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       journal: journal,
       config: config,
       exposure_guard: guard,
-      logger: nil
+      logger: nil,
+      fx: fx
     )
   end
 
@@ -110,6 +112,22 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(BigDecimal(rows.first[:entry_price])).to eq(paper_entry)
       expect(paper_entry).to be > BigDecimal('100')
       expect(rows.first[:state]).to eq('open')
+    end
+
+    it 'persists smc_setup_id on the journal row when signal metadata includes it' do
+      signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'smc',
+        metadata: { smc_setup_id: 'plan-9' }
+      )
+
+      coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))
+
+      row = journal.open_positions.first
+      expect(row[:smc_setup_id]).to eq('plan-9')
     end
 
     it 'records a paper fill in the paper store' do

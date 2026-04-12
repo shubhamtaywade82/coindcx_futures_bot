@@ -8,6 +8,6 @@
 | [`paper_broker_simulation.md`](paper_broker_simulation.md) | In-process **`PaperBroker`** roadmap (phases, working orders) |
 | [`trading_lifecycle.md`](trading_lifecycle.md) | Startup, tick loop, execution modes |
 | [`new_improvements.md`](new_improvements.md) | What the repo implements today vs obsolete drafts |
-| [`hmm_regime_trading_spec.md`](hmm_regime_trading_spec.md) | HMM regime detection + allocation spec (Ruby, `coindcx-client`, USDT-M futures) |
+| [`hmm_regime_trading_spec.md`](hmm_regime_trading_spec.md) | HMM regime detection + allocation spec (Ruby HMM + optional Ollama narrative; see **Implementation status** in doc) |
 
 Project changelog: [`../CHANGELOG.md`](../CHANGELOG.md).

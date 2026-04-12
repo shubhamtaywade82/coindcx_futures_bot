@@ -3,11 +3,51 @@
 require 'bigdecimal'
 
 RSpec.describe CoindcxBot::Config do
-  it 'treats runtime.paper as dry_run (paper trading mode)' do
+  it 'reads risk.flatten_on_daily_loss_breach and pause_after_daily_loss_flatten' do
+    on = described_class.new(minimal_bot_config(risk: minimal_bot_config[:risk].merge(flatten_on_daily_loss_breach: true, pause_after_daily_loss_flatten: true)))
+    expect(on.flatten_on_daily_loss_breach?).to be(true)
+    expect(on.pause_after_daily_loss_flatten?).to be(true)
+  end
+
+  it 'reads smc_setup.enabled' do
+    off = described_class.new(minimal_bot_config)
+    expect(off.smc_setup_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(smc_setup: { enabled: true }))
+    expect(on.smc_setup_enabled?).to be(true)
+  end
+
+  it 'reads regime.ai.enabled as regime_ai_enabled? only when regime is on' do
+    off = described_class.new(minimal_bot_config(regime: { enabled: false, ai: { enabled: true } }))
+    expect(off.regime_ai_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(regime: { enabled: true, ai: { enabled: true } }))
+    expect(on.regime_ai_enabled?).to be(true)
+  end
+
+  it 'reads regime.enabled as regime_enabled?' do
+    on = described_class.new(minimal_bot_config(regime: { enabled: true }))
+    expect(on.regime_enabled?).to be(true)
+    off = described_class.new(minimal_bot_config(regime: { enabled: false }))
+    expect(off.regime_enabled?).to be(false)
+  end
+
+  it 'defaults tui exchange position margins to [USDT, INR] when margin_currency_short_name is blank' do
+    cfg = described_class.new(minimal_bot_config.merge(margin_currency_short_name: ''))
+    expect(cfg.tui_exchange_positions_margin_currencies).to eq(%w[USDT INR])
+  end
+
+  it 'uses runtime.tui_exchange_positions_margins when set' do
     cfg = described_class.new(
-      minimal_bot_config(runtime: { journal_path: '/tmp/x.sqlite3', paper: true, dry_run: false })
+      minimal_bot_config(runtime: { tui_exchange_positions_margins: %w[usdt inr] })
     )
-    expect(cfg.dry_run?).to be(true)
+    expect(cfg.tui_exchange_positions_margin_currencies).to eq(%w[USDT INR])
+  end
+
+  it 'rejects runtime.paper (use runtime.dry_run only)' do
+    bad = minimal_bot_config(runtime: { paper: true })
+    expect { described_class.new(bad) }.to raise_error(
+      CoindcxBot::Config::ConfigurationError,
+      /runtime\.paper/
+    )
   end
 
   it 'rejects per_trade_inr_min greater than max' do
@@ -63,11 +103,26 @@ RSpec.describe CoindcxBot::Config do
   it 'does not enable paper exchange when not in dry_run' do
     cfg = described_class.new(
       minimal_bot_config(
-        runtime: { dry_run: false, paper: false },
+        runtime: { dry_run: false },
         paper_exchange: { enabled: true, api_base_url: 'http://127.0.0.1:9292' }
       )
     )
     expect(cfg.paper_exchange_enabled?).to be(false)
+  end
+
+  it 'fx_enabled? defaults true when fx section absent' do
+    cfg = described_class.new(minimal_bot_config)
+    expect(cfg.fx_enabled?).to be(true)
+  end
+
+  it 'fx_enabled? is false when fx.enabled is false' do
+    cfg = described_class.new(minimal_bot_config(fx: { enabled: false }))
+    expect(cfg.fx_enabled?).to be(false)
+  end
+
+  it 'fx_ttl_seconds defaults to 60 and clamps low values to 5' do
+    expect(described_class.new(minimal_bot_config).fx_ttl_seconds).to eq(60)
+    expect(described_class.new(minimal_bot_config(fx: { ttl_seconds: 2 })).fx_ttl_seconds).to eq(5)
   end
 
   it 'accepts up to Config::MAX_PAIRS instruments' do
@@ -114,6 +169,8 @@ RSpec.describe CoindcxBot::Config do
       expect(cfg.runtime[:refresh_candles_seconds]).to eq(12)
       expect(cfg.strategy[:execution_resolution]).to eq('5m')
       expect(cfg.strategy[:higher_timeframe_resolution]).to eq('15m')
+      expect(cfg.flatten_on_daily_loss_breach?).to be(true)
+      expect(cfg.pause_after_daily_loss_flatten?).to be(true)
     end
 
     it 'does not override explicit runtime or strategy keys when scalper' do

@@ -10,7 +10,7 @@ For Socket.IO private-stream parity (future work), see [`paper_exchange_socketio
 
 | Mode | How it works |
 |------|----------------|
-| **Default paper** (`runtime.dry_run` / `runtime.paper`, no `paper_exchange`) | **`Execution::PaperBroker`** writes to a local **`PaperStore`** SQLite file. Orders never leave the process. |
+| **Default paper** (`runtime.dry_run: true`, no `paper_exchange`) | **`Execution::PaperBroker`** writes to a local **`PaperStore`** SQLite file. Orders never leave the process. |
 | **Paper exchange** (`paper_exchange.enabled: true` + `api_base_url`) | **`Execution::GatewayPaperBroker`** sends orders and account actions to **your Rack app** over HTTP. Fills are driven by **signed `POST …/simulation/tick`** from the engine (same API key/secret as CoinDCX-style signing). |
 
 Use the HTTP exchange when you want **transport-level parity** with the real client (headers, paths, JSON shapes) or to share one simulator between multiple processes.
@@ -55,7 +55,7 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
 
    ```yaml
    runtime:
-     dry_run: true   # or paper: true
+     dry_run: true
 
    paper_exchange:
      enabled: true
@@ -65,7 +65,15 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
 
 5. **Slippage / fees on the simulator** are read from the optional **`paper:`** block in the same YAML the harness loads (`COINDCX_BOT_CONFIG` or default `config/bot.yml`), e.g. `slippage_bps`, `fee_bps`.
 
-6. Run the bot as usual: `bundle exec bin/bot run` or `bundle exec bin/bot tui`.
+6. **USDT/INR conversions (public GET):** `GET /api/v1/derivatives/futures/data/conversions` returns a **JSON array** in the same shape as production (e.g. `USDTINR` with `conversion_price`). The harness **proxies** CoinDCX’s API with a **TTL cache** (default **60s**). If the upstream call fails or returns no usable row, the response is a **single synthetic** `USDTINR` element using top-level **`inr_per_usdt`** from the same bot YAML (default **83**).
+
+   | Environment variable | Purpose |
+   | --- | --- |
+   | `PAPER_EXCHANGE_FX_TTL_SECONDS` | Cache TTL for upstream conversions (seconds, minimum 5). Default `60`. |
+   | `PAPER_EXCHANGE_FX_UPSTREAM_HOST` | Base URL for the Faraday client (no trailing slash). Default `https://api.coindcx.com`. |
+   | `PAPER_EXCHANGE_FX_UPSTREAM_PATH` | Path appended to the host. Default `/api/v1/derivatives/futures/data/conversions`. |
+
+7. Run the bot as usual: `bundle exec bin/bot run` or `bundle exec bin/bot tui`.
 
 ---
 
@@ -73,7 +81,7 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
 
 - **`CoindcxBot::Config#paper_exchange_enabled?`** is true only when **`dry_run?`** and **`paper_exchange.enabled`** are both set.
 - **`Core::Engine#configure_coin_dcx`** sets **`CoinDCX.configure { |c| c.api_base_url = … }`** to **`paper_exchange.api_base_url`** so **`OrderGateway`** and **`AccountGateway`** hit the local app.
-- **`Core::Engine#build_broker`** returns **`GatewayPaperBroker`**, which subclasses **`LiveBroker`** but overrides **`paper?`** and **`process_tick`**. Each tick cycle, **`process_tick`** signs a small JSON body (`pair`, `ltp`, optional candle **`high`** / **`low`**) and POSTs to the simulation tick path so the exchange can match limits/stops and update positions.
+- **`Core::Engine#build_broker`** returns **`GatewayPaperBroker`**, which subclasses **`LiveBroker`** but overrides **`paper?`** and **`process_tick`**. Each tick cycle, **`process_tick`** signs a small JSON body (`pair`, `ltp`, optional candle **`high`** / **`low`**) and POSTs to the simulation tick path. The JSON response’s **`position_exits`** array is turned into the same `kind: :exit` rows as in-process **`PaperBroker`**, so **`run_paper_process_tick`** can call **`handle_broker_exit`**.
 
 If **`paper_exchange.enabled`** is false, dry-run still uses **`Execution::PaperBroker`** (in-process) as before.
 
@@ -81,13 +89,28 @@ If **`paper_exchange.enabled`** is false, dry-run still uses **`Execution::Paper
 
 ## HTTP surface (high level)
 
-Implemented in **`CoindcxBot::PaperExchange::App`** (behind **`Auth::Middleware`** except **`GET /health`**):
+Implemented in **`CoindcxBot::PaperExchange::App`** (behind **`Auth::Middleware`** except **`GET /health`** and **public market GETs** such as **`/api/v1/derivatives/futures/data/conversions`**):
 
 - **`GET /health`** — liveness JSON.
+- **`GET /api/v1/derivatives/futures/data/conversions`** — JSON **array** of conversion rows (proxied from CoinDCX with TTL cache; synthetic `USDTINR` from `inr_per_usdt` on failure). No auth.
 - **Wallets:** `GET …/derivatives/futures/wallets`, `POST …/wallets/transfer`, `GET …/wallets/transactions`.
 - **Orders:** `POST …/orders/create`, `POST …/orders/cancel`, `POST …/orders` (list).
 - **Positions:** list, leverage, margin, exit, TP/SL helpers, transactions, cross-margin details, etc. (see `lib/coindcx_bot/paper_exchange/app.rb` for the exact path map).
-- **`POST /exchange/v1/paper/simulation/tick`** — **signed** body; advances the internal matcher for the authenticated user.
+- **`POST /exchange/v1/paper/simulation/tick`** — **signed** body (`pair`, `ltp`, optional `high` / `low`); updates mark prices and runs the fill engine on open orders for that pair.
+
+  **Response (200):** `{ "status": "ok", "position_exits": [ ... ] }`. Each element describes a **full** position close that occurred during this tick (partial closes are omitted from this list):
+
+  | Field | Meaning |
+  | --- | --- |
+  | `pair` | Instrument, e.g. `B-SOL_USDT` |
+  | `realized_pnl_usdt` | Net USDT PnL for this close leg after fees (decimal string) |
+  | `fill_price` | Exit fill price (decimal string) |
+  | `position_id` | Exchange `pe_positions.id` |
+  | `trigger` | Fill trigger, e.g. `stop_loss`, `take_profit`, `limit_order` |
+
+  `GatewayPaperBroker#process_tick` reads `position_exits` and forwards them to `Coordinator#handle_broker_exit` so the bot journal matches the simulator when stops/limits fire without a strategy `:close` signal.
+
+  **Limitation:** Resting **entry** orders that fill on a later tick do not create journal rows via this API; use market entries from the strategy or in-process `PaperBroker` if you need journal parity for deferred entries.
 
 Exact JSON shapes aim to stay close enough for **`coindcx-client`**; refer to the service objects under `lib/coindcx_bot/paper_exchange/` for fields and error codes.
 

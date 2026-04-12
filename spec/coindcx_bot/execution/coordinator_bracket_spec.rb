@@ -21,6 +21,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator, 'bracket orders & trail sync'
   end
 
   let(:guard) { CoindcxBot::Risk::ExposureGuard.new(config: config) }
+  let(:fx) { instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: config.inr_per_usdt) }
   let(:broker) { CoindcxBot::Execution::PaperBroker.new(store: paper_store, fill_engine: fill_engine, logger: nil) }
 
   subject(:coordinator) do
@@ -29,7 +30,8 @@ RSpec.describe CoindcxBot::Execution::Coordinator, 'bracket orders & trail sync'
       journal: journal,
       config: config,
       exposure_guard: guard,
-      logger: nil
+      logger: nil,
+      fx: fx
     )
   end
 

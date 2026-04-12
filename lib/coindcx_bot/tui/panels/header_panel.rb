@@ -4,6 +4,7 @@ require 'bigdecimal'
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../term_width'
 
 module CoindcxBot
   module Tui
@@ -53,7 +54,7 @@ module CoindcxBot
         end
 
         def term_width
-          TTY::Screen.width || 80
+          TermWidth.columns
         end
 
         def move(row)
@@ -86,7 +87,7 @@ module CoindcxBot
           feed = snap.stale ? on_yellow(' FEED: STALE ') : green('FEED: OK')
           join_compact(
             w,
-            ["MODE: #{mode}", profile, eng, pause, kill, ws, feed, focus_fragment, leverage_fragment, lat].compact
+            ["MODE: #{mode}", profile, regime_header_fragment(snap), eng, pause, kill, ws, feed, focus_fragment, leverage_fragment, lat].compact
           )
         end
 
@@ -122,7 +123,7 @@ module CoindcxBot
             base = snap.capital_inr || BigDecimal('0')
             realized_usdt = BigDecimal((snap.paper_metrics[:total_realized_pnl] || 0).to_s)
             unreal_usdt = BigDecimal((snap.paper_metrics[:unrealized_pnl] || 0).to_s)
-            fx = @engine.config.inr_per_usdt
+            fx = @engine.inr_per_usdt
             total = base + ((realized_usdt + unreal_usdt) * fx)
             bold('BAL: ') + fmt_inr(total)
           elsif snap.capital_inr
@@ -145,7 +146,7 @@ module CoindcxBot
               "#{bold('POS: ')}#{pos_n}",
               "#{bold('ORD: ')}#{ord_n}",
               "#{bold('ERR: ')}#{err}",
-              "#{bold('LAST: ')}#{last}"
+              "#{bold('LAST EVT: ')}#{last}"
             ]
           )
         end
@@ -210,6 +211,15 @@ module CoindcxBot
           return nil unless cfg.respond_to?(:scalper_mode?) && cfg.scalper_mode?
 
           yellow('SCALP')
+        end
+
+        def regime_header_fragment(snap)
+          r = snap.regime
+          return nil unless r.is_a?(Hash) && r[:enabled]
+
+          return green('REGIME·LIVE') if r[:active]
+
+          cyan('REGIME·ON')
         end
 
         def focus_fragment

@@ -5,10 +5,11 @@ require 'bigdecimal'
 module CoindcxBot
   module Risk
     class Manager
-      def initialize(config:, journal:, exposure_guard:)
+      def initialize(config:, journal:, exposure_guard:, fx:)
         @config = config
         @journal = journal
         @guard = exposure_guard
+        @fx = fx
         @max_daily_loss = BigDecimal(config.resolved_max_daily_loss_inr.to_s)
       end
 
@@ -28,7 +29,7 @@ module CoindcxBot
 
       def size_quantity(entry_price:, stop_price:, side:)
         risk_inr = per_trade_risk_inr
-        risk_usdt = risk_inr / @config.inr_per_usdt
+        risk_usdt = risk_inr / @fx.inr_per_usdt
         dist = (entry_price - stop_price).abs
         return BigDecimal('0') if dist <= 0
 

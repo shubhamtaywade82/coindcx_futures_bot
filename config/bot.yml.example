@@ -1,4 +1,21 @@
-# Copy to config/bot.yml and adjust. Env overrides: COINDCX_BOT_CONFIG path.
+# Copy to config/bot.yml and adjust.
+#
+# Reference: commented blocks list optional keys the bot understands. Uncomment and edit as needed.
+# Scalper preset (runtime.mode: scalper or COINDCX_BOT_MODE=scalper) merges defaults only for keys you
+# omit — see lib/coindcx_bot/scalper_profile.rb for the canonical overlay.
+#
+# Environment (optional):
+#   COINDCX_BOT_CONFIG          — path to this YAML (default: ./config/bot.yml from repo root when running locally)
+#   COINDCX_BOT_MODE            — scalper | swing | default (overrides YAML runtime.mode for preset)
+#   COINDCX_STRATEGY_SIGNALS=1  — log every strategy signal (same as runtime.log_strategy_signals)
+#   COINDCX_WS_TRACE=1          — verbose WebSocket tick logging
+#   COINDCX_API_KEY / COINDCX_API_SECRET — live / gateway paper (required when not dry_run or using paper exchange)
+#   COINDCX_SOCKET_BASE_URL     — optional Socket.IO base override
+#   COINDCX_SOCKET_EIO          — optional Engine.IO version for WS handshake
+#   COINDCX_TUI_LTP_POLL_SECONDS — override runtime.tui_ltp_poll_seconds
+#   COINDCX_TUI_VERBOSE=1       — TUI: engine logs to tmp/coindcx_tui.log (or COINDCX_TUI_LOG path)
+#   COINDCX_TUI_LOG             — custom path for TUI verbose log
+#   COINDCX_TUI_POLL_ONLY=1     — TUI: REST LTP poll only (no WS requirement for display)
 
 margin_currency_short_name: USDT
 
@@ -9,8 +26,13 @@ pairs:
   - B-XRP_USDT
   - B-BTC_USDT
 
-# Approximate INR per USDT for position sizing from INR risk budget
+# Fallback INR per USDT when live FX is disabled or the conversions API fails.
 inr_per_usdt: 83.0
+
+# Live USDT/INR from CoinDCX GET /api/v1/derivatives/futures/data/conversions (cached).
+# fx:
+#   enabled: true
+#   ttl_seconds: 60
 
 # Reference equity in INR — risk clamps and daily loss limit scale from this (no need to retune ₹ amounts).
 capital_inr: 1_00_000
@@ -18,14 +40,24 @@ capital_inr: 1_00_000
 risk:
   max_open_positions: 2
   max_leverage: 10
+  # When daily *realized* loss hits max_daily_loss_* , flatten all open positions (entries are already blocked).
+  # Scalper preset sets these true by default for keys you omit. Pause stops new signals until you resume (r).
+  # flatten_on_daily_loss_breach: false
+  # pause_after_daily_loss_flatten: false
   # Optional (% of capital_inr). Defaults: per-trade 1.5% (when both per_trade_inr_min/max are omitted);
   # clamp floor/ceiling 0.25% / 3%; daily loss halt 3.5%. TUI UTIL = loss vs daily cap, not margin use.
   # per_trade_capital_pct: 1.5
   # per_trade_inr_min_pct_of_capital: 0.25
   # per_trade_inr_max_pct_of_capital: 3.0
   # max_daily_loss_pct_of_capital: 3.5
+  # Legacy explicit INR band (omit if using *_pct_of_capital above).
+  # per_trade_inr_min: 250
+  # per_trade_inr_max: 500
+  # max_daily_loss_inr: 1500
 
 strategy:
+  # Engine strategy: trend_continuation (default), supertrend_profit, smc_confluence, or regime_vol_tier (wraps inner_strategy).
+  # name: trend_continuation
   execution_resolution: 15m
   higher_timeframe_resolution: 1h
   ema_fast: 12
@@ -45,8 +77,26 @@ strategy:
   adx_period: 14
   adx_min: 0
 
-  # Optional: switch engine strategy (default = trend_continuation when omitted).
-  # Supertrend on execution_resolution (use 5m below); exits only at take_profit_pct — no Supertrend-based exit.
+  # Optional: exit when unrealized USDT falls from the session peak (see engine bump + Strategy::HwmGiveback).
+  # Default off unless you set enabled: true (scalper preset may merge defaults for omitted keys).
+  # hwm_giveback:
+  #   enabled: false
+  #   min_peak_usdt: 10
+  #   giveback_pct: 0.35
+  #   # giveback_usdt: 5
+
+  # Dynamic trailing (TrendContinuation + in-process PaperBroker when exec candles are passed).
+  # All optional; see lib/coindcx_bot/strategy/dynamic_trail.rb for behavior.
+  # trail_atr_period: 14
+  # trail_atr_fast_period: 5
+  # trail_velocity_lookback: 3
+  # trail_velocity_weight: 0.25
+  # trail_swing_lookback: 5
+  # trail_floor_mult: 0.40
+  # trail_breakeven_gate_mult: 0.10
+
+  # --- supertrend_profit (set strategy.name) ---
+  # Higher timeframe is optional for this strategy; execution_resolution drives bar size.
   # name: supertrend_profit
   # execution_resolution: 5m
   # higher_timeframe_resolution: 5m
@@ -55,12 +105,44 @@ strategy:
   # take_profit_pct: 0.10
   # stop_distance_pct_for_sizing: 0.02
 
+  # --- smc_confluence (SMC-CE: Smart Money Confluence engine, Pine-parity bar replay) ---
+  # Set name: smc_confluence. Uses execution_resolution (+ higher_timeframe_resolution if htf_alignment).
+  # Candles with volume improve volume-profile confluence; without volume, lower min_score or widen zones.
+  # name: smc_confluence
+  # execution_resolution: 15m
+  # higher_timeframe_resolution: 1h
+  # stop_distance_pct_for_sizing: 0.02
+  # take_profit_pct: 0          # 0 = no TP exit; else fraction of price (e.g. 0.004 = 0.4%)
+  # htf_alignment: false       # if true, longs need HTF structure_bias/ms_trend bullish; shorts bearish
+  # smc_confluence:
+  #   # Pine defaults: min_score 3, sig_cooldown 5, CHOCH required for signal (strict).
+  #   # Relaxed example (more frequent entries, more chop):
+  #   min_score: 1
+  #   sig_cooldown: 1
+  #   smc_swing: 6
+  #   ms_swing: 6
+  #   ob_body_pct: 0.15
+  #   ob_expire: 90
+  #   liq_wick_pct: 0.25
+  #   poc_zone_pct: 0.35
+  #   sess_liq_pct: 0.18
+  #   tl_retest_pct: 0.22
+  #   vp_bars: 60
+  #   # signal_mode: choch_strict   # default — CHOCH fires primary confluence slot
+  #   # signal_mode: bos_relaxed    # BOS or CHOCH counts as primary (more signals than strict)
+  #   # Opposite-SMC flip exit (close long on short_signal / short on long_signal on last bar):
+  #   # close_on_opposite_smc: true   # false = never exit on opposite signal (TP/stop only)
+  #   # opposite_smc_min_gain_pct:    # omit = legacy: flip even when underwater on mark
+  #   # opposite_smc_min_gain_pct: 0 # flip only if mark is strictly better than entry (same basis as take_profit_pct)
+  #   # opposite_smc_min_gain_pct: 0.002  # require at least 0.2% unrealized gain before flipping
+
 execution:
   # Merged into every futures `order:` hash; required keys depend on CoinDCX API.
   # See https://docs.coindcx.com/ — adjust for your account (order_type, leverage, etc.).
   order_defaults:
     order_type: market_order
     margin_currency_short_name: USDT
+    # leverage: 5   # optional; TUI/header fall back to risk.max_leverage when omitted
 
 runtime:
   journal_path: ./data/bot_journal.sqlite3
@@ -76,27 +158,104 @@ runtime:
   stale_recovery_sleep_seconds: 5
   # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
   ws_shutdown_join_seconds: 45
-  # Paper trading: no futures orders / account exits. Same effect as dry_run (either key is enough).
+  # Paper trading: no futures orders / account exits (set false only for live after risk checks).
   dry_run: true
-  # paper: true
   # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.
   # log_strategy_signals: true
   # Paper only: when true (default), mirroring REST candles into LTP also refreshes the WS staleness clock so STALE/AGE match the UI. Live ignores this.
   # paper_rest_advances_ws_stale_clock: true
   # TUI only: REST poll interval (seconds) for LTP/CHG/AGE in the dashboard; does not drive strategy or `@ws_tick_at`. Set 0 to disable. Override: COINDCX_TUI_LTP_POLL_SECONDS=0
   # tui_ltp_poll_seconds: 0.5
-  # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
-  # log_strategy_signals: true
+  # TUI: show CoinDCX account futures positions (read-only POST list_positions; no orders/exits). Throttled; uses API keys only.
+  # tui_exchange_positions: true
+  # tui_exchange_positions_refresh_seconds: 25
+  # tui_exchange_positions_margins: [USDT, INR]   # optional; default: top-level margin_currency_short_name, or [USDT, INR] if unset
 
-# Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
+# Regime: HMM (Ruby diagonal Gaussian), optional Ollama narrative, optional risk size multipliers.
+# See docs/hmm_regime_trading_spec.md. Ollama does not submit orders; strategy `regime_vol_tier` gates entries from HMM tier.
+# regime:
+#   enabled: false
+#   scope: per_pair
+#   hmm:
+#     enabled: false
+#     persistence_path: ./data/regime_hmm.json
+#     n_candidates: [3, 4, 5]
+#     n_init: 3
+#     em_iterations: 40
+#     min_train_bars: 80
+#     zscore_lookback: 60
+#     stability_bars: 3
+#     flicker_window: 20
+#     flicker_threshold: 4
+#     min_confidence: 0.55
+#     retrain_every_bars: 0
+#   strategy:
+#     block_entries_high_vol: true
+#     block_on_flicker: false
+#   risk:
+#     enabled: false
+#     daily_dd_reduce_pct_of_capital: 2
+#     daily_dd_halt_pct_of_capital: 3
+#     size_reduce_factor: 0.5
+#   ai:
+#     enabled: false
+#     include_hmm_context: true
+#     mode: tui_narrative
+#     model: llama3.2:3b
+#     ollama_base_url: http://127.0.0.1:11434
+#     timeout_seconds: 90
+#     min_interval_seconds: 180
+#     bars_per_pair: 24
+#     max_pairs: 8
+#     temperature: 0.15
+#     use_retry_middleware: true
+#     retry_attempts: 3
+#
+# regime_backtest:
+#   n_candidates: [3, 4]
+#   n_init: 2
+#   em_iterations: 25
+#   zscore_lookback: 40
+#
+# strategy:
+#   name: regime_vol_tier
+#   inner_strategy: trend_continuation
+#   # inner_strategy: smc_confluence  # optional; same smc_confluence: block as top-level strategy
+
+# SMC AI TradeSetups: JSON plans + tick FSM (LTP vs zones, SMC bar flags) → optional Coordinator entries.
+# Separate from regime.ai (TUI narrative). Default off. Use paper/dry_run first; optional Ollama planner / gatekeeper.
+# smc_setup:
+#   enabled: false
+#   auto_execute: true
+#   disable_strategy_entries: false   # if true and a non-terminal setup exists on pair, strategy stays flat
+#   max_active_setups_per_pair: 3
+#   sweep_consecutive_ticks: 1
+#   planner_enabled: false
+#   planner_interval_seconds: 600
+#   planner_reset_state: false
+#   gatekeeper_enabled: false
+#   gatekeeper_min_interval_seconds: 45
+#   model: llama3.2:3b
+#   ollama_base_url: http://127.0.0.1:11434
+#   timeout_seconds: 60
+#   temperature: 0.1
+#   use_retry_middleware: true
+#   retry_attempts: 3
+#   schema_path:   # default: config/schemas/smc_trade_setup_v1.json
+
+# Paper broker simulation settings (only active when runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
 paper:
   slippage_bps: 5
   fee_bps: 4
+  # Accrued per funding interval (default 8h) before close; see PaperBroker::FUNDING_INTERVAL_SECONDS.
+  # funding_rate_bps: 1
   db_path: ./data/paper_trading.sqlite3
+  # Bracket take-profit distance as multiple of entry-vs-stop risk (coordinator / paper bracket orders).
+  # take_profit_r_multiple: 3
 
 # CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). When enabled with
-# `runtime.dry_run` / `runtime.paper`, the bot uses `OrderGateway` / `AccountGateway` against this
+# With `runtime.dry_run: true`, the bot uses `OrderGateway` / `AccountGateway` against this
 # base URL instead of the in-process `PaperBroker`. Set `COINDCX_API_*` to match the seeded keys.
 # paper_exchange:
 #   enabled: true

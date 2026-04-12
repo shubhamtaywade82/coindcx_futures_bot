@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require 'json'
+require 'faraday'
 
 RSpec.describe CoindcxBot::Execution::GatewayPaperBroker do
   let(:orders) { instance_double(CoindcxBot::Gateways::OrderGateway) }
@@ -97,6 +99,64 @@ RSpec.describe CoindcxBot::Execution::GatewayPaperBroker do
 
       expect(r[:ok]).to be true
       expect(account).to have_received(:exit_position).with(hash_including(id: '9'))
+    end
+  end
+
+  describe '#process_tick' do
+    let(:stubs) { Faraday::Adapter::Test::Stubs.new }
+    let(:conn) do
+      Faraday.new(url: 'http://paper.test') do |f|
+        f.adapter :test, stubs
+      end
+    end
+
+    let(:tick_broker) do
+      described_class.new(
+        order_gateway: orders,
+        account_gateway: account,
+        journal: journal,
+        config: config,
+        exposure_guard: exposure,
+        logger: nil,
+        tick_base_url: 'http://paper.test',
+        tick_path: '/exchange/v1/paper/simulation/tick',
+        api_key: 'k',
+        api_secret: 's',
+        faraday_connection: conn
+      )
+    end
+
+    before do
+      stubs.post('/exchange/v1/paper/simulation/tick') do |_env|
+        [
+          200,
+          { 'Content-Type' => 'application/json' },
+          JSON.generate(
+            'status' => 'ok',
+            'position_exits' => [
+              {
+                'pair' => 'B-SOL_USDT',
+                'realized_pnl_usdt' => '-1.25',
+                'fill_price' => '94.5',
+                'position_id' => 9,
+                'trigger' => 'stop_loss'
+              }
+            ]
+          )
+        ]
+      end
+    end
+
+    it 'returns kind :exit rows for the engine from position_exits JSON' do
+      rows = tick_broker.process_tick(pair: 'B-SOL_USDT', ltp: BigDecimal('90'), high: BigDecimal('91'), low: BigDecimal('89'))
+      expect(rows.size).to eq(1)
+      r = rows.first
+      expect(r[:kind]).to eq(:exit)
+      expect(r[:pair]).to eq('B-SOL_USDT')
+      expect(r[:realized_pnl_usdt]).to eq(BigDecimal('-1.25'))
+      expect(r[:fill_price]).to eq(BigDecimal('94.5'))
+      expect(r[:position_id]).to eq(9)
+      expect(r[:trigger]).to eq(:stop_loss)
     end
   end
 end

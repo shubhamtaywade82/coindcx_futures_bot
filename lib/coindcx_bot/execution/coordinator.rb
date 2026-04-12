@@ -6,12 +6,13 @@ require 'securerandom'
 module CoindcxBot
   module Execution
     class Coordinator
-      def initialize(broker:, journal:, config:, exposure_guard:, logger:)
+      def initialize(broker:, journal:, config:, exposure_guard:, logger:, fx:)
         @broker = broker
         @journal = journal
         @config = config
         @exposure = exposure_guard
         @logger = logger
+        @fx = fx
         @dry = config.dry_run?
       end
 
@@ -172,6 +173,7 @@ module CoindcxBot
       end
 
       def journal_open(signal, quantity, entry_price)
+        smc_id = smc_setup_id_from_signal(signal)
         @journal.insert_position(
           pair: signal.pair,
           side: signal.side.to_s,
@@ -179,8 +181,18 @@ module CoindcxBot
           quantity: quantity,
           stop_price: signal.stop_price,
           trail_price: nil,
-          initial_stop_price: signal.stop_price
+          initial_stop_price: signal.stop_price,
+          smc_setup_id: smc_id
         )
+      end
+
+      def smc_setup_id_from_signal(signal)
+        m = signal.metadata
+        return nil unless m.is_a?(Hash)
+
+        v = m[:smc_setup_id] || m['smc_setup_id']
+        s = v&.to_s&.strip
+        s&.empty? ? nil : s
       end
 
       def close_position(signal, exit_price: nil)
@@ -392,7 +404,7 @@ module CoindcxBot
         end
 
         usdt = raw.nil? ? BigDecimal('0') : BigDecimal(raw.to_s)
-        inr = usdt * @config.inr_per_usdt
+        inr = usdt * @fx.inr_per_usdt
         fill_s = paper_close_fill_price_for_event(result)
         @journal.add_daily_pnl_inr(inr)
         @journal.log_event(

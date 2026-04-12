@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
 require 'logger'
 require 'yaml'
 require 'rack/common_logger'
@@ -42,10 +43,12 @@ module CoindcxBot
         logger.info("[paper_exchange] COINDCX_API_KEY fingerprint=#{Auth.key_fingerprint(api_key)} — bot must use the same key")
 
         paper_cfg = {}
+        raw_full = {}
         cfg_path = ENV['COINDCX_BOT_CONFIG'] || CoindcxBot::Config::DEFAULT_PATH
-        if File.file?(File.expand_path(cfg_path))
-          raw = YAML.safe_load(File.read(File.expand_path(cfg_path)), permitted_classes: [Symbol], aliases: true) || {}
-          paper_cfg = (raw['paper'] || raw[:paper] || {})
+        expanded_cfg = File.expand_path(cfg_path)
+        if File.file?(expanded_cfg)
+          raw_full = YAML.safe_load(File.read(expanded_cfg), permitted_classes: [Symbol], aliases: true) || {}
+          paper_cfg = (raw_full['paper'] || raw_full[:paper] || {})
         end
         slippage = paper_cfg.fetch('slippage_bps', 5)
         fee = paper_cfg.fetch('fee_bps', 4)
@@ -57,13 +60,26 @@ module CoindcxBot
         positions = PositionsService.new(store: store, ledger: ledger, orders_service: orders)
         tick_dispatcher = TickDispatcher.new(store: store, orders_service: orders)
 
+        inr_fb = BigDecimal((raw_full[:inr_per_usdt] || raw_full['inr_per_usdt'] || 83).to_s)
+        fx_ttl = Integer(ENV.fetch('PAPER_EXCHANGE_FX_TTL_SECONDS', '60'))
+        fx_host = ENV.fetch('PAPER_EXCHANGE_FX_UPSTREAM_HOST', 'https://api.coindcx.com').to_s.chomp('/')
+        fx_path = ENV.fetch('PAPER_EXCHANGE_FX_UPSTREAM_PATH', '/api/v1/derivatives/futures/data/conversions').to_s
+        conversions_feed = ConversionsFeed.new(
+          fallback_inr_per_usdt: inr_fb,
+          ttl_seconds: fx_ttl,
+          logger: logger,
+          api_host: fx_host,
+          path: fx_path
+        )
+
         inner = App.new(
           wallets: wallets,
           orders: orders,
           positions: positions,
           tick_dispatcher: tick_dispatcher,
           store: store,
-          logger: logger
+          logger: logger,
+          conversions_feed: conversions_feed
         )
 
         Rack::Builder.new do

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require_relative 'hwm_giveback'
 
 module CoindcxBot
   module Strategy
@@ -11,7 +12,7 @@ module CoindcxBot
         @cfg = strategy_config.transform_keys(&:to_sym)
       end
 
-      def evaluate(pair:, candles_htf:, candles_exec:, position:, ltp:)
+      def evaluate(pair:, candles_htf:, candles_exec:, position:, ltp:, regime_hint: nil)
         exec = candles_exec
 
         return manage_position(pair, position, ltp) if position
@@ -63,6 +64,9 @@ module CoindcxBot
           else
             return hold(pair, 'unknown_side')
           end
+
+        hwm = HwmGiveback.check(pair: pair, position: position, ltp: ltp, strategy_cfg: @cfg)
+        return hwm if hwm
 
         if gain >= take_profit_pct
           id = position[:id]

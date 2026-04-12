@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative 'fx/usdt_inr_rate'
 require_relative 'paper_exchange/store'
 require_relative 'paper_exchange/ledger'
 require_relative 'paper_exchange/boot'
@@ -12,6 +13,7 @@ require_relative 'paper_exchange/orders_service'
 require_relative 'paper_exchange/positions_service'
 require_relative 'paper_exchange/tick_dispatcher'
 require_relative 'paper_exchange/fill_strategies'
+require_relative 'paper_exchange/conversions_feed'
 require_relative 'paper_exchange/app'
 require_relative 'paper_exchange/harness'
 require_relative 'paper_exchange/ws/event_mapper'

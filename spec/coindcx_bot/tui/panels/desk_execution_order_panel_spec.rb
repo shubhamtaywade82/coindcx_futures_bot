@@ -29,7 +29,12 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
           stop_price: nil }
       ],
       ws_last_tick_ms_ago: 5,
-      strategy_last_by_pair: {}
+      strategy_last_by_pair: {},
+      regime: CoindcxBot::Regime::TuiState.disabled,
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
     )
   end
   let(:config) do
@@ -40,7 +45,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
       resolved_max_daily_loss_inr: BigDecimal('1500'),
       execution: { order_defaults: {} },
       trading_mode_label: 'SWING',
-      scalper_mode?: false
+      scalper_mode?: false,
+      tui_exchange_positions_enabled?: false
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
@@ -55,7 +61,7 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
   end
 
   before do
-    allow(TTY::Screen).to receive(:width).and_return(120)
+    allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(120)
     tick_store.update(symbol: 'B-SOL_USDT', ltp: 150.0, change_pct: 0.5)
     allow(engine).to receive(:ws_feed_stale?).with('B-SOL_USDT').and_return(false)
   end
@@ -96,7 +102,12 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
           recent_events: [],
           working_orders: [],
           ws_last_tick_ms_ago: 5,
-          strategy_last_by_pair: {}
+          strategy_last_by_pair: {},
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+          exchange_positions: [],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: nil
         )
       end
 

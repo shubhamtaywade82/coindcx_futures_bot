@@ -37,6 +37,7 @@ module CoindcxBot
       validate_risk_pct_sanity!
       validate_risk_band!
       validate_risk_capital_pct!
+      validate_runtime_no_legacy_paper_flag!
     end
 
     def scalper_mode?
@@ -55,8 +56,30 @@ module CoindcxBot
       raw[:margin_currency_short_name].to_s
     end
 
+    # Fallback when CoinDCX conversions is disabled or unreachable (see `fx:`).
     def inr_per_usdt
       BigDecimal(raw.fetch(:inr_per_usdt, 83).to_s)
+    end
+
+    def fx_section
+      s = raw[:fx]
+      s.is_a?(Hash) ? s : {}
+    end
+
+    # When false, skip HTTP and always use `inr_per_usdt`.
+    def fx_enabled?
+      sec = fx_section
+      return true unless sec.key?(:enabled)
+
+      truthy?(sec[:enabled])
+    end
+
+    def fx_ttl_seconds
+      v = fx_section.fetch(:ttl_seconds, 60)
+      n = Integer(v.to_s)
+      n < 5 ? 5 : n
+    rescue ArgumentError, TypeError
+      60
     end
 
     # Reference equity in INR (position sizing when `risk.per_trade_capital_pct` is set; TUI header).
@@ -118,6 +141,14 @@ module CoindcxBot
       raw.fetch(:risk, {})
     end
 
+    def flatten_on_daily_loss_breach?
+      truthy?(risk[:flatten_on_daily_loss_breach])
+    end
+
+    def pause_after_daily_loss_flatten?
+      truthy?(risk[:pause_after_daily_loss_flatten])
+    end
+
     def strategy
       raw.fetch(:strategy, {})
     end
@@ -130,10 +161,212 @@ module CoindcxBot
       raw.fetch(:runtime, {})
     end
 
-    # Paper trading: no exchange orders or account exits. `runtime.paper` is an alias for `runtime.dry_run`.
+    def regime_section
+      raw.fetch(:regime, {})
+    end
+
+    def regime_enabled?
+      truthy?(regime_section[:enabled])
+    end
+
+    def regime_ai_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:ai, {})
+    end
+
+    def regime_ai_enabled?
+      regime_enabled? && truthy?(regime_ai_section[:enabled])
+    end
+
+    def regime_ai_model
+      regime_ai_section[:model].to_s.strip
+    end
+
+    def regime_ai_min_interval_seconds
+      regime_ai_section.fetch(:min_interval_seconds, 180).to_f
+    end
+
+    def regime_ai_timeout_seconds
+      regime_ai_section.fetch(:timeout_seconds, 90).to_i
+    end
+
+    def regime_ai_bars_per_pair
+      n = regime_ai_section.fetch(:bars_per_pair, 24).to_i
+      [[n, 8].max, 96].min
+    end
+
+    def regime_ai_max_pairs
+      n = regime_ai_section.fetch(:max_pairs, 8).to_i
+      [[n, 1].max, MAX_PAIRS].min
+    end
+
+    def regime_ai_ollama_base_url
+      regime_ai_section[:ollama_base_url].to_s.strip
+    end
+
+    def regime_ai_temperature
+      Float(regime_ai_section.fetch(:temperature, 0.15))
+    rescue ArgumentError, TypeError
+      0.15
+    end
+
+    def regime_ai_use_retry_middleware?
+      truthy?(regime_ai_section.fetch(:use_retry_middleware, true))
+    end
+
+    def regime_ai_retry_attempts
+      n = regime_ai_section.fetch(:retry_attempts, 3).to_i
+      [[n, 1].max, 8].min
+    end
+
+    def regime_ai_include_hmm_context?
+      return false unless regime_ai_enabled?
+
+      truthy?(regime_ai_section.fetch(:include_hmm_context, true))
+    end
+
+    def regime_ai_mode
+      regime_ai_section.fetch(:mode, 'tui_narrative').to_s.strip
+    end
+
+    def smc_setup_section
+      raw.fetch(:smc_setup, {})
+    end
+
+    def smc_setup_enabled?
+      truthy?(smc_setup_section[:enabled])
+    end
+
+    def smc_setup_planner_enabled?
+      smc_setup_enabled? && truthy?(smc_setup_section.fetch(:planner_enabled, false))
+    end
+
+    def smc_setup_planner_interval_seconds
+      smc_setup_section.fetch(:planner_interval_seconds, 600).to_f
+    end
+
+    def smc_setup_planner_reset_state?
+      truthy?(smc_setup_section[:planner_reset_state])
+    end
+
+    def smc_setup_gatekeeper_enabled?
+      smc_setup_enabled? && truthy?(smc_setup_section[:gatekeeper_enabled])
+    end
+
+    def smc_setup_max_active_setups_per_pair
+      n = smc_setup_section.fetch(:max_active_setups_per_pair, 3).to_i
+      [[n, 1].max, 16].min
+    end
+
+    def smc_setup_schema_path
+      p = smc_setup_section[:schema_path].to_s.strip
+      return File.expand_path('../../config/schemas/smc_trade_setup_v1.json', __dir__) if p.empty?
+
+      File.expand_path(p, Dir.pwd)
+    end
+
+    def smc_setup_sweep_consecutive_ticks
+      n = smc_setup_section.fetch(:sweep_consecutive_ticks, 1).to_i
+      [[n, 1].max, 20].min
+    end
+
+    def smc_setup_disable_strategy_entries?
+      smc_setup_enabled? && truthy?(smc_setup_section.fetch(:disable_strategy_entries, false))
+    end
+
+    def smc_setup_auto_execute?
+      smc_setup_enabled? && truthy?(smc_setup_section.fetch(:auto_execute, true))
+    end
+
+    def smc_setup_model
+      smc_setup_section[:model].to_s.strip
+    end
+
+    def smc_setup_timeout_seconds
+      smc_setup_section.fetch(:timeout_seconds, 60).to_i
+    end
+
+    def smc_setup_temperature
+      Float(smc_setup_section.fetch(:temperature, 0.1))
+    rescue ArgumentError, TypeError
+      0.1
+    end
+
+    def smc_setup_ollama_base_url
+      smc_setup_section[:ollama_base_url].to_s.strip
+    end
+
+    def smc_setup_use_retry_middleware?
+      truthy?(smc_setup_section.fetch(:use_retry_middleware, true))
+    end
+
+    def smc_setup_retry_attempts
+      n = smc_setup_section.fetch(:retry_attempts, 3).to_i
+      [[n, 1].max, 8].min
+    end
+
+    def smc_setup_gatekeeper_min_interval_seconds
+      smc_setup_section.fetch(:gatekeeper_min_interval_seconds, 45).to_f
+    end
+
+    def regime_hmm_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:hmm, {})
+    end
+
+    def regime_hmm_enabled?
+      regime_enabled? && truthy?(regime_hmm_section[:enabled])
+    end
+
+    def regime_hmm_hash
+      regime_hmm_section
+    end
+
+    def regime_hmm_persistence_path_for(pair = nil)
+      base = regime_hmm_section.fetch(:persistence_path, './data/regime_hmm.json').to_s
+      expanded = File.expand_path(base, Dir.pwd)
+      return expanded if pair.nil? || pair.to_s.strip.empty?
+
+      dir = File.dirname(expanded)
+      stem = File.basename(expanded, '.*')
+      ext = File.extname(expanded)
+      ext = '.json' if ext.empty?
+      File.join(dir, "#{stem}_#{pair}#{ext}")
+    end
+
+    def regime_scope
+      regime_hmm_section.fetch(:scope, 'per_pair').to_s.strip.downcase
+    end
+
+    def regime_strategy_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:strategy, {})
+    end
+
+    def regime_backtest_section
+      raw.fetch(:regime_backtest, {})
+    end
+
+    def regime_risk_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:risk, {})
+    end
+
+    def regime_risk_enabled?
+      regime_enabled? && truthy?(regime_risk_section[:enabled])
+    end
+
+    # Paper trading: no exchange orders or account exits. Use +runtime.dry_run+ only (+true+ = simulated execution).
     def dry_run?
-      r = runtime
-      !!(r[:dry_run] || r[:paper])
+      truthy?(runtime[:dry_run])
     end
 
     def paper_config
@@ -155,6 +388,32 @@ module CoindcxBot
 
     def journal_path
       File.expand_path(runtime.fetch(:journal_path, './data/bot_journal.sqlite3'), Dir.pwd)
+    end
+
+    # Read-only TUI: poll CoinDCX futures positions (list only — no orders/exits).
+    def tui_exchange_positions_enabled?
+      truthy?(runtime[:tui_exchange_positions])
+    end
+
+    def tui_exchange_positions_refresh_seconds
+      v = runtime[:tui_exchange_positions_refresh_seconds]
+      f = Float(v.nil? ? 25 : v.to_s)
+      f < 5.0 ? 5.0 : f
+    rescue ArgumentError, TypeError
+      25.0
+    end
+
+    # Body filter for POST /derivatives/futures/positions (CoinDCX often needs this to return rows).
+    def tui_exchange_positions_margin_currencies
+      m = runtime[:tui_exchange_positions_margins]
+      if m.is_a?(Array) && m.any?
+        return m.map { |x| x.to_s.strip.upcase }.reject(&:empty?)
+      end
+
+      single = margin_currency_short_name.to_s.strip.upcase
+      return [single] unless single.empty?
+
+      %w[USDT INR]
     end
 
     class ConfigurationError < StandardError; end
@@ -229,6 +488,15 @@ module CoindcxBot
       return unless capital_inr.nil?
 
       raise ConfigurationError, 'capital_inr is required when risk.per_trade_capital_pct is set'
+    end
+
+    def validate_runtime_no_legacy_paper_flag!
+      r = raw[:runtime]
+      return unless r.is_a?(Hash)
+      return unless r.key?(:paper)
+
+      raise ConfigurationError,
+            'Remove runtime.paper from bot.yml; use runtime.dry_run only (true = paper trading, false = live).'
     end
 
     def deep_symbolize(obj)

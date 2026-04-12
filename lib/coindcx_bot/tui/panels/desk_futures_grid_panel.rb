@@ -3,14 +3,13 @@
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../term_width'
 
 module CoindcxBot
   module Tui
     module Panels
       # Three-column futures desk: L2 book (focus pair) | execution + orders | risk + event log.
       class DeskFuturesGridPanel
-        SIDEBAR_RESERVED = 3
-
         def initialize(engine:, tick_store:, order_book_store:, symbols:, focus_pair_proc:, origin_row:,
                        origin_col: 0, output: $stdout)
           @engine = engine
@@ -39,7 +38,8 @@ module CoindcxBot
           ord_rows = pad_rows(vm.order_flow_rows, h)
           book_rows = @order_book_store.display_rows(pair: focus, max_lines: h)
           sidebar = vm.grid_sidebar_lines
-          events = Array(snap.recent_events).last([h - SIDEBAR_RESERVED, 0].max)
+          sidebar_reserved = sidebar.size
+          events = Array(snap.recent_events).last([h - sidebar_reserved, 0].max)
 
           buf = StringIO.new
           buf << @cursor.save
@@ -59,7 +59,7 @@ module CoindcxBot
             ex = pad_visible(format_exec_cell(exec_rows[i], ew, wide_exec: wide_exec), ew)
             ord = pad_visible(format_ord_cell(ord_rows[i]), ow)
             mid = "#{ex}│#{ord}"
-            right = format_sidebar_row(sidebar, events, i, h, right_w)
+            right = format_sidebar_row(sidebar, events, i, h, right_w, sidebar_reserved: sidebar_reserved)
             buf << move(r + i) << clear_line("│#{left}│#{mid}│#{right}│")
           end
 
@@ -84,18 +84,26 @@ module CoindcxBot
           out.first(h)
         end
 
+        # Split the BOOK column between price and quantity using the same rules as row rendering.
+        def book_column_splits(left_col_w)
+          avail = left_col_w - 4
+          avail = 12 if avail < 12
+          px_w = (avail * 0.44).to_i.clamp(8, 14)
+          qty_w = (avail - px_w - 1).clamp(7, 20)
+          [px_w, qty_w]
+        end
+
         def format_book_cell(row, w)
           line =
             case row
             when :empty
               dim('·')
             when Hash
+              px_w, qty_w = book_column_splits(w)
               side = row[:side] == :ask ? red('A') : green('B')
-              px = row[:price].to_s
-              q = row[:quantity].to_s
-              px = px.length > 9 ? "#{px[0, 8]}…" : px
-              q = q.length > 6 ? "#{q[0, 5]}…" : q
-              "#{side} #{dim(px.ljust(9))} #{dim(q.rjust(6))}"
+              px = format_exec_qty(row[:price].to_s, px_w)
+              q = format_exec_qty(row[:quantity].to_s, qty_w)
+              "#{side} #{dim(px.ljust(px_w))} #{dim(q.rjust(qty_w))}"
             else
               dim('·')
             end
@@ -216,12 +224,12 @@ module CoindcxBot
           ].join(dim(' '))
         end
 
-        def format_sidebar_row(sidebar, events, i, h, w)
+        def format_sidebar_row(sidebar, events, i, h, w, sidebar_reserved:)
           text =
-            if i < SIDEBAR_RESERVED
+            if i < sidebar_reserved
               sidebar[i] || dim('·')
             else
-              ev_i = i - SIDEBAR_RESERVED
+              ev_i = i - sidebar_reserved
               if ev_i < events.size
                 format_event(events[ev_i], w)
               else
@@ -251,17 +259,14 @@ module CoindcxBot
         end
 
         def term_width
-          tw = TTY::Screen.width
-          tw = tw.to_i if tw
-          tw = 100 if tw.nil? || tw < 100
-          tw
+          TermWidth.columns
         end
 
         def column_widths(total_w)
           inner = [total_w - 4, 60].max
           # Favor a wider center column so positions + orders stay readable.
           right = (inner * 0.24).to_i.clamp(20, 44)
-          left = (inner * 0.20).to_i.clamp(18, 30)
+          left = (inner * 0.20).to_i.clamp(20, 32)
           mid = inner - left - right
           if mid < 30
             mid = 30
@@ -307,7 +312,8 @@ module CoindcxBot
         end
 
         def header_row(lw, ew, ow, rw, wide_exec:)
-          lh = [dim('S'), dim('PRICE'.ljust(8)), dim('QTY'.rjust(6))].join(dim(' '))
+          px_w, qty_w = book_column_splits(lw)
+          lh = [dim('S'), dim('PRICE'.ljust(px_w)), dim('QTY'.rjust(qty_w))].join(dim(' '))
           eh =
             if wide_exec
               [
@@ -336,7 +342,7 @@ module CoindcxBot
             dim('ST'.ljust(3)),
             dim('LAT')
           ].join(dim(' '))
-          rh = dim('EVENTS')
+          rh = dim('SUMMARY · EVENTS')
           "│#{pad_visible(lh, lw)}│#{pad_visible(eh, ew)}│#{pad_visible(oh, ow)}│#{pad_visible(rh, rw)}│"
         end
 
