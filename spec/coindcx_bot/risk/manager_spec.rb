@@ -5,8 +5,9 @@ RSpec.describe CoindcxBot::Risk::Manager do
   let(:journal) { CoindcxBot::Persistence::Journal.new(journal_path) }
   let(:config) { CoindcxBot::Config.new(minimal_bot_config) }
   let(:guard) { CoindcxBot::Risk::ExposureGuard.new(config: config) }
+  let(:fx) { instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: config.inr_per_usdt) }
 
-  subject(:manager) { described_class.new(config: config, journal: journal, exposure_guard: guard) }
+  subject(:manager) { described_class.new(config: config, journal: journal, exposure_guard: guard, fx: fx) }
 
   after do
     journal.close
@@ -48,7 +49,8 @@ RSpec.describe CoindcxBot::Risk::Manager do
     cfg = CoindcxBot::Config.new(
       minimal_bot_config(risk: { per_trade_inr_min: 200, per_trade_inr_max: 400, max_daily_loss_inr: 1500 })
     )
-    mid_manager = described_class.new(config: cfg, journal: journal, exposure_guard: guard)
+    mid_fx = instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: cfg.inr_per_usdt)
+    mid_manager = described_class.new(config: cfg, journal: journal, exposure_guard: guard, fx: mid_fx)
     qty = mid_manager.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
     expected_risk_usdt = BigDecimal('300') / BigDecimal('83')
     expected_qty = (expected_risk_usdt / BigDecimal('2')).round(6, BigDecimal::ROUND_DOWN)
@@ -67,10 +69,12 @@ RSpec.describe CoindcxBot::Risk::Manager do
         }
       )
     )
+    pct_fx = instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: cfg.inr_per_usdt)
     pct_manager = described_class.new(
       config: cfg,
       journal: journal,
-      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg)
+      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg),
+      fx: pct_fx
     )
     qty = pct_manager.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
     expected_risk_inr = BigDecimal('500')
@@ -92,10 +96,12 @@ RSpec.describe CoindcxBot::Risk::Manager do
         }
       )
     )
+    dyn_fx = instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: cfg.inr_per_usdt)
     dyn = described_class.new(
       config: cfg,
       journal: journal,
-      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg)
+      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg),
+      fx: dyn_fx
     )
     qty = dyn.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
     expected_risk_inr = BigDecimal('1500')
@@ -116,10 +122,12 @@ RSpec.describe CoindcxBot::Risk::Manager do
         }
       )
     )
+    pct_fx2 = instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: cfg.inr_per_usdt)
     pct_manager = described_class.new(
       config: cfg,
       journal: journal,
-      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg)
+      exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: cfg),
+      fx: pct_fx2
     )
     qty = pct_manager.size_quantity(entry_price: BigDecimal('100'), stop_price: BigDecimal('98'), side: :long)
     expected_risk_inr = BigDecimal('250')

@@ -9,6 +9,13 @@ RSpec.describe CoindcxBot::Config do
     expect(on.pause_after_daily_loss_flatten?).to be(true)
   end
 
+  it 'reads smc_setup.enabled' do
+    off = described_class.new(minimal_bot_config)
+    expect(off.smc_setup_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(smc_setup: { enabled: true }))
+    expect(on.smc_setup_enabled?).to be(true)
+  end
+
   it 'reads regime.ai.enabled as regime_ai_enabled? only when regime is on' do
     off = described_class.new(minimal_bot_config(regime: { enabled: false, ai: { enabled: true } }))
     expect(off.regime_ai_enabled?).to be(false)
@@ -88,6 +95,21 @@ RSpec.describe CoindcxBot::Config do
       )
     )
     expect(cfg.paper_exchange_enabled?).to be(false)
+  end
+
+  it 'fx_enabled? defaults true when fx section absent' do
+    cfg = described_class.new(minimal_bot_config)
+    expect(cfg.fx_enabled?).to be(true)
+  end
+
+  it 'fx_enabled? is false when fx.enabled is false' do
+    cfg = described_class.new(minimal_bot_config(fx: { enabled: false }))
+    expect(cfg.fx_enabled?).to be(false)
+  end
+
+  it 'fx_ttl_seconds defaults to 60 and clamps low values to 5' do
+    expect(described_class.new(minimal_bot_config).fx_ttl_seconds).to eq(60)
+    expect(described_class.new(minimal_bot_config(fx: { ttl_seconds: 2 })).fx_ttl_seconds).to eq(5)
   end
 
   it 'accepts up to Config::MAX_PAIRS instruments' do

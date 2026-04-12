@@ -55,8 +55,30 @@ module CoindcxBot
       raw[:margin_currency_short_name].to_s
     end
 
+    # Fallback when CoinDCX conversions is disabled or unreachable (see `fx:`).
     def inr_per_usdt
       BigDecimal(raw.fetch(:inr_per_usdt, 83).to_s)
+    end
+
+    def fx_section
+      s = raw[:fx]
+      s.is_a?(Hash) ? s : {}
+    end
+
+    # When false, skip HTTP and always use `inr_per_usdt`.
+    def fx_enabled?
+      sec = fx_section
+      return true unless sec.key?(:enabled)
+
+      truthy?(sec[:enabled])
+    end
+
+    def fx_ttl_seconds
+      v = fx_section.fetch(:ttl_seconds, 60)
+      n = Integer(v.to_s)
+      n < 5 ? 5 : n
+    rescue ArgumentError, TypeError
+      60
     end
 
     # Reference equity in INR (position sizing when `risk.per_trade_capital_pct` is set; TUI header).
@@ -206,6 +228,86 @@ module CoindcxBot
 
     def regime_ai_mode
       regime_ai_section.fetch(:mode, 'tui_narrative').to_s.strip
+    end
+
+    def smc_setup_section
+      raw.fetch(:smc_setup, {})
+    end
+
+    def smc_setup_enabled?
+      truthy?(smc_setup_section[:enabled])
+    end
+
+    def smc_setup_planner_enabled?
+      smc_setup_enabled? && truthy?(smc_setup_section.fetch(:planner_enabled, false))
+    end
+
+    def smc_setup_planner_interval_seconds
+      smc_setup_section.fetch(:planner_interval_seconds, 600).to_f
+    end
+
+    def smc_setup_planner_reset_state?
+      truthy?(smc_setup_section[:planner_reset_state])
+    end
+
+    def smc_setup_gatekeeper_enabled?
+      smc_setup_enabled? && truthy?(smc_setup_section[:gatekeeper_enabled])
+    end
+
+    def smc_setup_max_active_setups_per_pair
+      n = smc_setup_section.fetch(:max_active_setups_per_pair, 3).to_i
+      [[n, 1].max, 16].min
+    end
+
+    def smc_setup_schema_path
+      p = smc_setup_section[:schema_path].to_s.strip
+      return File.expand_path('../../config/schemas/smc_trade_setup_v1.json', __dir__) if p.empty?
+
+      File.expand_path(p, Dir.pwd)
+    end
+
+    def smc_setup_sweep_consecutive_ticks
+      n = smc_setup_section.fetch(:sweep_consecutive_ticks, 1).to_i
+      [[n, 1].max, 20].min
+    end
+
+    def smc_setup_disable_strategy_entries?
+      smc_setup_enabled? && truthy?(smc_setup_section.fetch(:disable_strategy_entries, false))
+    end
+
+    def smc_setup_auto_execute?
+      smc_setup_enabled? && truthy?(smc_setup_section.fetch(:auto_execute, true))
+    end
+
+    def smc_setup_model
+      smc_setup_section[:model].to_s.strip
+    end
+
+    def smc_setup_timeout_seconds
+      smc_setup_section.fetch(:timeout_seconds, 60).to_i
+    end
+
+    def smc_setup_temperature
+      Float(smc_setup_section.fetch(:temperature, 0.1))
+    rescue ArgumentError, TypeError
+      0.1
+    end
+
+    def smc_setup_ollama_base_url
+      smc_setup_section[:ollama_base_url].to_s.strip
+    end
+
+    def smc_setup_use_retry_middleware?
+      truthy?(smc_setup_section.fetch(:use_retry_middleware, true))
+    end
+
+    def smc_setup_retry_attempts
+      n = smc_setup_section.fetch(:retry_attempts, 3).to_i
+      [[n, 1].max, 8].min
+    end
+
+    def smc_setup_gatekeeper_min_interval_seconds
+      smc_setup_section.fetch(:gatekeeper_min_interval_seconds, 45).to_f
     end
 
     def regime_hmm_section

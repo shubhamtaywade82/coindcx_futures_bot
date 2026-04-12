@@ -36,11 +36,13 @@ module CoindcxBot
           stale_tick_seconds: @stale_seconds
         )
         @exposure = Risk::ExposureGuard.new(config: config)
-        @risk = Risk::Manager.new(config: config, journal: @journal, exposure_guard: @exposure)
-        @strategy = build_strategy(config.strategy)
 
         configure_coin_dcx
         @client = CoinDCX.client
+        @fx = Fx::UsdtInrRate.new(client: @client, config: config, logger: @logger)
+        @risk = Risk::Manager.new(config: config, journal: @journal, exposure_guard: @exposure, fx: @fx)
+        @strategy = build_strategy(config.strategy)
+
         @md = Gateways::MarketDataGateway.new(
           client: @client,
           margin_currency_short_name: config.margin_currency_short_name
@@ -57,7 +59,8 @@ module CoindcxBot
           journal: @journal,
           config: config,
           exposure_guard: @exposure,
-          logger: @logger
+          logger: @logger,
+          fx: @fx
         )
 
         @candles_htf = {}
@@ -76,6 +79,12 @@ module CoindcxBot
         @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
         @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
         @daily_loss_flatten_warned = false
+        @smc_setup_store = nil
+        @smc_setup_eval = nil
+        @smc_setup_planner = nil
+        @smc_setup_planner_state = { updated_at: nil, error: nil }
+        @smc_setup_mutexes = Hash.new { |h, k| h[k] = Mutex.new }
+        init_smc_setup_stack! if @config.smc_setup_enabled?
 
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
@@ -90,6 +99,10 @@ module CoindcxBot
       end
 
       attr_reader :config, :logger, :journal, :broker
+
+      def inr_per_usdt
+        @fx.inr_per_usdt
+      end
 
       # Wall-clock time of the last **WebSocket** tick for this pair (not REST candle mirrors).
       def last_ws_tick_at(pair)
@@ -271,6 +284,97 @@ module CoindcxBot
           tier: Regime::Allocation.vol_tier(st.vol_rank, st.vol_rank_total),
           state: st
         }
+      end
+
+      def init_smc_setup_stack!
+        @smc_setup_store = SmcSetup::TradeSetupStore.new(
+          journal: @journal,
+          max_active_setups_per_pair: @config.smc_setup_max_active_setups_per_pair
+        )
+        @smc_setup_store.reload!
+        smc_cfg = SmcConfluence::Configuration.from_hash(@config.strategy[:smc_confluence] || {})
+        @smc_setup_eval = SmcSetup::TickEvaluator.new(
+          config: @config,
+          journal: @journal,
+          coordinator: @coord,
+          risk: @risk,
+          store: @smc_setup_store,
+          logger: @logger,
+          smc_configuration: smc_cfg,
+          regime_sizer: @regime_sizer,
+          setup_mutex_factory: ->(id) { @smc_setup_mutexes[id] }
+        )
+      end
+
+      def run_smc_setup_evaluator!
+        return unless @smc_setup_eval && @smc_setup_store
+
+        @config.pairs.each do |pair|
+          next if @journal.paused? || @journal.kill_switch?
+
+          stale = ws_feed_stale?(pair)
+          ltp = @tracker.ltp(pair)
+          exec = @candles_exec[pair] || []
+          @smc_setup_eval.evaluate_pair!(pair: pair, ltp: ltp, candles_exec: exec, stale: stale)
+        end
+      end
+
+      def refresh_smc_setup_planner_if_due
+        return unless @config.smc_setup_planner_enabled?
+        return unless @smc_setup_store
+
+        now = Time.now
+        last = @smc_setup_planner_state[:updated_at]
+        return if last && (now - last) < @config.smc_setup_planner_interval_seconds
+
+        ctx = build_smc_planner_context
+        return if ctx[:pairs].empty?
+
+        brain = (@smc_setup_planner ||= SmcSetup::PlannerBrain.new(config: @config, logger: @logger))
+        res = brain.plan!(ctx)
+        @smc_setup_planner_state[:updated_at] = now
+        if res.ok && res.payload
+          begin
+            @smc_setup_store.upsert_from_hash!(
+              res.payload,
+              reset_state: @config.smc_setup_planner_reset_state?
+            )
+          rescue SmcSetup::Validator::ValidationError => e
+            @smc_setup_planner_state[:error] = e.message
+          end
+        else
+          @smc_setup_planner_state[:error] = res.error_message
+        end
+      rescue StandardError => e
+        @logger&.warn("[smc_setup:planner] #{e.class}: #{e.message}")
+        @smc_setup_planner_state[:error] = e.message
+      end
+
+      def build_smc_planner_context
+        pairs = @config.pairs
+        n = 24
+        candles_by_pair = pairs.to_h do |p|
+          arr = Array(@candles_exec[p]).last(n)
+          rows = arr.map do |c|
+            { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
+          end
+          [p, rows]
+        end
+        {
+          pairs: pairs,
+          candles_by_pair: candles_by_pair,
+          open_count: @journal.open_positions.size,
+          exec_resolution: @exec_res,
+          htf_resolution: @htf_res
+        }
+      end
+
+      def smc_setup_skip_strategy_entries?(pair)
+        return false unless @config.smc_setup_disable_strategy_entries?
+        return false unless @smc_setup_store
+        return false if @tracker.open_position_for(pair)
+
+        @smc_setup_store.pair_has_actionable?(pair)
       end
 
       def snapshot_capital_inr
@@ -604,6 +708,7 @@ module CoindcxBot
       end
 
       def tick_cycle
+        @fx.refresh_if_stale!
         @journal.reset_daily_pnl_if_new_day!
         @daily_loss_flatten_warned = false unless @risk.daily_loss_breached?
         load_candles
@@ -616,7 +721,9 @@ module CoindcxBot
         # Entry gating must be **per pair**: if ETH has no WS ticks, SOL must still be allowed to open.
         # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
         @last_strategy_by_pair = {}
+        run_smc_setup_evaluator!
         @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
+        refresh_smc_setup_planner_if_due
         refresh_regime_ai_if_due
       rescue StandardError => e
         @last_error = e.message
@@ -746,6 +853,20 @@ module CoindcxBot
 
       def process_pair(pair, stale)
         return if @journal.paused? || @journal.kill_switch?
+
+        if smc_setup_skip_strategy_entries?(pair)
+          hold = Strategy::Signal.new(
+            action: :hold,
+            pair: pair,
+            side: nil,
+            stop_price: nil,
+            reason: 'smc_setup_pending',
+            metadata: {}
+          )
+          @last_strategy_by_pair[pair.to_s] = { action: :hold, reason: 'smc_setup_pending' }
+          log_strategy_signal(pair, hold) if @strategy_signal_trace
+          return
+        end
 
         htf = @candles_htf[pair] || []
         exec = @candles_exec[pair] || []

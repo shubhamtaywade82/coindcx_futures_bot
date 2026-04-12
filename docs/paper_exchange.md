@@ -65,7 +65,15 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
 
 5. **Slippage / fees on the simulator** are read from the optional **`paper:`** block in the same YAML the harness loads (`COINDCX_BOT_CONFIG` or default `config/bot.yml`), e.g. `slippage_bps`, `fee_bps`.
 
-6. Run the bot as usual: `bundle exec bin/bot run` or `bundle exec bin/bot tui`.
+6. **USDT/INR conversions (public GET):** `GET /api/v1/derivatives/futures/data/conversions` returns a **JSON array** in the same shape as production (e.g. `USDTINR` with `conversion_price`). The harness **proxies** CoinDCX’s API with a **TTL cache** (default **60s**). If the upstream call fails or returns no usable row, the response is a **single synthetic** `USDTINR` element using top-level **`inr_per_usdt`** from the same bot YAML (default **83**).
+
+   | Environment variable | Purpose |
+   | --- | --- |
+   | `PAPER_EXCHANGE_FX_TTL_SECONDS` | Cache TTL for upstream conversions (seconds, minimum 5). Default `60`. |
+   | `PAPER_EXCHANGE_FX_UPSTREAM_HOST` | Base URL for the Faraday client (no trailing slash). Default `https://api.coindcx.com`. |
+   | `PAPER_EXCHANGE_FX_UPSTREAM_PATH` | Path appended to the host. Default `/api/v1/derivatives/futures/data/conversions`. |
+
+7. Run the bot as usual: `bundle exec bin/bot run` or `bundle exec bin/bot tui`.
 
 ---
 
@@ -81,9 +89,10 @@ If **`paper_exchange.enabled`** is false, dry-run still uses **`Execution::Paper
 
 ## HTTP surface (high level)
 
-Implemented in **`CoindcxBot::PaperExchange::App`** (behind **`Auth::Middleware`** except **`GET /health`**):
+Implemented in **`CoindcxBot::PaperExchange::App`** (behind **`Auth::Middleware`** except **`GET /health`** and **public market GETs** such as **`/api/v1/derivatives/futures/data/conversions`**):
 
 - **`GET /health`** — liveness JSON.
+- **`GET /api/v1/derivatives/futures/data/conversions`** — JSON **array** of conversion rows (proxied from CoinDCX with TTL cache; synthetic `USDTINR` from `inr_per_usdt` on failure). No auth.
 - **Wallets:** `GET …/derivatives/futures/wallets`, `POST …/wallets/transfer`, `GET …/wallets/transactions`.
 - **Orders:** `POST …/orders/create`, `POST …/orders/cancel`, `POST …/orders` (list).
 - **Positions:** list, leverage, margin, exit, TP/SL helpers, transactions, cross-margin details, etc. (see `lib/coindcx_bot/paper_exchange/app.rb` for the exact path map).

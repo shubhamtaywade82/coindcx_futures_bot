@@ -79,16 +79,18 @@ module CoindcxBot
       end
 
       def insert_position(pair:, side:, entry_price:, quantity:, stop_price:, trail_price: nil,
-                          initial_stop_price: nil)
+                          initial_stop_price: nil, smc_setup_id: nil)
         now = Time.now.to_i
         initial = (initial_stop_price || stop_price)&.to_s('F')
+        sid = smc_setup_id&.to_s
+        sid = nil if sid&.strip&.empty?
         @db.execute(
           <<~SQL,
-            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state)
-            VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open')
+            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?)
           SQL
           [pair, side.to_s, entry_price.to_s('F'), quantity.to_s('F'),
-           stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now]
+           stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid]
         )
         @db.last_insert_row_id
       end
@@ -173,6 +175,88 @@ module CoindcxBot
         end
       end
 
+      TERMINAL_SMC_SETUP_STATES = %w[completed invalidated].freeze
+
+      def smc_setup_load_active
+        placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
+        sql = "SELECT setup_id, pair, state, payload, eval_state FROM smc_trade_setups WHERE state NOT IN (#{placeholders})"
+        @db.execute(sql, TERMINAL_SMC_SETUP_STATES).map { |row| symbolize_row(row) }
+      end
+
+      def smc_setup_count_for_pair(pair)
+        placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
+        sql = "SELECT COUNT(*) AS c FROM smc_trade_setups WHERE pair = ? AND state NOT IN (#{placeholders})"
+        row = @db.get_first_row(sql, [pair.to_s, *TERMINAL_SMC_SETUP_STATES])
+        row ? row['c'].to_i : 0
+      end
+
+      def smc_setup_insert_or_update(setup_id:, pair:, state:, payload:, eval_state: {})
+        now = Time.now.to_i
+        payload_s = payload.is_a?(String) ? payload : JSON.generate(payload)
+        ev = eval_state.is_a?(String) ? eval_state : JSON.generate(eval_state || {})
+        existing = @db.get_first_row('SELECT id FROM smc_trade_setups WHERE setup_id = ?', setup_id.to_s)
+        if existing
+          @db.execute(
+            'UPDATE smc_trade_setups SET pair = ?, state = ?, payload = ?, eval_state = ?, updated_at = ? WHERE setup_id = ?',
+            [pair.to_s, state.to_s, payload_s, ev, now, setup_id.to_s]
+          )
+        else
+          @db.execute(
+            <<~SQL,
+              INSERT INTO smc_trade_setups(setup_id, pair, state, payload, eval_state, created_at, updated_at)
+              VALUES(?, ?, ?, ?, ?, ?, ?)
+            SQL
+            [setup_id.to_s, pair.to_s, state.to_s, payload_s, ev, now, now]
+          )
+        end
+      end
+
+      def smc_setup_update_state_and_eval(setup_id:, state:, eval_state: nil)
+        now = Time.now.to_i
+        if eval_state.nil?
+          @db.execute(
+            'UPDATE smc_trade_setups SET state = ?, updated_at = ? WHERE setup_id = ?',
+            [state.to_s, now, setup_id.to_s]
+          )
+        else
+          ev = eval_state.is_a?(String) ? eval_state : JSON.generate(eval_state)
+          @db.execute(
+            'UPDATE smc_trade_setups SET state = ?, eval_state = ?, updated_at = ? WHERE setup_id = ?',
+            [state.to_s, ev, now, setup_id.to_s]
+          )
+        end
+      end
+
+      def smc_setup_fetch_payload(setup_id)
+        row = @db.get_first_row('SELECT payload FROM smc_trade_setups WHERE setup_id = ?', setup_id.to_s)
+        return nil unless row
+
+        JSON.parse(row['payload'].to_s, symbolize_names: true)
+      rescue JSON::ParserError
+        nil
+      end
+
+      def smc_setup_exists?(setup_id)
+        !@db.get_first_row('SELECT 1 AS o FROM smc_trade_setups WHERE setup_id = ? LIMIT 1', setup_id.to_s).nil?
+      end
+
+      def smc_setup_get_row(setup_id)
+        row = @db.get_first_row(
+          'SELECT setup_id, pair, state, payload, eval_state FROM smc_trade_setups WHERE setup_id = ?',
+          setup_id.to_s
+        )
+        row ? symbolize_row(row) : nil
+      end
+
+      def open_position_with_smc_setup?(setup_id)
+        sid = setup_id.to_s
+        row = @db.get_first_row(
+          'SELECT 1 AS o FROM positions WHERE state = ? AND smc_setup_id = ? LIMIT 1',
+          ['open', sid]
+        )
+        !row.nil?
+      end
+
       private
 
       def blank?(v)
@@ -211,6 +295,7 @@ module CoindcxBot
           CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(type);
         SQL
         migrate_positions_columns
+        migrate_smc_trade_setups_table
       end
 
       def migrate_positions_columns
@@ -219,9 +304,29 @@ module CoindcxBot
           @db.execute('ALTER TABLE positions ADD COLUMN initial_stop_price TEXT')
           cols = @db.table_info('positions').map { |r| r['name'] }
         end
-        return if cols.include?('peak_unrealized_usdt')
+        unless cols.include?('peak_unrealized_usdt')
+          @db.execute('ALTER TABLE positions ADD COLUMN peak_unrealized_usdt TEXT')
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        return if cols.include?('smc_setup_id')
 
-        @db.execute('ALTER TABLE positions ADD COLUMN peak_unrealized_usdt TEXT')
+        @db.execute('ALTER TABLE positions ADD COLUMN smc_setup_id TEXT')
+      end
+
+      def migrate_smc_trade_setups_table
+        @db.execute_batch(<<~SQL)
+          CREATE TABLE IF NOT EXISTS smc_trade_setups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            setup_id TEXT NOT NULL UNIQUE,
+            pair TEXT NOT NULL,
+            state TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            eval_state TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_smc_trade_setups_pair ON smc_trade_setups(pair);
+        SQL
       end
     end
   end

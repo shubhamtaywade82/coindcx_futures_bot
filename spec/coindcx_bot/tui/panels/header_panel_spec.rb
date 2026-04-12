@@ -45,6 +45,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
 
   before do
     allow(engine).to receive(:ws_feed_stale?).and_return(false)
+    allow(engine).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
   end
 
   describe '#render' do
@@ -83,6 +84,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         **snapshot.to_h.merge(regime: CoindcxBot::Regime::TuiState::STANDBY)
       )
       eng_on = double('engine', snapshot: snap_on, broker: broker_double, config: config)
+      allow(eng_on).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+      allow(eng_on).to receive(:ws_feed_stale?).and_return(false)
       described_class.new(engine: eng_on, origin_row: 0, output: output).render
       expect(output.string).to include('REGIME·ON')
     end

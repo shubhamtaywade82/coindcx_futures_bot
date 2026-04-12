@@ -9,13 +9,15 @@ require_relative '../synthetic_l1'
 module CoindcxBot
   module PaperExchange
     class App
-      def initialize(wallets:, orders:, positions:, tick_dispatcher:, store:, logger: nil)
+      def initialize(wallets:, orders:, positions:, tick_dispatcher:, store:, logger: nil,
+                     conversions_feed:)
         @wallets = wallets
         @orders = orders
         @positions = positions
         @tick = tick_dispatcher
         @store = store
         @logger = logger
+        @conversions_feed = conversions_feed
       end
 
       def call(env)
@@ -144,7 +146,7 @@ module CoindcxBot
         when '/api/v1/derivatives/futures/data/stats'
           json(200, {})
         when '/api/v1/derivatives/futures/data/conversions'
-          json(200, {})
+          json(200, @conversions_feed.fetch_json_array)
         else
           json(404, { error: { message: 'not found', code: 'not_found', path: path } })
         end

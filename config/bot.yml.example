@@ -26,8 +26,13 @@ pairs:
   - B-XRP_USDT
   - B-BTC_USDT
 
-# Approximate INR per USDT for position sizing from INR risk budget
+# Fallback INR per USDT when live FX is disabled or the conversions API fails.
 inr_per_usdt: 83.0
+
+# Live USDT/INR from CoinDCX GET /api/v1/derivatives/futures/data/conversions (cached).
+# fx:
+#   enabled: true
+#   ttl_seconds: 60
 
 # Reference equity in INR — risk clamps and daily loss limit scale from this (no need to retune ₹ amounts).
 capital_inr: 1_00_000
@@ -208,6 +213,27 @@ runtime:
 #   name: regime_vol_tier
 #   inner_strategy: trend_continuation
 #   # inner_strategy: smc_confluence  # optional; same smc_confluence: block as top-level strategy
+
+# SMC AI TradeSetups: JSON plans + tick FSM (LTP vs zones, SMC bar flags) → optional Coordinator entries.
+# Separate from regime.ai (TUI narrative). Default off. Use paper/dry_run first; optional Ollama planner / gatekeeper.
+# smc_setup:
+#   enabled: false
+#   auto_execute: true
+#   disable_strategy_entries: false   # if true and a non-terminal setup exists on pair, strategy stays flat
+#   max_active_setups_per_pair: 3
+#   sweep_consecutive_ticks: 1
+#   planner_enabled: false
+#   planner_interval_seconds: 600
+#   planner_reset_state: false
+#   gatekeeper_enabled: false
+#   gatekeeper_min_interval_seconds: 45
+#   model: llama3.2:3b
+#   ollama_base_url: http://127.0.0.1:11434
+#   timeout_seconds: 60
+#   temperature: 0.1
+#   use_retry_middleware: true
+#   retry_attempts: 3
+#   schema_path:   # default: config/schemas/smc_trade_setup_v1.json
 
 # Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.

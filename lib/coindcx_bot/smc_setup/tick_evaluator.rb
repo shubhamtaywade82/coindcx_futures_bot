@@ -1,0 +1,265 @@
+# frozen_string_literal: true
+
+require 'bigdecimal'
+require_relative 'states'
+require_relative 'gatekeeper_brain'
+require_relative '../strategy/signal'
+
+module CoindcxBot
+  module SmcSetup
+    # Hot-path FSM: LTP vs zones + last closed-bar SMC flags. May call Coordinator when armed.
+    class TickEvaluator
+      MAX_STATE_HOPS = 8
+
+      def initialize(config:, journal:, coordinator:, risk:, store:, logger:,
+                     smc_configuration:, regime_sizer: nil, setup_mutex_factory: nil)
+        @config = config
+        @journal = journal
+        @coord = coordinator
+        @risk = risk
+        @store = store
+        @logger = logger
+        @smc_cfg = smc_configuration
+        @regime_sizer = regime_sizer
+        @mutex_for = setup_mutex_factory || ->(_setup_id) { Mutex.new }
+        @consecutive = config.smc_setup_sweep_consecutive_ticks
+      end
+
+      def evaluate_pair!(pair:, ltp:, candles_exec:, stale:)
+        bar = last_bar_result(candles_exec)
+        bars_json = compact_bars_json(candles_exec, 10)
+        @store.records_for_pair(pair).map(&:setup_id).uniq.each do |setup_id|
+          mutex = @mutex_for.call(setup_id)
+          mutex.synchronize do
+            hops = 0
+            loop do
+              hops += 1
+              break if hops > MAX_STATE_HOPS
+
+              rec = @store.record_by_id(setup_id)
+              break unless rec
+
+              cont = run_step(rec, pair: pair, ltp: ltp, bar: bar, stale: stale, bars_json: bars_json)
+              break unless cont
+            end
+          end
+        end
+      end
+
+      private
+
+      def run_step(rec, pair:, ltp:, bar:, stale:, bars_json:)
+        case rec.state
+        when States::PENDING_SWEEP
+          step_pending_sweep(rec, ltp)
+        when States::SWEEP_SEEN
+          step_sweep_seen(rec, bar, bars_json)
+        when States::AWAITING_CONFIRMATIONS
+          step_awaiting_confirmations(rec, bar, bars_json)
+        when States::ARMED_ENTRY
+          step_armed_entry(rec, pair, ltp, stale)
+          false
+        when States::ACTIVE
+          step_active(rec)
+          false
+        else
+          false
+        end
+      end
+
+      def step_pending_sweep(rec, ltp)
+        return false if ltp.nil?
+
+        p = BigDecimal(ltp.to_s)
+        ts = rec.trade_setup
+        in_sweep = in_zone?(p, ts.sweep_min, ts.sweep_max)
+        streak = in_sweep ? rec.eval_state[:sweep_streak].to_i + 1 : 0
+        rec.eval_state = rec.eval_state.merge(sweep_streak: streak)
+        if streak < @consecutive
+          @store.persist_record!(rec)
+          return false
+        end
+
+        rec.state = States::SWEEP_SEEN
+        rec.eval_state = rec.eval_state.merge(sweep_streak: 0)
+        @store.persist_record!(rec)
+        true
+      end
+
+      def step_sweep_seen(rec, bar, bars_json)
+        if rec.trade_setup.confirmations.empty?
+          try_arm_entry(rec, bar, bars_json)
+        else
+          rec.state = States::AWAITING_CONFIRMATIONS
+          @store.persist_record!(rec)
+        end
+        rec.state == States::ARMED_ENTRY
+      end
+
+      def step_awaiting_confirmations(rec, bar, bars_json)
+        return false unless bar
+
+        dir = rec.trade_setup.direction
+        ok = rec.trade_setup.confirmations.all? { |c| confirmation_satisfied?(bar, c, dir) }
+        return false unless ok
+
+        try_arm_entry(rec, bar, bars_json)
+        rec.state == States::ARMED_ENTRY
+      end
+
+      def try_arm_entry(rec, bar, bars_json)
+        need_gate = rec.trade_setup.gatekeeper && @config.smc_setup_gatekeeper_enabled?
+        if need_gate
+          now = Time.now.to_f
+          min_iv = @config.smc_setup_gatekeeper_min_interval_seconds
+          last = rec.eval_state[:last_gate_ts].to_f
+          if rec.eval_state[:gate_ok] == true && (now - last) < min_iv
+            rec.state = States::ARMED_ENTRY
+            @store.persist_record!(rec)
+            return
+          end
+          if (now - last) < min_iv && rec.eval_state[:gate_ok] != true
+            return
+          end
+
+          gk = (@gatekeeper ||= GatekeeperBrain.new(config: @config, logger: @logger))
+          approved = gk.approve?(rec: rec, bar: bar, bars_json: bars_json)
+          rec.eval_state = rec.eval_state.merge(last_gate_ts: now, gate_ok: approved)
+          @store.persist_record!(rec)
+          return unless approved
+        end
+
+        rec.state = States::ARMED_ENTRY
+        @store.persist_record!(rec)
+      end
+
+      def step_armed_entry(rec, pair, ltp, stale)
+        return if ltp.nil?
+
+        unless @config.smc_setup_auto_execute?
+          @logger&.info("[smc_setup] #{rec.setup_id} armed (auto_execute false — no order)") if trace?
+          return
+        end
+
+        p = BigDecimal(ltp.to_s)
+        ts = rec.trade_setup
+        return unless in_zone?(p, ts.entry_min, ts.entry_max)
+
+        if @journal.open_position_with_smc_setup?(rec.setup_id)
+          rec.state = States::ACTIVE
+          @store.persist_record!(rec)
+          return
+        end
+
+        if stale
+          @logger&.info("[smc_setup] #{rec.setup_id} entry skipped: stale_feed") if trace?
+          return
+        end
+
+        if @risk.daily_loss_breached?
+          @logger&.info("[smc_setup] #{rec.setup_id} entry skipped: daily_loss_limit") if trace?
+          return
+        end
+
+        gate = @risk.allow_new_entry?(open_positions: @journal.open_positions, pair: pair)
+        unless gate.first == :ok
+          @logger&.info("[smc_setup] #{rec.setup_id} entry skipped: #{gate.last}") if trace?
+          return
+        end
+
+        entry = p
+        side = ts.long? ? :long : :short
+        action = ts.long? ? :open_long : :open_short
+        qty = @risk.size_quantity(entry_price: entry, stop_price: ts.sl, side: side)
+        if @regime_sizer
+          mult = @regime_sizer.multiplier_for(@journal)
+          qty = (qty * mult).round(6, BigDecimal::ROUND_DOWN)
+        end
+        if qty.nil? || qty <= 0
+          @logger&.info("[smc_setup] #{rec.setup_id} entry skipped: zero_quantity") if trace?
+          return
+        end
+
+        sig = Strategy::Signal.new(
+          action: action,
+          pair: pair,
+          side: side,
+          stop_price: ts.sl,
+          reason: 'smc_setup_entry',
+          metadata: { smc_setup_id: ts.setup_id }
+        )
+
+        return if @journal.open_position_with_smc_setup?(rec.setup_id)
+
+        @coord.apply(sig, quantity: qty, entry_price: entry)
+
+        unless @journal.open_position_with_smc_setup?(rec.setup_id)
+          @logger&.warn("[smc_setup] #{rec.setup_id} open not reflected in journal — staying armed") if trace?
+          return
+        end
+
+        rec.state = States::ACTIVE
+        @store.persist_record!(rec)
+        @journal.log_event('smc_setup_fired', setup_id: ts.setup_id, pair: pair.to_s)
+      end
+
+      def step_active(rec)
+        return if @journal.open_position_with_smc_setup?(rec.setup_id)
+
+        rec.state = States::COMPLETED
+        @store.persist_record!(rec)
+        @store.reload!
+      end
+
+      def compact_bars_json(candles_exec, n)
+        Array(candles_exec).last(n).map do |c|
+          t = c.respond_to?(:time) ? c.time : c[:time]
+          {
+            o: c.respond_to?(:open) ? c.open : c[:open],
+            h: c.respond_to?(:high) ? c.high : c[:high],
+            l: c.respond_to?(:low) ? c.low : c[:low],
+            c: c.respond_to?(:close) ? c.close : c[:close],
+            t: t
+          }
+        end
+      end
+
+      def trace?
+        ENV['COINDCX_STRATEGY_SIGNALS'].to_s == '1' || @config.runtime[:log_strategy_signals].to_s == 'true'
+      end
+
+      def last_bar_result(candles_exec)
+        exec = Array(candles_exec)
+        return nil if exec.size < 20
+
+        rows = SmcConfluence::Candles.from_dto(exec)
+        series = SmcConfluence::Engine.run(rows, configuration: @smc_cfg)
+        series.last
+      end
+
+      def in_zone?(price, zmin, zmax)
+        lo = [zmin, zmax].min
+        hi = [zmin, zmax].max
+        price >= lo && price <= hi
+      end
+
+      def confirmation_satisfied?(bar, token, direction)
+        dir = direction.to_sym
+        case token.to_s.downcase
+        when 'choch_bull', 'choch_up'
+          bar.choch_bull
+        when 'choch_bear', 'choch_down'
+          bar.choch_bear
+        when 'bos_bull', 'displacement_bull'
+          bar.bos_bull
+        when 'bos_bear', 'displacement_bear'
+          bar.bos_bear
+        when 'displacement'
+          dir == :long ? bar.bos_bull : bar.bos_bear
+        else
+          false
+        end
+      end
+    end
+  end
+end

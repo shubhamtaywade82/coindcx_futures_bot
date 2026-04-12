@@ -118,4 +118,30 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(BigDecimal(row[:stop_price])).to eq(BigDecimal('98'))
     expect(BigDecimal(row[:initial_stop_price])).to eq(BigDecimal('90'))
   end
+
+  it 'persists smc_trade_setups and detects open position by smc_setup_id' do
+    journal = described_class.new(path)
+    journal.smc_setup_insert_or_update(
+      setup_id: 's1',
+      pair: 'B-SOL_USDT',
+      state: 'pending_sweep',
+      payload: { schema_version: 1, setup_id: 's1', pair: 'B-SOL_USDT', direction: 'long',
+                 conditions: { sweep_zone: { min: 1, max: 2 }, entry_zone: { min: 1, max: 2 } },
+                 execution: { sl: 1 } },
+      eval_state: {}
+    )
+    expect(journal.smc_setup_load_active.size).to eq(1)
+    expect(journal.smc_setup_exists?('s1')).to be(true)
+
+    journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil,
+      smc_setup_id: 's1'
+    )
+    expect(journal.open_position_with_smc_setup?('s1')).to be(true)
+  end
 end
