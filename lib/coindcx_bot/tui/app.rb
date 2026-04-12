@@ -370,7 +370,6 @@ module CoindcxBot
         restore_stderr!
         disable_stdin_raw!
         print TTY::Cursor.show
-        print "\e[?25h"
       end
 
       # Canonical (cooked) tty input is line-buffered: getc sees nothing until Enter. Raw mode delivers
