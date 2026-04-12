@@ -144,4 +144,22 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     )
     expect(journal.open_position_with_smc_setup?('s1')).to be(true)
   end
+
+  it 'counts and lists recent smc_trade_setups regardless of state' do
+    journal = described_class.new(path)
+    journal.smc_setup_insert_or_update(
+      setup_id: 'z1',
+      pair: 'B-SOL_USDT',
+      state: 'completed',
+      payload: { schema_version: 1, setup_id: 'z1', pair: 'B-SOL_USDT', direction: 'long',
+                 conditions: { sweep_zone: { min: 1, max: 2 }, entry_zone: { min: 1, max: 2 } },
+                 execution: { sl: 1 } },
+      eval_state: {}
+    )
+    expect(journal.smc_setup_count_all).to eq(1)
+    expect(journal.smc_setup_load_active).to be_empty
+    recent = journal.smc_setup_list_recent(5)
+    expect(recent.first[:setup_id]).to eq('z1')
+    expect(recent.first[:state]).to eq('completed')
+  end
 end

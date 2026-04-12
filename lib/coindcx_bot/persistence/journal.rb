@@ -257,6 +257,19 @@ module CoindcxBot
         !row.nil?
       end
 
+      def smc_setup_count_all
+        row = @db.get_first_row('SELECT COUNT(*) AS c FROM smc_trade_setups')
+        row ? row['c'].to_i : 0
+      end
+
+      def smc_setup_list_recent(limit = 15)
+        lim = [[limit.to_i, 1].max, 100].min
+        @db.execute(
+          'SELECT setup_id, pair, state, updated_at FROM smc_trade_setups ORDER BY updated_at DESC LIMIT ?',
+          lim
+        ).map { |row| symbolize_row(row) }
+      end
+
       private
 
       def blank?(v)
