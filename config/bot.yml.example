@@ -130,6 +130,11 @@ strategy:
   #   vp_bars: 60
   #   # signal_mode: choch_strict   # default — CHOCH fires primary confluence slot
   #   # signal_mode: bos_relaxed    # BOS or CHOCH counts as primary (more signals than strict)
+  #   # Opposite-SMC flip exit (close long on short_signal / short on long_signal on last bar):
+  #   # close_on_opposite_smc: true   # false = never exit on opposite signal (TP/stop only)
+  #   # opposite_smc_min_gain_pct:    # omit = legacy: flip even when underwater on mark
+  #   # opposite_smc_min_gain_pct: 0 # flip only if mark is strictly better than entry (same basis as take_profit_pct)
+  #   # opposite_smc_min_gain_pct: 0.002  # require at least 0.2% unrealized gain before flipping
 
 execution:
   # Merged into every futures `order:` hash; required keys depend on CoinDCX API.

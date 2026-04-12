@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require 'securerandom'
 
 RSpec.describe CoindcxBot::Persistence::Journal do
-  let(:path) { Tempfile.new(['j', '.sqlite3']).path }
+  let(:path) { File.join(Dir.tmpdir, "coindcx_journal_spec_#{SecureRandom.hex(8)}.sqlite3") }
 
   after do
     File.delete(path) if File.exist?(path)

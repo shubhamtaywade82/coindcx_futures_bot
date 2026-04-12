@@ -62,6 +62,9 @@ strategy:
     tl_retest_pct: 0.22
     vp_bars: 60
     signal_mode: bos_relaxed
+    # Flip on opposite SMC only when mark is green vs entry (omit min_gain = flip even when red).
+    close_on_opposite_smc: true
+    opposite_smc_min_gain_pct: 0
 
   # --- Supertrend scalper (switch name to supertrend_profit) ---
   # name: supertrend_profit

@@ -9,7 +9,9 @@ module CoindcxBot
     class SmcConfluence
       def initialize(strategy_config)
         @cfg = strategy_config.transform_keys(&:to_sym)
-        @smc_cfg = ::CoindcxBot::SmcConfluence::Configuration.from_hash(@cfg[:smc_confluence])
+        @smc_raw = normalize_smc_hash(@cfg[:smc_confluence])
+        @smc_cfg = ::CoindcxBot::SmcConfluence::Configuration.from_hash(@smc_raw)
+        init_opposite_smc_exit_settings
       end
 
       def evaluate(pair:, candles_htf:, candles_exec:, position:, ltp:, regime_hint: nil)
@@ -60,6 +62,50 @@ module CoindcxBot
       end
 
       private
+
+      def normalize_smc_hash(h)
+        return {} if h.nil?
+
+        h.transform_keys(&:to_sym)
+      end
+
+      def init_opposite_smc_exit_settings
+        v = @smc_raw.fetch(:close_on_opposite_smc, true)
+        @close_on_opposite_smc = !(v == false || v.to_s.strip.downcase == 'false')
+        raw_min = @smc_raw[:opposite_smc_min_gain_pct]
+        @opposite_min_gain_pct =
+          if raw_min.nil? || raw_min.to_s.strip.empty?
+            nil
+          else
+            BigDecimal(raw_min.to_s)
+          end
+      end
+
+      def unrealized_gain_pct(side, entry, ltp)
+        case side.to_s
+        when 'long'
+          (ltp - entry) / entry
+        when 'short'
+          (entry - ltp) / entry
+        else
+          BigDecimal('0')
+        end
+      end
+
+      # When nil: legacy — close on opposite signal even if losing.
+      # When 0: require strictly positive price gain vs entry.
+      # When > 0: require gain >= this fraction (same units as take_profit_pct).
+      def opposite_smc_flip_close_allowed?(side, entry, ltp)
+        return false unless @close_on_opposite_smc
+        return true if @opposite_min_gain_pct.nil?
+
+        g = unrealized_gain_pct(side, entry, ltp)
+        if @opposite_min_gain_pct.zero?
+          g.positive?
+        else
+          g >= @opposite_min_gain_pct
+        end
+      end
 
       def hold(pair, reason, metadata: {})
         Signal.new(action: :hold, pair: pair, side: nil, stop_price: nil, reason: reason, metadata: metadata)
@@ -169,24 +215,28 @@ module CoindcxBot
         id = position[:id]
 
         if side == 'long' && opposite_fire?(exec, :short)
-          return Signal.new(action: :close, pair: pair, side: :long, stop_price: nil, reason: 'smc_opposite_short',
-                            metadata: { position_id: id })
+          if opposite_smc_flip_close_allowed?('long', entry, ltp_bd)
+            return Signal.new(action: :close, pair: pair, side: :long, stop_price: nil, reason: 'smc_opposite_short',
+                              metadata: { position_id: id })
+          end
+
+          return hold(pair, @close_on_opposite_smc ? 'smc_opp_hold_gain' : 'smc_opp_flip_disabled')
         end
         if side == 'short' && opposite_fire?(exec, :long)
-          return Signal.new(action: :close, pair: pair, side: :short, stop_price: nil, reason: 'smc_opposite_long',
-                            metadata: { position_id: id })
+          if opposite_smc_flip_close_allowed?('short', entry, ltp_bd)
+            return Signal.new(action: :close, pair: pair, side: :short, stop_price: nil, reason: 'smc_opposite_long',
+                              metadata: { position_id: id })
+          end
+
+          return hold(pair, @close_on_opposite_smc ? 'smc_opp_hold_gain' : 'smc_opp_flip_disabled')
         end
 
         tp = take_profit_pct
         if tp.positive?
-          gain =
-            if side == 'long'
-              (ltp_bd - entry) / entry
-            elsif side == 'short'
-              (entry - ltp_bd) / entry
-            else
-              return hold(pair, 'unknown_side')
-            end
+          gain = unrealized_gain_pct(side, entry, ltp_bd)
+          if side != 'long' && side != 'short'
+            return hold(pair, 'unknown_side')
+          end
           if gain >= tp
             return Signal.new(action: :close, pair: pair, side: side.to_sym, stop_price: nil, reason: 'smc_take_profit_pct',
                               metadata: { position_id: id })

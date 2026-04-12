@@ -119,6 +119,101 @@ RSpec.describe CoindcxBot::Strategy::SmcConfluence do
     expect(sig.reason).to eq('smc_opposite_short')
   end
 
+  it 'holds long on opposite short_signal when min gain is 0 and mark is not above entry' do
+    cfg = strat_cfg.merge(smc_confluence: { min_score: 2, vp_bars: 8, opposite_smc_min_gain_pct: 0 })
+    strat = described_class.new(cfg)
+    dtos = dto_candles(120)
+    series = Array.new(119) { bar_result(long_signal: false) } + [bar_result(long_signal: false, short_signal: true)]
+    allow(CoindcxBot::SmcConfluence::Engine).to receive(:run).and_return(series)
+
+    pos = { id: 1, pair: 'B-SOL_USDT', side: 'long', entry_price: '100', quantity: '0.1', stop_price: '98' }
+    sig = strat.evaluate(
+      pair: 'B-SOL_USDT',
+      candles_htf: dtos,
+      candles_exec: dtos,
+      position: pos,
+      ltp: BigDecimal('99.5')
+    )
+    expect(sig.action).to eq(:hold)
+    expect(sig.reason).to eq('smc_opp_hold_gain')
+  end
+
+  it 'still closes long on opposite short_signal when min gain is 0 and mark is above entry' do
+    cfg = strat_cfg.merge(smc_confluence: { min_score: 2, vp_bars: 8, opposite_smc_min_gain_pct: 0 })
+    strat = described_class.new(cfg)
+    dtos = dto_candles(120)
+    series = Array.new(119) { bar_result(long_signal: false) } + [bar_result(long_signal: false, short_signal: true)]
+    allow(CoindcxBot::SmcConfluence::Engine).to receive(:run).and_return(series)
+
+    pos = { id: 1, pair: 'B-SOL_USDT', side: 'long', entry_price: '100', quantity: '0.1', stop_price: '98' }
+    sig = strat.evaluate(
+      pair: 'B-SOL_USDT',
+      candles_htf: dtos,
+      candles_exec: dtos,
+      position: pos,
+      ltp: BigDecimal('100.01')
+    )
+    expect(sig.action).to eq(:close)
+    expect(sig.reason).to eq('smc_opposite_short')
+  end
+
+  it 'holds long on opposite short_signal when unrealized gain is below opposite_smc_min_gain_pct' do
+    cfg = strat_cfg.merge(smc_confluence: { min_score: 2, vp_bars: 8, opposite_smc_min_gain_pct: 0.02 })
+    strat = described_class.new(cfg)
+    dtos = dto_candles(120)
+    series = Array.new(119) { bar_result(long_signal: false) } + [bar_result(long_signal: false, short_signal: true)]
+    allow(CoindcxBot::SmcConfluence::Engine).to receive(:run).and_return(series)
+
+    pos = { id: 1, pair: 'B-SOL_USDT', side: 'long', entry_price: '100', quantity: '0.1', stop_price: '98' }
+    sig = strat.evaluate(
+      pair: 'B-SOL_USDT',
+      candles_htf: dtos,
+      candles_exec: dtos,
+      position: pos,
+      ltp: BigDecimal('101')
+    )
+    expect(sig.action).to eq(:hold)
+    expect(sig.reason).to eq('smc_opp_hold_gain')
+  end
+
+  it 'holds short on opposite long_signal when min gain is 0 and mark is not below entry' do
+    cfg = strat_cfg.merge(smc_confluence: { min_score: 2, vp_bars: 8, opposite_smc_min_gain_pct: 0 })
+    strat = described_class.new(cfg)
+    dtos = dto_candles(120)
+    series = Array.new(119) { bar_result(long_signal: false) } + [bar_result(long_signal: true, short_signal: false)]
+    allow(CoindcxBot::SmcConfluence::Engine).to receive(:run).and_return(series)
+
+    pos = { id: 1, pair: 'B-SOL_USDT', side: 'short', entry_price: '100', quantity: '0.1', stop_price: '102' }
+    sig = strat.evaluate(
+      pair: 'B-SOL_USDT',
+      candles_htf: dtos,
+      candles_exec: dtos,
+      position: pos,
+      ltp: BigDecimal('100.5')
+    )
+    expect(sig.action).to eq(:hold)
+    expect(sig.reason).to eq('smc_opp_hold_gain')
+  end
+
+  it 'holds when opposite signal fires but close_on_opposite_smc is false' do
+    cfg = strat_cfg.merge(smc_confluence: { min_score: 2, vp_bars: 8, close_on_opposite_smc: false })
+    strat = described_class.new(cfg)
+    dtos = dto_candles(120)
+    series = Array.new(119) { bar_result(long_signal: false) } + [bar_result(long_signal: false, short_signal: true)]
+    allow(CoindcxBot::SmcConfluence::Engine).to receive(:run).and_return(series)
+
+    pos = { id: 1, pair: 'B-SOL_USDT', side: 'long', entry_price: '99', quantity: '0.1', stop_price: '98' }
+    sig = strat.evaluate(
+      pair: 'B-SOL_USDT',
+      candles_htf: dtos,
+      candles_exec: dtos,
+      position: pos,
+      ltp: BigDecimal('110')
+    )
+    expect(sig.action).to eq(:hold)
+    expect(sig.reason).to eq('smc_opp_flip_disabled')
+  end
+
   it 'uses a descriptive hold reason when bullish primary is on but score is below min' do
     dtos = dto_candles(120)
     weak = CoindcxBot::SmcConfluence::BarResult.new(
