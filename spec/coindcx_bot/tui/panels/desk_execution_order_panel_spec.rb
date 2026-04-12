@@ -30,7 +30,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
       ],
       ws_last_tick_ms_ago: 5,
       strategy_last_by_pair: {},
-      regime: CoindcxBot::Regime::TuiState.disabled
+      regime: CoindcxBot::Regime::TuiState.disabled,
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
     )
   end
   let(:config) do
@@ -98,7 +99,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
           working_orders: [],
           ws_last_tick_ms_ago: 5,
           strategy_last_by_pair: {},
-          regime: CoindcxBot::Regime::TuiState.disabled
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
         )
       end
 

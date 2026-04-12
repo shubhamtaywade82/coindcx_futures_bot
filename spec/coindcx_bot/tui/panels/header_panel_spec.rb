@@ -35,7 +35,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       working_orders: [],
       ws_last_tick_ms_ago: 42,
       strategy_last_by_pair: {},
-      regime: CoindcxBot::Regime::TuiState.disabled
+      regime: CoindcxBot::Regime::TuiState.disabled,
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
@@ -117,7 +118,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           working_orders: [],
           ws_last_tick_ms_ago: nil,
           strategy_last_by_pair: {},
-          regime: CoindcxBot::Regime::TuiState.disabled
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
         )
       end
 
@@ -166,7 +168,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           working_orders: [],
           ws_last_tick_ms_ago: 10,
           strategy_last_by_pair: {},
-          regime: CoindcxBot::Regime::TuiState.disabled
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
         )
       end
 

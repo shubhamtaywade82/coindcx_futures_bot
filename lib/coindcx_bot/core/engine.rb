@@ -15,7 +15,7 @@ module CoindcxBot
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
         :running, :dry_run, :stale_tick_seconds, :paper_metrics,
         :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
-        :strategy_last_by_pair, :regime,
+        :strategy_last_by_pair, :regime, :smc_setup,
         keyword_init: true
       )
 
@@ -145,7 +145,8 @@ module CoindcxBot
           working_orders: @broker.tui_working_orders,
           ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago,
           strategy_last_by_pair: @last_strategy_by_pair.dup,
-          regime: regime_snapshot_for_tui
+          regime: regime_snapshot_for_tui,
+          smc_setup: smc_setup_overlay_for_tui
         )
       end
 
@@ -342,6 +343,7 @@ module CoindcxBot
             sid = res.payload[:setup_id] || res.payload['setup_id']
             pair = res.payload[:pair] || res.payload['pair']
             @logger&.info("[smc_setup:planner] upserted setup_id=#{sid} pair=#{pair} (Ollama → TradeSetup store)")
+            @smc_setup_planner_state[:error] = nil
           rescue SmcSetup::Validator::ValidationError => e
             @smc_setup_planner_state[:error] = e.message
           end
@@ -378,6 +380,41 @@ module CoindcxBot
         return false if @tracker.open_position_for(pair)
 
         @smc_setup_store.pair_has_actionable?(pair)
+      end
+
+      def smc_setup_overlay_for_tui
+        return SmcSetup::TuiOverlay::DISABLED unless @config.smc_setup_enabled?
+
+        st = @smc_setup_planner_state
+        rows = []
+        if @smc_setup_store
+          @config.pairs.each do |p|
+            @smc_setup_store.records_for_pair(p).each do |rec|
+              rows << {
+                setup_id: rec.setup_id,
+                pair: rec.pair,
+                state: rec.state,
+                direction: rec.trade_setup.direction.to_s,
+                gatekeeper: rec.trade_setup.gatekeeper
+              }
+            end
+          end
+        end
+
+        err = st[:error].to_s
+        err = "#{err[0, 70]}…" if err.length > 71
+
+        {
+          enabled: true,
+          planner_enabled: @config.smc_setup_planner_enabled?,
+          gatekeeper_enabled: @config.smc_setup_gatekeeper_enabled?,
+          auto_execute: @config.smc_setup_auto_execute?,
+          planner_last_at: st[:updated_at],
+          planner_error: err,
+          planner_interval_s: @config.smc_setup_planner_interval_seconds,
+          active_count: rows.size,
+          active_setups: rows
+        }
       end
 
       def snapshot_capital_inr

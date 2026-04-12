@@ -23,7 +23,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
       working_orders: [],
       ws_last_tick_ms_ago: 1,
       strategy_last_by_pair: {},
-      regime: CoindcxBot::Regime::TuiState.disabled
+      regime: CoindcxBot::Regime::TuiState.disabled,
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
     )
   end
   let(:config) do
