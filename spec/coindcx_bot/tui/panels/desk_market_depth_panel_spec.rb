@@ -24,7 +24,10 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
       ws_last_tick_ms_ago: 1,
       strategy_last_by_pair: {},
       regime: CoindcxBot::Regime::TuiState.disabled,
-      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
     )
   end
   let(:config) do
@@ -35,7 +38,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
       resolved_max_daily_loss_inr: BigDecimal('1500'),
       execution: { order_defaults: {} },
       trading_mode_label: 'SWING',
-      scalper_mode?: false
+      scalper_mode?: false,
+      tui_exchange_positions_enabled?: false
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }

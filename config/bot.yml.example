@@ -166,6 +166,10 @@ runtime:
   # paper_rest_advances_ws_stale_clock: true
   # TUI only: REST poll interval (seconds) for LTP/CHG/AGE in the dashboard; does not drive strategy or `@ws_tick_at`. Set 0 to disable. Override: COINDCX_TUI_LTP_POLL_SECONDS=0
   # tui_ltp_poll_seconds: 0.5
+  # TUI: show CoinDCX account futures positions (read-only POST list_positions; no orders/exits). Throttled; uses API keys only.
+  # tui_exchange_positions: true
+  # tui_exchange_positions_refresh_seconds: 25
+  # tui_exchange_positions_margins: [USDT, INR]   # optional; default: top-level margin_currency_short_name, or [USDT, INR] if unset
 
 # Regime: HMM (Ruby diagonal Gaussian), optional Ollama narrative, optional risk size multipliers.
 # See docs/hmm_regime_trading_spec.md. Ollama does not submit orders; strategy `regime_vol_tier` gates entries from HMM tier.

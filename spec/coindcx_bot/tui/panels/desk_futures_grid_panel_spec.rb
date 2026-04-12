@@ -29,7 +29,10 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
       ws_last_tick_ms_ago: 5,
       strategy_last_by_pair: { 'B-SOL_USDT' => { action: :hold, reason: 'ok' } },
       regime: CoindcxBot::Regime::TuiState.disabled,
-      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
     )
   end
   let(:config) do
@@ -40,7 +43,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
       resolved_max_daily_loss_inr: BigDecimal('1500'),
       execution: { order_defaults: { leverage: 5 } },
       trading_mode_label: 'SWING',
-      scalper_mode?: false
+      scalper_mode?: false,
+      tui_exchange_positions_enabled?: false
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
@@ -72,6 +76,27 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
       s = output.string
       expect(s).to include('BOOK')
       expect(s).to include('POSITIONS')
+    end
+
+    it 'shows full book quantities when the column is wide enough (no 5-char cap)' do
+      order_book_store.update(
+        pair: 'B-SOL_USDT',
+        bids: [{ 'price' => '82.24', 'quantity' => '5189.12' }],
+        asks: [{ 'price' => '82.34', 'quantity' => '2103.45' }]
+      )
+      panel.render
+      s = output.string.gsub(/\e\[[0-9;]*m/, '')
+      expect(s).to include('5189')
+      expect(s).to include('2103')
+      expect(s).not_to match(/5189\.…|2103\.…/)
+    end
+  end
+
+  describe 'book column splits' do
+    it 'gives quantity more width as the book column grows' do
+      _px_narrow, qty_narrow = panel.send(:book_column_splits, 20)
+      _px_wide, qty_wide = panel.send(:book_column_splits, 30)
+      expect(qty_wide).to be > qty_narrow
     end
   end
 

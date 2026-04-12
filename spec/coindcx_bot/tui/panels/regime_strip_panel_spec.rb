@@ -26,7 +26,10 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
       ws_last_tick_ms_ago: 1,
       strategy_last_by_pair: {},
       regime: CoindcxBot::Regime::TuiState.build(config),
-      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }

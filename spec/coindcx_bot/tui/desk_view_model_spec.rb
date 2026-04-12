@@ -11,7 +11,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       resolved_max_daily_loss_inr: BigDecimal('1500'),
       execution: { order_defaults: { leverage: 5 } },
       trading_mode_label: 'SWING',
-      scalper_mode?: false
+      scalper_mode?: false,
+      tui_exchange_positions_enabled?: false
     )
   end
 
@@ -40,7 +41,10 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       ws_last_tick_ms_ago: 12,
       strategy_last_by_pair: { 'B-SOL_USDT' => { action: :hold, reason: 'below_take_profit' } },
       regime: CoindcxBot::Regime::TuiState.disabled,
-      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
     )
   end
 
@@ -152,6 +156,40 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       expect(lines[0]).to include('DD')
       expect(lines[0]).to include('SWING')
       expect(lines[1]).to include('OPEN')
+    end
+
+    it 'includes EXCH line when tui_exchange_positions is enabled and snapshot has open rows' do
+      cfg = instance_double(
+        CoindcxBot::Config,
+        risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
+        strategy: { name: 'supertrend_profit' },
+        resolved_max_daily_loss_inr: BigDecimal('1500'),
+        execution: { order_defaults: { leverage: 5 } },
+        trading_mode_label: 'SWING',
+        scalper_mode?: false,
+        tui_exchange_positions_enabled?: true
+      )
+      snap_ex = CoindcxBot::Core::Engine::Snapshot.new(
+        **snapshot.to_h.merge(
+          exchange_positions: [
+            { pair: 'B-SOL_USDT', active_pos: 60.9 },
+            { pair: 'B-ETH_USDT', active_pos: 0 }
+          ],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: Time.now
+        )
+      )
+      vm_ex = described_class.new(
+        snapshot: snap_ex,
+        tick_ticks: tick_ticks,
+        symbols: %w[B-SOL_USDT],
+        ws_stale_fn: ->(_) { false },
+        config: cfg
+      )
+      lines = vm_ex.grid_sidebar_lines
+      expect(lines.size).to eq(4)
+      expect(lines.last).to include('EXCH')
+      expect(lines.last).to include('SOLL60.9')
     end
   end
 

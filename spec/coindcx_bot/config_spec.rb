@@ -30,6 +30,18 @@ RSpec.describe CoindcxBot::Config do
     expect(off.regime_enabled?).to be(false)
   end
 
+  it 'defaults tui exchange position margins to [USDT, INR] when margin_currency_short_name is blank' do
+    cfg = described_class.new(minimal_bot_config.merge(margin_currency_short_name: ''))
+    expect(cfg.tui_exchange_positions_margin_currencies).to eq(%w[USDT INR])
+  end
+
+  it 'uses runtime.tui_exchange_positions_margins when set' do
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { tui_exchange_positions_margins: %w[usdt inr] })
+    )
+    expect(cfg.tui_exchange_positions_margin_currencies).to eq(%w[USDT INR])
+  end
+
   it 'rejects runtime.paper (use runtime.dry_run only)' do
     bad = minimal_bot_config(runtime: { paper: true })
     expect { described_class.new(bad) }.to raise_error(

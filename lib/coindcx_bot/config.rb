@@ -390,6 +390,32 @@ module CoindcxBot
       File.expand_path(runtime.fetch(:journal_path, './data/bot_journal.sqlite3'), Dir.pwd)
     end
 
+    # Read-only TUI: poll CoinDCX futures positions (list only — no orders/exits).
+    def tui_exchange_positions_enabled?
+      truthy?(runtime[:tui_exchange_positions])
+    end
+
+    def tui_exchange_positions_refresh_seconds
+      v = runtime[:tui_exchange_positions_refresh_seconds]
+      f = Float(v.nil? ? 25 : v.to_s)
+      f < 5.0 ? 5.0 : f
+    rescue ArgumentError, TypeError
+      25.0
+    end
+
+    # Body filter for POST /derivatives/futures/positions (CoinDCX often needs this to return rows).
+    def tui_exchange_positions_margin_currencies
+      m = runtime[:tui_exchange_positions_margins]
+      if m.is_a?(Array) && m.any?
+        return m.map { |x| x.to_s.strip.upcase }.reject(&:empty?)
+      end
+
+      single = margin_currency_short_name.to_s.strip.upcase
+      return [single] unless single.empty?
+
+      %w[USDT INR]
+    end
+
     class ConfigurationError < StandardError; end
 
     private

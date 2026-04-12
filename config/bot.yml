@@ -104,6 +104,10 @@ runtime:
   stale_tick_seconds: 25
   stale_recovery_sleep_seconds: 2
   tui_ltp_poll_seconds: 0.25
+  # TUI: read-only CoinDCX futures positions (list API only; no orders/exits). Needs COINDCX_API_*.
+  tui_exchange_positions: true
+  tui_exchange_positions_refresh_seconds: 25
+  tui_exchange_positions_margins: [USDT, INR]
   # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
   ws_shutdown_join_seconds: 45
   # Paper: no exchange orders. Flip to false only when going live with credentials + risk checks.

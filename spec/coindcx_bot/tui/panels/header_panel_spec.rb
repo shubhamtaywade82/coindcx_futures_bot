@@ -36,7 +36,10 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       ws_last_tick_ms_ago: 42,
       strategy_last_by_pair: {},
       regime: CoindcxBot::Regime::TuiState.disabled,
-      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
@@ -119,7 +122,10 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           ws_last_tick_ms_ago: nil,
           strategy_last_by_pair: {},
           regime: CoindcxBot::Regime::TuiState.disabled,
-          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+          exchange_positions: [],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: nil
         )
       end
 
@@ -169,7 +175,10 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           ws_last_tick_ms_ago: 10,
           strategy_last_by_pair: {},
           regime: CoindcxBot::Regime::TuiState.disabled,
-          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+          exchange_positions: [],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: nil
         )
       end
 

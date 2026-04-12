@@ -16,6 +16,7 @@ module CoindcxBot
         :running, :dry_run, :stale_tick_seconds, :paper_metrics,
         :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
         :strategy_last_by_pair, :regime, :smc_setup,
+        :exchange_positions, :exchange_positions_error, :exchange_positions_fetched_at,
         keyword_init: true
       )
 
@@ -79,6 +80,8 @@ module CoindcxBot
         @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
         @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
         @daily_loss_flatten_warned = false
+        @exchange_positions_tui_mutex = Mutex.new
+        @exchange_positions_tui = { rows: [], error: nil, fetched_at: nil }
         @smc_setup_store = nil
         @smc_setup_eval = nil
         @smc_setup_planner = nil
@@ -127,6 +130,7 @@ module CoindcxBot
 
         pm = @broker.paper? ? paper_snapshot_metrics(ticks) : {}
 
+        ex = exchange_positions_tui_for_snapshot
         Snapshot.new(
           pairs: @config.pairs,
           ticks: ticks,
@@ -146,7 +150,10 @@ module CoindcxBot
           ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago,
           strategy_last_by_pair: @last_strategy_by_pair.dup,
           regime: regime_snapshot_for_tui,
-          smc_setup: smc_setup_overlay_for_tui
+          smc_setup: smc_setup_overlay_for_tui,
+          exchange_positions: ex[:rows],
+          exchange_positions_error: ex[:error],
+          exchange_positions_fetched_at: ex[:fetched_at]
         )
       end
 
@@ -765,6 +772,7 @@ module CoindcxBot
         @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
         refresh_smc_setup_planner_if_due
         refresh_regime_ai_if_due
+        refresh_exchange_positions_for_tui_if_due
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
@@ -973,6 +981,58 @@ module CoindcxBot
           exit_for_close = sig.action == :close ? ltp : nil
           @coord.apply(sig, exit_price: exit_for_close)
         end
+      end
+
+      # Read-only CoinDCX futures positions for TUI (POST list only; never places or exits orders).
+      def exchange_positions_tui_for_snapshot
+        return { rows: [], error: nil, fetched_at: nil } unless @config.tui_exchange_positions_enabled?
+
+        @exchange_positions_tui_mutex.synchronize { @exchange_positions_tui.dup }
+      end
+
+      def refresh_exchange_positions_for_tui_if_due
+        return unless @config.tui_exchange_positions_enabled?
+
+        interval = @config.tui_exchange_positions_refresh_seconds
+        now = Time.now
+        @exchange_positions_tui_mutex.synchronize do
+          at = @exchange_positions_tui[:fetched_at]
+          return if at && (now - at) < interval
+        end
+
+        res = @account.list_positions(
+          margin_currency_short_name: @config.tui_exchange_positions_margin_currencies,
+          page: 1,
+          size: 50
+        )
+        rows =
+          if res.ok?
+            normalize_exchange_positions_payload(res.value)
+          else
+            []
+          end
+        err = res.ok? ? nil : res.message.to_s
+        @exchange_positions_tui_mutex.synchronize do
+          @exchange_positions_tui = { rows: rows, error: err, fetched_at: Time.now }
+        end
+      rescue StandardError => e
+        @logger&.warn("[tui] exchange positions: #{e.message}")
+        @exchange_positions_tui_mutex.synchronize do
+          @exchange_positions_tui = { rows: [], error: e.message, fetched_at: Time.now }
+        end
+      end
+
+      def normalize_exchange_positions_payload(value)
+        list =
+          case value
+          when Array
+            value
+          when Hash
+            value[:positions] || value['positions'] || value[:data] || value['data'] || []
+          else
+            []
+          end
+        Array(list).map { |h| h.is_a?(Hash) ? h.transform_keys(&:to_sym) : {} }
       end
     end
   end

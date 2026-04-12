@@ -27,7 +27,10 @@ RSpec.describe CoindcxBot::Tui::Panels::SmcSetupStripPanel do
       ws_last_tick_ms_ago: 5,
       strategy_last_by_pair: {},
       regime: CoindcxBot::Regime::TuiState.disabled,
-      smc_setup: smc
+      smc_setup: smc,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil
     )
   end
 
