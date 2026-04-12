@@ -108,7 +108,6 @@ runtime:
   ws_shutdown_join_seconds: 45
   # Paper: no exchange orders. Flip to false only when going live with credentials + risk checks.
   dry_run: true
-  # paper: true
   # Verbose strategy line per cycle — COINDCX_STRATEGY_SIGNALS=1 or:
   # log_strategy_signals: true
   # paper_rest_advances_ws_stale_clock: true
@@ -160,7 +159,7 @@ smc_setup:
 #     use_retry_middleware: true
 #     retry_attempts: 3
 
-# Paper broker simulation settings (only active when runtime.paper or runtime.dry_run is true).
+# Paper broker simulation settings (only active when runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
 paper:
   slippage_bps: 5
@@ -168,7 +167,7 @@ paper:
   db_path: ./data/paper_trading.sqlite3
 
 # CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). When enabled with
-# `runtime.dry_run` / `runtime.paper`, the bot uses `OrderGateway` / `AccountGateway` against this
+# With `runtime.dry_run: true`, the bot uses `OrderGateway` / `AccountGateway` against this
 # base URL instead of the in-process `PaperBroker`. Set `COINDCX_API_*` to match the seeded keys.
 paper_exchange:
   enabled: true

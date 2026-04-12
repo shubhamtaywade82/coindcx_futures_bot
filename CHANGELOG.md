@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format is inspired 
 
 ### Changed
 
+- **Config:** Paper vs live is controlled only by **`runtime.dry_run`**. The former **`runtime.paper`** key is no longer read; if it is still present under `runtime:`, config load raises **`ConfigurationError`** with instructions to use `dry_run` only (avoids silent behaviour change).
 - **`Core::Engine`:** When `paper_exchange.enabled`, sets `CoinDCX.configure { api_base_url }` to the simulator and builds `GatewayPaperBroker`. **`mirror_tracker_into_tick_store`** skips overwriting `TickStore` when the existing row’s `updated_at` is newer than the tracker tick’s `received_at`, so REST-driven TUI LTP/age is not hidden by slower WS/candle mirrors.
 - **`Execution::Coordinator`:** Places orders with `client_order_id` (`coindcx-bot-<uuid>`) and `order_type: 'market_order'` where applicable. On **live-style** closes that return a paper-exchange-shaped result with `realized_pnl_usdt`, books daily INR via the same path as other paper closes.
 - **`Gateways::MarketDataGateway`:** `fetch_futures_rt_quotes(pairs:)` for batch public RT quotes (`ls` / `pc` parsing shared with `WsGateway`).

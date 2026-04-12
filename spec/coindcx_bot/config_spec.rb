@@ -30,11 +30,12 @@ RSpec.describe CoindcxBot::Config do
     expect(off.regime_enabled?).to be(false)
   end
 
-  it 'treats runtime.paper as dry_run (paper trading mode)' do
-    cfg = described_class.new(
-      minimal_bot_config(runtime: { journal_path: '/tmp/x.sqlite3', paper: true, dry_run: false })
+  it 'rejects runtime.paper (use runtime.dry_run only)' do
+    bad = minimal_bot_config(runtime: { paper: true })
+    expect { described_class.new(bad) }.to raise_error(
+      CoindcxBot::Config::ConfigurationError,
+      /runtime\.paper/
     )
-    expect(cfg.dry_run?).to be(true)
   end
 
   it 'rejects per_trade_inr_min greater than max' do
@@ -90,7 +91,7 @@ RSpec.describe CoindcxBot::Config do
   it 'does not enable paper exchange when not in dry_run' do
     cfg = described_class.new(
       minimal_bot_config(
-        runtime: { dry_run: false, paper: false },
+        runtime: { dry_run: false },
         paper_exchange: { enabled: true, api_base_url: 'http://127.0.0.1:9292' }
       )
     )

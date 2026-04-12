@@ -37,6 +37,7 @@ module CoindcxBot
       validate_risk_pct_sanity!
       validate_risk_band!
       validate_risk_capital_pct!
+      validate_runtime_no_legacy_paper_flag!
     end
 
     def scalper_mode?
@@ -363,10 +364,9 @@ module CoindcxBot
       regime_enabled? && truthy?(regime_risk_section[:enabled])
     end
 
-    # Paper trading: no exchange orders or account exits. `runtime.paper` is an alias for `runtime.dry_run`.
+    # Paper trading: no exchange orders or account exits. Use +runtime.dry_run+ only (+true+ = simulated execution).
     def dry_run?
-      r = runtime
-      !!(r[:dry_run] || r[:paper])
+      truthy?(runtime[:dry_run])
     end
 
     def paper_config
@@ -462,6 +462,15 @@ module CoindcxBot
       return unless capital_inr.nil?
 
       raise ConfigurationError, 'capital_inr is required when risk.per_trade_capital_pct is set'
+    end
+
+    def validate_runtime_no_legacy_paper_flag!
+      r = raw[:runtime]
+      return unless r.is_a?(Hash)
+      return unless r.key?(:paper)
+
+      raise ConfigurationError,
+            'Remove runtime.paper from bot.yml; use runtime.dry_run only (true = paper trading, false = live).'
     end
 
     def deep_symbolize(obj)

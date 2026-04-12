@@ -57,13 +57,13 @@ Override config path:
 COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 ```
 
-### Paper mode (`dry_run` / `paper`)
+### Paper mode (`runtime.dry_run`)
 
 **Roadmap** for in-process working orders, limits/stops, OCO: [`docs/paper_broker_simulation.md`](docs/paper_broker_simulation.md).
 
 **Optional HTTP simulator:** run `bundle exec bin/paper-exchange` and set **`paper_exchange.enabled`** + **`paper_exchange.api_base_url`** so the bot uses **`GatewayPaperBroker`** against a local CoinDCX-shaped API (signed simulation ticks). See [`docs/paper_exchange.md`](docs/paper_exchange.md).
 
-Use **`runtime.dry_run: true`** or **`runtime.paper: true`** (alias) until order payloads are validated. In paper mode the bot:
+Use **`runtime.dry_run: true`** until order payloads are validated. In paper mode the bot:
 
 - **Journals opens and closes** in SQLite (`positions` + `event_log`) so strategy state matches a live run.
 - **Does not** call `futures.orders.create` or account exit APIs.

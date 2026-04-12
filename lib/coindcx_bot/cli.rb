@@ -262,7 +262,7 @@ module CoindcxBot
 
         Environment: COINDCX_API_KEY, COINDCX_API_SECRET (optional: .env / .env.local in repo root)
         Config: config/bot.yml (see config/bot.yml.example)
-        Paper trading: runtime.dry_run or runtime.paper — journals positions, no exchange orders
+        Paper trading: runtime.dry_run: true — journals positions, no exchange orders
         CoinDCX-shaped paper exchange: run bin/paper-exchange (see config/bot.yml.example paper_exchange)
 
         Scalper preset: runtime.mode: scalper in config, or COINDCX_BOT_MODE=scalper, or append --scalper to run/tui.

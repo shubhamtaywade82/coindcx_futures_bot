@@ -10,7 +10,7 @@ For Socket.IO private-stream parity (future work), see [`paper_exchange_socketio
 
 | Mode | How it works |
 |------|----------------|
-| **Default paper** (`runtime.dry_run` / `runtime.paper`, no `paper_exchange`) | **`Execution::PaperBroker`** writes to a local **`PaperStore`** SQLite file. Orders never leave the process. |
+| **Default paper** (`runtime.dry_run: true`, no `paper_exchange`) | **`Execution::PaperBroker`** writes to a local **`PaperStore`** SQLite file. Orders never leave the process. |
 | **Paper exchange** (`paper_exchange.enabled: true` + `api_base_url`) | **`Execution::GatewayPaperBroker`** sends orders and account actions to **your Rack app** over HTTP. Fills are driven by **signed `POST …/simulation/tick`** from the engine (same API key/secret as CoinDCX-style signing). |
 
 Use the HTTP exchange when you want **transport-level parity** with the real client (headers, paths, JSON shapes) or to share one simulator between multiple processes.
@@ -55,7 +55,7 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
 
    ```yaml
    runtime:
-     dry_run: true   # or paper: true
+     dry_run: true
 
    paper_exchange:
      enabled: true
