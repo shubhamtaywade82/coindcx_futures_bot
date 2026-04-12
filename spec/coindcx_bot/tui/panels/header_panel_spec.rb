@@ -63,7 +63,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       expect(rendered).to include('50000')
       expect(rendered).to include('POS:')
       expect(rendered).to include('ORD:')
-      expect(rendered).to include('LAST:')
+      expect(rendered).to include('LAST EVT:')
     end
 
     it 'shows LAT after FEED on the first status line' do

@@ -146,7 +146,7 @@ module CoindcxBot
               "#{bold('POS: ')}#{pos_n}",
               "#{bold('ORD: ')}#{ord_n}",
               "#{bold('ERR: ')}#{err}",
-              "#{bold('LAST: ')}#{last}"
+              "#{bold('LAST EVT: ')}#{last}"
             ]
           )
         end

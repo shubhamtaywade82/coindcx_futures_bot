@@ -83,7 +83,7 @@ module CoindcxBot
           raise MarketRules::ValidationError, 'pair required' if pair.to_s.empty?
           raise MarketRules::ValidationError, 'ltp required' if ltp.nil? || ltp.to_s.empty?
 
-          @tick.dispatch!(
+          tick_result = @tick.dispatch!(
             user_id,
             pair: pair,
             ltp: ltp,
@@ -91,7 +91,9 @@ module CoindcxBot
             low: body['low'] || body[:low]
           )
           @logger&.info("[paper_exchange] tick pair=#{pair} ltp=#{ltp}")
-          json(200, { status: 'ok' })
+          tr = tick_result.is_a?(Hash) ? tick_result : {}
+          exits = Array(tr[:position_exits]).filter_map { |ex| serialize_position_exit_for_api(ex) }
+          json(200, { status: 'ok', position_exits: exits })
         else
           json(404, { error: { message: 'not found', code: 'not_found', path: path } })
         end
@@ -105,6 +107,29 @@ module CoindcxBot
       end
 
       private
+
+      def serialize_position_exit_for_api(ex)
+        return nil unless ex.is_a?(Hash)
+
+        pair = (ex[:pair] || ex['pair']).to_s
+        return nil if pair.empty?
+
+        {
+          pair: pair,
+          realized_pnl_usdt: decimal_string_for_json(ex[:realized_pnl_usdt] || ex['realized_pnl_usdt']),
+          fill_price: decimal_string_for_json(ex[:fill_price] || ex['fill_price']),
+          position_id: ex[:position_id] || ex['position_id'],
+          trigger: (ex[:trigger] || ex['trigger']).to_s
+        }
+      end
+
+      def decimal_string_for_json(v)
+        return nil if v.nil?
+
+        BigDecimal(v.to_s).to_s('F')
+      rescue ArgumentError, TypeError
+        v.to_s
+      end
 
       def handle_public_market_get(env)
         path = Auth.normalized_request_path(env)

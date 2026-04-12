@@ -19,6 +19,38 @@ module CoindcxBot
         end
 
         def render
+          if regime_feature_disabled?
+            render_disabled_compact
+          else
+            render_full_frame
+          end
+        end
+
+        def row_count
+          regime_feature_disabled? ? 1 : 4
+        end
+
+        private
+
+        def regime_feature_disabled?
+          r = @engine.snapshot.regime
+          return true unless r.is_a?(Hash)
+
+          on = r[:enabled]
+          !(on == true || on.to_s.downcase == 'true' || on.to_s == '1')
+        end
+
+        def render_disabled_compact
+          w = term_width
+          buf = StringIO.new
+          buf << @cursor.save
+          buf << move(@row) << clear_line(compact_disabled_line(w))
+          buf << @cursor.restore
+          @output.print buf.string
+          @output.flush
+        end
+
+        def render_full_frame
           snap = @engine.snapshot
           r = normalize_regime(snap.regime)
           w = term_width
@@ -33,11 +65,27 @@ module CoindcxBot
           @output.flush
         end
 
-        def row_count
-          4
+        def compact_disabled_line(w)
+          core = "#{bold('REGIME')} #{dim('off')}"
+          used = visible_len(core)
+          max_tail = w - used
+          return core if max_tail < 4
+
+          hint_plain = '  ·  bot.yml: regime.enabled + regime.hmm (optional AI)'
+          tail_plain =
+            if hint_plain.length <= max_tail
+              hint_plain
+            else
+              "#{hint_plain[0, [max_tail - 1, 0].max]}…"
+            end
+          "#{core}#{dim(tail_plain)}"
         end
 
-        private
+        def visible_len(s)
+          s.gsub(/\e\[[0-9;]*m/, '').length
+        end
+
+        def bold(str) = "\e[1m#{str}\e[0m"
 
         def normalize_regime(raw)
           base = CoindcxBot::Regime::TuiState.disabled

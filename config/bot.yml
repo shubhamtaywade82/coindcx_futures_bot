@@ -1,4 +1,7 @@
 # Copy to config/bot.yml and adjust. Env overrides: COINDCX_BOT_CONFIG path.
+#
+# Scalping profile: runtime.mode scalper (merges defaults for omitted keys) +
+# SupertrendProfit on 5m execution / 15m higher TF. Set dry_run: false for live.
 
 margin_currency_short_name: USDT
 
@@ -19,6 +22,9 @@ risk:
   # Scalping: fewer concurrent positions; raise max_leverage only if your account allows it.
   max_open_positions: 2
   max_leverage: 10
+  # Scalper preset also sets these if omitted; explicit here for clarity.
+  flatten_on_daily_loss_breach: true
+  pause_after_daily_loss_flatten: true
   # Optional (% of capital_inr). Defaults: per-trade 1.5% (when both per_trade_inr_min/max are omitted);
   # clamp floor/ceiling 0.25% / 3%; daily loss halt 3.5%. TUI UTIL = loss vs daily cap, not margin use.
   # per_trade_capital_pct: 1.5
@@ -67,27 +73,21 @@ execution:
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 200
-  # Preset merges only missing keys: stale 25s, TUI LTP poll 0.25s, flatten-on-daily-loss, etc.
-  # Or: COINDCX_BOT_MODE=scalper / bin/bot tui --scalper
+  # Scalper preset fills stale/LTP/flatten if you omit them; COINDCX_BOT_MODE=scalper forces preset too.
   mode: scalper
-  refresh_candles_seconds: 1
-  # Tighter than swing — new entries blocked sooner if WS is quiet (scalper preset default 25).
+  # Balanced vs API load; use 1–5 only if you accept heavier REST use.
+  refresh_candles_seconds: 12
   stale_tick_seconds: 25
-  # While WS is stale, wait this long between engine cycles (scalper preset default 2).
   stale_recovery_sleep_seconds: 2
+  tui_ltp_poll_seconds: 0.25
   # Max seconds to wait for the WebSocket thread after stop (no Thread#kill — graceful exit only)
   ws_shutdown_join_seconds: 45
-  # Paper trading: no futures orders / account exits. Same effect as dry_run (either key is enough).
+  # Paper: no exchange orders. Flip to false only when going live with credentials + risk checks.
   dry_run: true
   # paper: true
-  # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.
+  # Verbose strategy line per cycle — COINDCX_STRATEGY_SIGNALS=1 or:
   # log_strategy_signals: true
-  # Paper only: when true (default), mirroring REST candles into LTP also refreshes the WS staleness clock so STALE/AGE match the UI. Live ignores this.
   # paper_rest_advances_ws_stale_clock: true
-  # TUI only: REST poll interval (seconds) for LTP/CHG/AGE in the dashboard; does not drive strategy or `@ws_tick_at`. Set 0 to disable. Override: COINDCX_TUI_LTP_POLL_SECONDS=0
-  # tui_ltp_poll_seconds: 0.5
-  # Log each strategy outcome every cycle (or set COINDCX_STRATEGY_SIGNALS=1). Verbose.
-  # log_strategy_signals: true
 
 
 # Regime/HMM: optional context for TUI + regime_vol_tier. Off by default for scalping (less CPU/REST per cycle).

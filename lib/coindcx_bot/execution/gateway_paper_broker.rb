@@ -10,7 +10,7 @@ module CoindcxBot
     class GatewayPaperBroker < LiveBroker
       def initialize(order_gateway:, account_gateway:, journal:, config:, exposure_guard:, logger: nil,
                      tick_base_url:, tick_path: '/exchange/v1/paper/simulation/tick',
-                     api_key: nil, api_secret: nil)
+                     api_key: nil, api_secret: nil, faraday_connection: nil)
         super(
           order_gateway: order_gateway,
           account_gateway: account_gateway,
@@ -23,7 +23,7 @@ module CoindcxBot
         @tick_path = tick_path.start_with?('/') ? tick_path : "/#{tick_path}"
         @api_key = (api_key || ENV.fetch('COINDCX_API_KEY')).to_s.strip
         @api_secret = (api_secret || ENV.fetch('COINDCX_API_SECRET')).to_s.strip
-        @conn = Faraday.new(url: @tick_base_url) do |f|
+        @conn = faraday_connection || Faraday.new(url: @tick_base_url) do |f|
           f.options.open_timeout = 5
           f.options.timeout = 15
         end
@@ -53,9 +53,10 @@ module CoindcxBot
 
         unless resp.status.between?(200, 299)
           @logger&.warn("[gateway_paper] tick HTTP #{resp.status} #{resp.body}")
+          return []
         end
 
-        []
+        position_exits_from_tick_response(resp.body)
       rescue StandardError => e
         @logger&.warn("[gateway_paper] tick failed: #{e.class}: #{e.message}")
         []
@@ -117,6 +118,43 @@ module CoindcxBot
       end
 
       private
+
+      # Maps paper exchange JSON to the same rows {Engine#run_paper_process_tick} expects from {PaperBroker}.
+      def position_exits_from_tick_response(body)
+        raw = JSON.parse(body.to_s)
+        list = raw['position_exits'] || raw[:position_exits]
+        return [] unless list.is_a?(Array)
+
+        list.filter_map { |row| normalize_gateway_tick_exit(row) }
+      rescue JSON::ParserError => e
+        @logger&.warn("[gateway_paper] tick JSON parse: #{e.message}")
+        []
+      end
+
+      def normalize_gateway_tick_exit(row)
+        return nil unless row.is_a?(Hash)
+
+        h = row.transform_keys(&:to_sym)
+        pair = (h[:pair] || h['pair']).to_s
+        return nil if pair.empty?
+
+        pnl_raw = h[:realized_pnl_usdt] || h['realized_pnl_usdt']
+        price_raw = h[:fill_price] || h['fill_price']
+        pid = h[:position_id] || h['position_id']
+        trig = (h[:trigger] || h['trigger']).to_s
+        trig_sym = trig.empty? ? :tick_exit : trig.to_sym
+
+        {
+          kind: :exit,
+          pair: pair,
+          realized_pnl_usdt: BigDecimal(pnl_raw.to_s),
+          fill_price: BigDecimal(price_raw.to_s),
+          position_id: pid,
+          trigger: trig_sym
+        }
+      rescue ArgumentError, TypeError
+        nil
+      end
 
       def extract_realized_pnl_usdt(h)
         return nil unless h.is_a?(Hash)

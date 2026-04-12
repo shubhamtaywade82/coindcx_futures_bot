@@ -127,7 +127,7 @@ module CoindcxBot
         u = loss_utilization_pct
         u_s = u.nil? ? '—' : format('%.1f%%', u.to_f)
         sig = strategy_signal_summary
-        sig = sig.length > 40 ? "#{sig[0, 37]}…" : sig
+        sig = sig.length > 52 ? "#{sig[0, 49]}…" : sig
         [
           "DD #{dd_s} │ #{risk_band} │ UTIL #{u_s} │ #{trading_mode_label}",
           "OPEN #{pos_n} │ ORD #{ord_n} │ #{strategy_name}",
@@ -158,7 +158,7 @@ module CoindcxBot
         return '—' if parts.empty?
 
         line = parts.join(' · ')
-        line.length > 72 ? "#{line[0, 69]}…" : line
+        line.length > 88 ? "#{line[0, 85]}…" : line
       end
 
       def paper_slippage_total

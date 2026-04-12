@@ -334,7 +334,7 @@ module CoindcxBot
             dim('ST'.ljust(3)),
             dim('LAT')
           ].join(dim(' '))
-          rh = dim('EVENTS')
+          rh = dim('SUMMARY · EVENTS')
           "│#{pad_visible(lh, lw)}│#{pad_visible(eh, ew)}│#{pad_visible(oh, ow)}│#{pad_visible(rh, rw)}│"
         end
 

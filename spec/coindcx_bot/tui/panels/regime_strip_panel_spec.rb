@@ -34,13 +34,13 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
   before { allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(100) }
 
   describe '#render' do
-    it 'draws the regime frame and OFF state when regime is disabled', :aggregate_failures do
+    it 'uses one compact line when regime is disabled in the snapshot', :aggregate_failures do
       panel.render
       s = output.string
       expect(s).to include('REGIME')
-      expect(s).to include('OFF')
-      expect(s).to include('Mdl:')
-      expect(s).to include('AI:off')
+      expect(s).to include('off')
+      expect(s).to include('regime.enabled')
+      expect(s).not_to include('Mdl:')
     end
 
     it 'shows STANDBY and n/a placeholders when regime is enabled in config' do
@@ -57,8 +57,16 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
   end
 
   describe '#row_count' do
-    it 'reserves four terminal rows' do
-      expect(panel.row_count).to eq(4)
+    it 'is one row when regime is disabled' do
+      expect(panel.row_count).to eq(1)
+    end
+
+    it 'is four rows when regime is enabled in config' do
+      allow(config).to receive(:regime_enabled?).and_return(true)
+      allow(config).to receive(:regime_ai_enabled?).and_return(false)
+      snap_on = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(regime: CoindcxBot::Regime::TuiState.build(config)))
+      eng_on = double('engine', snapshot: snap_on, broker: broker_double, config: config)
+      expect(described_class.new(engine: eng_on, origin_row: 0, output: output).row_count).to eq(4)
     end
   end
 end

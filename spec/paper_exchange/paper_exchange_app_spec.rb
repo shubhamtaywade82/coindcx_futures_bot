@@ -156,7 +156,9 @@ RSpec.describe 'PaperExchange Rack app' do
       { pair: 'B-SOL_USDT', ltp: '100.5', high: '101', low: '99' }
     )
     expect(status).to eq(200)
-    expect(JSON.parse(body.join)).to include('status' => 'ok')
+    j = JSON.parse(body.join)
+    expect(j).to include('status' => 'ok')
+    expect(j['position_exits']).to eq([])
   end
 
   it 're-seeds pe_api_keys when the row is missing but the request key matches ENV' do
@@ -170,7 +172,9 @@ RSpec.describe 'PaperExchange Rack app' do
       { pair: 'B-SOL_USDT', ltp: '77' }
     )
     expect(status).to eq(200)
-    expect(JSON.parse(body.join)).to include('status' => 'ok')
+    j = JSON.parse(body.join)
+    expect(j).to include('status' => 'ok')
+    expect(j['position_exits']).to eq([])
   ensure
     if prev_k.nil?
       ENV.delete('COINDCX_API_KEY')

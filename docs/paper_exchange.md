@@ -73,7 +73,7 @@ Use the HTTP exchange when you want **transport-level parity** with the real cli
 
 - **`CoindcxBot::Config#paper_exchange_enabled?`** is true only when **`dry_run?`** and **`paper_exchange.enabled`** are both set.
 - **`Core::Engine#configure_coin_dcx`** sets **`CoinDCX.configure { |c| c.api_base_url = … }`** to **`paper_exchange.api_base_url`** so **`OrderGateway`** and **`AccountGateway`** hit the local app.
-- **`Core::Engine#build_broker`** returns **`GatewayPaperBroker`**, which subclasses **`LiveBroker`** but overrides **`paper?`** and **`process_tick`**. Each tick cycle, **`process_tick`** signs a small JSON body (`pair`, `ltp`, optional candle **`high`** / **`low`**) and POSTs to the simulation tick path so the exchange can match limits/stops and update positions.
+- **`Core::Engine#build_broker`** returns **`GatewayPaperBroker`**, which subclasses **`LiveBroker`** but overrides **`paper?`** and **`process_tick`**. Each tick cycle, **`process_tick`** signs a small JSON body (`pair`, `ltp`, optional candle **`high`** / **`low`**) and POSTs to the simulation tick path. The JSON response’s **`position_exits`** array is turned into the same `kind: :exit` rows as in-process **`PaperBroker`**, so **`run_paper_process_tick`** can call **`handle_broker_exit`**.
 
 If **`paper_exchange.enabled`** is false, dry-run still uses **`Execution::PaperBroker`** (in-process) as before.
 
@@ -87,7 +87,21 @@ Implemented in **`CoindcxBot::PaperExchange::App`** (behind **`Auth::Middleware`
 - **Wallets:** `GET …/derivatives/futures/wallets`, `POST …/wallets/transfer`, `GET …/wallets/transactions`.
 - **Orders:** `POST …/orders/create`, `POST …/orders/cancel`, `POST …/orders` (list).
 - **Positions:** list, leverage, margin, exit, TP/SL helpers, transactions, cross-margin details, etc. (see `lib/coindcx_bot/paper_exchange/app.rb` for the exact path map).
-- **`POST /exchange/v1/paper/simulation/tick`** — **signed** body; advances the internal matcher for the authenticated user.
+- **`POST /exchange/v1/paper/simulation/tick`** — **signed** body (`pair`, `ltp`, optional `high` / `low`); updates mark prices and runs the fill engine on open orders for that pair.
+
+  **Response (200):** `{ "status": "ok", "position_exits": [ ... ] }`. Each element describes a **full** position close that occurred during this tick (partial closes are omitted from this list):
+
+  | Field | Meaning |
+  | --- | --- |
+  | `pair` | Instrument, e.g. `B-SOL_USDT` |
+  | `realized_pnl_usdt` | Net USDT PnL for this close leg after fees (decimal string) |
+  | `fill_price` | Exit fill price (decimal string) |
+  | `position_id` | Exchange `pe_positions.id` |
+  | `trigger` | Fill trigger, e.g. `stop_loss`, `take_profit`, `limit_order` |
+
+  `GatewayPaperBroker#process_tick` reads `position_exits` and forwards them to `Coordinator#handle_broker_exit` so the bot journal matches the simulator when stops/limits fire without a strategy `:close` signal.
+
+  **Limitation:** Resting **entry** orders that fill on a later tick do not create journal rows via this API; use market entries from the strategy or in-process `PaperBroker` if you need journal parity for deferred entries.
 
 Exact JSON shapes aim to stay close enough for **`coindcx-client`**; refer to the service objects under `lib/coindcx_bot/paper_exchange/` for fields and error codes.
 
