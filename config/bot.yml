@@ -110,6 +110,24 @@ runtime:
   # log_strategy_signals: true
   # paper_rest_advances_ws_stale_clock: true
 
+# SMC AI TradeSetups: Ollama planner writes validated JSON plans to the journal; tick FSM evaluates LTP vs zones.
+# This is NOT regime.ai (TUI narrative) — that lives under regime: ai: when enabled.
+smc_setup:
+  enabled: true
+  planner_enabled: true
+  planner_interval_seconds: 120
+  planner_reset_state: false
+  auto_execute: false
+  disable_strategy_entries: false
+  gatekeeper_enabled: false
+  max_active_setups_per_pair: 2
+  sweep_consecutive_ticks: 1
+  model: llama3.2:3b
+  ollama_base_url: http://127.0.0.1:11434
+  timeout_seconds: 90
+  temperature: 0.1
+  use_retry_middleware: true
+  retry_attempts: 3
 
 # Regime/HMM: optional context for TUI + regime_vol_tier. Off by default for scalping (less CPU/REST per cycle).
 # Set enabled: true and hmm.enabled: true when you want the strip + persistence under ./data/regime_hmm*.json.

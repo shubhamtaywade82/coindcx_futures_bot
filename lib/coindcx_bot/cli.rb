@@ -17,6 +17,8 @@ module CoindcxBot
         exit(Doctor.run ? 0 : 1)
       when 'paper-status'
         exit(PaperStatus.run ? 0 : 1)
+      when 'smc-setup'
+        exit(smc_setup_command(argv) ? 0 : 1)
       when 'regime-backtest'
         exit(regime_backtest(argv) ? 0 : 1)
       when 'help', '--help', '-h'
@@ -39,6 +41,48 @@ module CoindcxBot
       return if last.nil?
 
       ENV[CoindcxBot::ScalperProfile::ENV_KEY] = last == '--scalper' ? 'scalper' : 'swing'
+    end
+
+    def self.smc_setup_command(argv)
+      sub = argv.shift || 'status'
+      config = Config.load
+      case sub
+      when 'status'
+        smc_setup_print_status(config)
+      when 'help', '--help', '-h'
+        puts <<~HELP
+          bin/bot smc-setup status — print YAML flags + active setups in journal
+
+          When the engine runs with smc_setup.planner_enabled: true, watch logs for:
+            [smc_setup:planner] upserted setup_id=... (Ollama → TradeSetup store)
+
+          Regime narrative AI (regime.ai) is separate; it does not populate TradeSetups.
+        HELP
+        true
+      else
+        warn("Unknown smc-setup subcommand: #{sub} (try: status)")
+        false
+      end
+    end
+
+    def self.smc_setup_print_status(config)
+      puts "smc_setup.enabled: #{config.smc_setup_enabled?}"
+      puts "smc_setup.planner_enabled (Ollama → TradeSetup JSON): #{config.smc_setup_planner_enabled?}"
+      puts "smc_setup.gatekeeper_enabled: #{config.smc_setup_gatekeeper_enabled?}"
+      puts "smc_setup.auto_execute: #{config.smc_setup_auto_execute?}"
+      puts "smc_setup.model: #{config.smc_setup_model.inspect}  ollama: #{config.smc_setup_ollama_base_url.inspect}"
+      journal = Persistence::Journal.new(config.journal_path)
+      rows = journal.smc_setup_load_active
+      puts "active trade setups in journal (#{config.journal_path}): #{rows.size}"
+      rows.each do |r|
+        puts "  #{r[:setup_id]}  #{r[:pair]}  state=#{r[:state]}"
+      end
+      journal.close
+      puts "\nRegime AI (regime.enabled + regime.ai.enabled) is independent — it does not drive smc_setup."
+      true
+    rescue StandardError => e
+      warn e.message
+      false
     end
 
     def self.regime_backtest(argv)
@@ -102,6 +146,7 @@ module CoindcxBot
           tui     — engine + TTY dashboard (auto-refresh + single-key commands)
           doctor        — verify credentials and list SOL/ETH futures instruments
           paper-status  — print journal open positions + today's INR PnL + recent paper_realized events
+          smc-setup status — SMC TradeSetup flags + active setups in journal (planner is Ollama, not regime.ai)
           regime-backtest [PAIR] — fetch exec candles, walk-forward HMM fit (read-only; no Ollama)
           help          — this message
 

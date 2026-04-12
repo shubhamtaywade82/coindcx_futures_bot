@@ -339,6 +339,9 @@ module CoindcxBot
               res.payload,
               reset_state: @config.smc_setup_planner_reset_state?
             )
+            sid = res.payload[:setup_id] || res.payload['setup_id']
+            pair = res.payload[:pair] || res.payload['pair']
+            @logger&.info("[smc_setup:planner] upserted setup_id=#{sid} pair=#{pair} (Ollama → TradeSetup store)")
           rescue SmcSetup::Validator::ValidationError => e
             @smc_setup_planner_state[:error] = e.message
           end
