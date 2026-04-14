@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coindcx-bot.local/schemas/smc_trade_setup_v1.json",
+  "title": "SMC TradeSetup v1 (CoinDCX USDT-M)",
+  "type": "object",
+  "required": ["schema_version", "setup_id", "pair", "direction", "conditions", "execution"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "setup_id": { "type": "string", "minLength": 1 },
+    "pair": { "type": "string", "description": "CoinDCX pair e.g. B-ETH_USDT" },
+    "direction": { "enum": ["long", "short"] },
+    "leverage": { "type": "integer", "minimum": 1, "maximum": 125 },
+    "gatekeeper": { "type": "boolean" },
+    "conditions": {
+      "type": "object",
+      "required": ["sweep_zone", "entry_zone"],
+      "properties": {
+        "sweep_zone": {
+          "type": "object",
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          }
+        },
+        "entry_zone": {
+          "type": "object",
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          }
+        },
+        "confirmation_required": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["sl"],
+      "properties": {
+        "sl": { "type": "number" },
+        "targets": { "type": "array", "items": { "type": "number" } },
+        "risk_usdt": { "type": "number" }
+      }
+    }
+  }
+}

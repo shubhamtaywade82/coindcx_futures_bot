@@ -19,6 +19,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
   end
 
   let(:guard) { CoindcxBot::Risk::ExposureGuard.new(config: config) }
+  let(:fx) { instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: config.inr_per_usdt) }
 
   let(:broker) do
     CoindcxBot::Execution::LiveBroker.new(
@@ -37,7 +38,8 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       journal: journal,
       config: config,
       exposure_guard: guard,
-      logger: nil
+      logger: nil,
+      fx: fx
     )
   end
 
@@ -110,6 +112,22 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(BigDecimal(rows.first[:entry_price])).to eq(paper_entry)
       expect(paper_entry).to be > BigDecimal('100')
       expect(rows.first[:state]).to eq('open')
+    end
+
+    it 'persists smc_setup_id on the journal row when signal metadata includes it' do
+      signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'smc',
+        metadata: { smc_setup_id: 'plan-9' }
+      )
+
+      coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))
+
+      row = journal.open_positions.first
+      expect(row[:smc_setup_id]).to eq('plan-9')
     end
 
     it 'records a paper fill in the paper store' do
@@ -391,6 +409,82 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(account).to have_received(:exit_position).with(hash_including(id: '42'))
       expect(journal.open_positions).to be_empty
       expect(journal.daily_pnl_inr).to eq(BigDecimal('-1.25') * config.inr_per_usdt)
+    end
+  end
+
+  context 'when live mode and place_orders is disabled' do
+    let(:config) do
+      CoindcxBot::Config.new(
+        minimal_bot_config(
+          runtime: { dry_run: false, journal_path: journal_path, place_orders: false },
+          risk: { max_leverage: 3, per_trade_inr_min: 250, per_trade_inr_max: 500 },
+          execution: { order_defaults: { leverage: 50, margin_currency_short_name: 'USDT', order_type: 'market_order' } }
+        )
+      )
+    end
+
+    it 'does not call the order gateway on open and records open_failed' do
+      signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: {}
+      )
+
+      expect(orders).not_to receive(:create)
+      expect(coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))).to eq(:failed)
+      expect(journal.open_positions).to be_empty
+
+      ev = journal.recent_events(10).find { |e| e['type'] == 'open_failed' }
+      expect(ev).not_to be_nil
+      payload = JSON.parse(ev['payload'], symbolize_names: true)
+      expect(payload[:detail]).to eq('live_orders_disabled')
+    end
+
+    it 'does not call the account gateway on close and leaves the journal row open' do
+      jid = journal.insert_position(
+        pair: 'B-SOL_USDT',
+        side: 'long',
+        entry_price: BigDecimal('100'),
+        quantity: BigDecimal('0.01'),
+        stop_price: BigDecimal('90'),
+        trail_price: nil
+      )
+
+      close_signal = CoindcxBot::Strategy::Signal.new(
+        action: :close,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: nil,
+        reason: 'test',
+        metadata: { position_id: jid }
+      )
+
+      expect(account).not_to receive(:list_positions)
+      expect(coordinator.apply(close_signal, exit_price: BigDecimal('105'))).to eq(:failed)
+      expect(journal.open_positions.size).to eq(1)
+
+      ev = journal.recent_events(10).find { |e| e['type'] == 'signal_close' }
+      expect(ev).not_to be_nil
+      payload = JSON.parse(ev['payload'], symbolize_names: true)
+      expect(payload[:outcome]).to eq('live_orders_disabled')
+    end
+
+    it 'skips exchange flatten and does not close journal rows for the pair' do
+      journal.insert_position(
+        pair: 'B-SOL_USDT',
+        side: 'long',
+        entry_price: BigDecimal('100'),
+        quantity: BigDecimal('0.01'),
+        stop_price: BigDecimal('90'),
+        trail_price: nil
+      )
+
+      expect(account).not_to receive(:list_positions)
+      coordinator.flatten_all(['B-SOL_USDT'], ltps: { 'B-SOL_USDT' => BigDecimal('102') })
+      expect(journal.open_positions.size).to eq(1)
     end
   end
 end

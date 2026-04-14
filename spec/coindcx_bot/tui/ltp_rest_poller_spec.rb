@@ -142,6 +142,41 @@ RSpec.describe CoindcxBot::Tui::LtpRestPoller do
       expect(snap.ask).to eq(100.05)
     end
 
+    it 'continues after a failed poll cycle instead of stopping the loop' do
+      calls = 0
+      allow(market_data).to receive(:fetch_futures_rt_quotes) do
+        calls += 1
+        raise StandardError, 'transient' if calls == 1
+
+        CoindcxBot::Gateways::Result.ok(
+          'B-SOL_USDT' => { price: BigDecimal('2'), change_pct: nil, bid: nil, ask: nil }
+        )
+      end
+      allow(market_data).to receive(:fetch_instrument_display_quote).with(pair: 'B-SOL_USDT').and_return(
+        CoindcxBot::Gateways::Result.ok(price: BigDecimal('2'), change_pct: nil, bid: nil, ask: nil)
+      )
+      logger = instance_double(Logger, warn: nil)
+      allow(logger).to receive(:warn)
+
+      poller = described_class.new(
+        market_data: market_data,
+        pairs: ['B-SOL_USDT'],
+        tick_store: tick_store,
+        render_loop: render_loop,
+        interval_seconds: 0.01,
+        logger: logger
+      )
+      allow(poller).to receive(:sleep_remaining)
+      allow(poller).to receive(:error_cycle_backoff)
+
+      thread = Thread.new { poller.send(:run_loop) }
+      sleep 0.2
+      expect(calls).to be >= 2
+      poller.stop
+      thread.join(2)
+      expect(thread).not_to be_alive
+    end
+
     it 'does not call instrument REST when batch quote already includes bid and ask' do
       allow(market_data).to receive(:fetch_futures_rt_quotes).with(pairs: ['B-SOL_USDT']).and_return(
         CoindcxBot::Gateways::Result.ok(

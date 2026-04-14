@@ -104,7 +104,10 @@ module CoindcxBot
         return nil unless triggered
 
         trig = kind == :stop_loss ? :stop_loss : :take_profit
-        fill_market_order(side: order.side, quantity: order.quantity, ltp: ltp).merge(trigger: trig)
+        # When a stop-market is triggered, the execution engine places a market order at the trigger price.
+        # It's more realistic to base the fill on the trigger price (plus slippage) rather than the
+        # potentially delayed current LTP hook, which guards against weird tick timing errors in simulation.
+        fill_market_order(side: order.side, quantity: order.quantity, ltp: sp).merge(trigger: trig)
       end
 
       def apply_slippage(price, side)

@@ -10,7 +10,7 @@ You are helping improve **Ruby code and tests** for `coindcx_futures_bot`, not p
 
 - **Execution and risk must stay deterministic** in Ruby: no suggesting Ollama or LLM calls inside `tick_cycle`, brokers, or order placement.
 - **CoinDCX only** for this codebase: USDT-margined futures via `coindcx-client`; do not mix in other exchange APIs.
-- **Paper vs live:** `runtime.dry_run` / `paper` uses in-process `PaperBroker` or optional `GatewayPaperBroker` + local paper exchange; live uses `LiveBroker`.
+- **Paper vs live:** `runtime.dry_run: true` uses in-process `PaperBroker` or optional `GatewayPaperBroker` + local paper exchange; live uses `LiveBroker`.
 
 ## Where logic lives
 

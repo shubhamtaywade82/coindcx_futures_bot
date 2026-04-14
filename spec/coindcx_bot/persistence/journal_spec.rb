@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require 'securerandom'
 
 RSpec.describe CoindcxBot::Persistence::Journal do
-  let(:path) { Tempfile.new(['j', '.sqlite3']).path }
+  let(:path) { File.join(Dir.tmpdir, "coindcx_journal_spec_#{SecureRandom.hex(8)}.sqlite3") }
 
   after do
     File.delete(path) if File.exist?(path)
@@ -79,6 +80,29 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(BigDecimal(row[:entry_price])).to eq(BigDecimal('100.05'))
   end
 
+  it 'migrates peak_unrealized_usdt and bumps monotonically' do
+    journal = described_class.new(path)
+    id = journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil
+    )
+    expect(journal.bump_peak_unrealized_usdt(id, BigDecimal('-2'))).to eq(BigDecimal('-2'))
+    expect(journal.bump_peak_unrealized_usdt(id, BigDecimal('5'))).to eq(BigDecimal('5'))
+    expect(journal.bump_peak_unrealized_usdt(id, BigDecimal('3'))).to eq(BigDecimal('5'))
+
+    row = journal.open_positions.first
+    expect(BigDecimal(row[:peak_unrealized_usdt])).to eq(BigDecimal('5'))
+  end
+
+  it 'returns nil from bump_peak_unrealized_usdt when position is missing' do
+    journal = described_class.new(path)
+    expect(journal.bump_peak_unrealized_usdt(99_999, BigDecimal('1'))).to be_nil
+  end
+
   it 'stores initial_stop_price and leaves it unchanged when stop is trailed' do
     journal = described_class.new(path)
     id = journal.insert_position(
@@ -94,5 +118,81 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     row = journal.open_positions.first
     expect(BigDecimal(row[:stop_price])).to eq(BigDecimal('98'))
     expect(BigDecimal(row[:initial_stop_price])).to eq(BigDecimal('90'))
+  end
+
+  it 'persists smc_trade_setups and detects open position by smc_setup_id' do
+    journal = described_class.new(path)
+    journal.smc_setup_insert_or_update(
+      setup_id: 's1',
+      pair: 'B-SOL_USDT',
+      state: 'pending_sweep',
+      payload: { schema_version: 1, setup_id: 's1', pair: 'B-SOL_USDT', direction: 'long',
+                 conditions: { sweep_zone: { min: 1, max: 2 }, entry_zone: { min: 1, max: 2 } },
+                 execution: { sl: 1 } },
+      eval_state: {}
+    )
+    expect(journal.smc_setup_load_active.size).to eq(1)
+    expect(journal.smc_setup_exists?('s1')).to be(true)
+
+    journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil,
+      smc_setup_id: 's1'
+    )
+    expect(journal.open_position_with_smc_setup?('s1')).to be(true)
+  end
+
+  it 'counts and lists recent smc_trade_setups regardless of state' do
+    journal = described_class.new(path)
+    journal.smc_setup_insert_or_update(
+      setup_id: 'z1',
+      pair: 'B-SOL_USDT',
+      state: 'completed',
+      payload: { schema_version: 1, setup_id: 'z1', pair: 'B-SOL_USDT', direction: 'long',
+                 conditions: { sweep_zone: { min: 1, max: 2 }, entry_zone: { min: 1, max: 2 } },
+                 execution: { sl: 1 } },
+      eval_state: {}
+    )
+    expect(journal.smc_setup_count_all).to eq(1)
+    expect(journal.smc_setup_load_active).to be_empty
+    recent = journal.smc_setup_list_recent(5)
+    expect(recent.first[:setup_id]).to eq('z1')
+    expect(recent.first[:state]).to eq('completed')
+  end
+
+  it 'invalidates oldest active smc_trade_setups for a pair, skipping setups with open positions' do
+    journal = described_class.new(path)
+    base_payload = lambda do |id|
+      { schema_version: 1, setup_id: id, pair: 'B-SOL_USDT', direction: 'long',
+        conditions: { sweep_zone: { min: 1, max: 2 }, entry_zone: { min: 1, max: 2 } },
+        execution: { sl: 1 } }
+    end
+    %w[e1 e2 e3].each do |sid|
+      journal.smc_setup_insert_or_update(
+        setup_id: sid,
+        pair: 'B-SOL_USDT',
+        state: 'pending_sweep',
+        payload: base_payload.call(sid),
+        eval_state: {}
+      )
+    end
+    journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('90'),
+      trail_price: nil,
+      smc_setup_id: 'e1'
+    )
+    freed = journal.smc_setup_invalidate_oldest_active_for_pair!('B-SOL_USDT', slots_needed: 2)
+    expect(freed).to eq(2)
+    expect(journal.smc_setup_get_row('e1')[:state]).to eq('pending_sweep')
+    expect(journal.smc_setup_get_row('e2')[:state]).to eq('invalidated')
+    expect(journal.smc_setup_get_row('e3')[:state]).to eq('invalidated')
   end
 end

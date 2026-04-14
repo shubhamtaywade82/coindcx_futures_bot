@@ -2,6 +2,7 @@
 
 require 'bigdecimal'
 require 'json'
+require 'coindcx/ws/parsers/order_book_snapshot'
 
 module CoindcxBot
   module Gateways
@@ -62,6 +63,30 @@ module CoindcxBot
         map_coin_dcx_error(e)
       end
 
+      # Futures L2 snapshot channel (depth 10, 20, or 50 per CoinDCX docs). Not a diff stream.
+      def subscribe_futures_order_book(instrument:, depth: 10, &block)
+        depth_i = Integer(depth)
+        channel = CoinDCX::WS::PublicChannels.futures_order_book(instrument: instrument, depth: depth_i)
+        event = CoinDCX::WS::PublicChannels::DEPTH_SNAPSHOT_EVENT
+        @ws.subscribe_public(channel_name: channel, event_name: event) do |payload|
+          raw = normalize_payload_hash(coerce_book_payload(payload))
+          next if raw.empty?
+          # Same Socket.IO fan-out as price-change: drop payloads whose instrument hint targets another market.
+          next unless order_book_payload_applies_to_instrument?(instrument, raw)
+
+          h = CoinDCX::WS::Parsers::OrderBookSnapshot.parse(raw)
+          block.call(
+            pair: instrument.to_s,
+            bids: h[:bids] || [],
+            asks: h[:asks] || []
+          )
+        end
+
+        Result.ok(self)
+      rescue CoinDCX::Errors::Error => e
+        map_coin_dcx_error(e)
+      end
+
       # Real-time snapshot of many futures instruments on one channel (CoinDCX smoke scripts use this).
       # Fills gaps when per-instrument @prices-futures / @trades-futures produce no parseable ticks.
       def subscribe_futures_current_prices_rt(pairs:, &block)
@@ -79,6 +104,24 @@ module CoindcxBot
       end
 
       private
+
+      def coerce_book_payload(payload)
+        case payload
+        when String
+          JSON.parse(payload)
+        else
+          payload
+        end
+      rescue JSON::ParserError
+        {}
+      end
+
+      def order_book_payload_applies_to_instrument?(instrument, normalized_hash)
+        hint = instrument_hint_from_payload(normalized_hash)
+        return true if hint.nil? || hint.to_s.strip.empty?
+
+        payload_instrument_matches?(instrument, normalized_hash)
+      end
 
       def ticks_from_current_prices_payload(payload, pairs)
         seeds = [payload]
@@ -127,6 +170,7 @@ module CoindcxBot
             end
 
           bid, ask = extract_bid_ask_from_quote(raw)
+          mk = extract_mark_from_quote(raw)
 
           Dto::Tick.new(
             pair: pair.to_s,
@@ -134,7 +178,8 @@ module CoindcxBot
             change_pct: change_pct,
             received_at: Time.now,
             bid: bid,
-            ask: ask
+            ask: ask,
+            mark_price: mk
           )
         end
       end
@@ -222,14 +267,23 @@ module CoindcxBot
         nil
       end
 
+      def extract_mark_from_quote(raw)
+        return nil unless raw.is_a?(Hash)
+
+        h = raw.transform_keys { |k| k.to_sym }
+        mr = h[:mp] || h[:mark] || h[:mark_price]
+        decimal_or_nil(mr)
+      end
+
       def extract_price_and_change_from_quote(raw)
         case raw
         when Hash
           # currentPrices@futures/rt uses `ls` (last price) and `pc` (% change) per CoinDCX glossary.
           pr = raw[:ltp] || raw['ltp'] || raw[:ls] || raw['ls'] ||
                raw[:p] || raw['p'] || raw[:last_price] || raw['last_price'] ||
-               raw[:price] || raw['price'] || raw[:mp] || raw['mp'] ||
-               raw[:last_traded_price] || raw['last_traded_price']
+               raw[:price] || raw['price'] ||
+               raw[:last_traded_price] || raw['last_traded_price'] ||
+               raw[:mp] || raw['mp']
           ch = raw[:pc] || raw['pc'] || raw[:change_pct] || raw['change_pct']
           [pr, ch]
         when Array
@@ -254,6 +308,7 @@ module CoindcxBot
         change_pct = change_raw.nil? ? nil : BigDecimal(change_raw.to_s)
 
         bid, ask = extract_bid_ask_from_quote(h)
+        mk = extract_mark_from_quote(h)
 
         Dto::Tick.new(
           pair: instrument,
@@ -261,7 +316,8 @@ module CoindcxBot
           change_pct: change_pct,
           received_at: Time.now,
           bid: bid,
-          ask: ask
+          ask: ask,
+          mark_price: mk
         )
       end
 

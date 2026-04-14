@@ -28,7 +28,8 @@ module CoindcxBot
 
     def print
       path = @config.journal_path
-      mode = @config.dry_run? ? 'paper (dry_run or paper: true)' : 'live'
+      mode = @config.dry_run? ? 'paper (dry_run: true)' : 'live'
+      mode = "#{mode} (place_orders: false)" if !@config.dry_run? && !@config.place_orders?
 
       @output.puts "Journal path: #{path}"
       @output.puts "Config mode:   #{mode}"

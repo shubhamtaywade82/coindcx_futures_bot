@@ -2,17 +2,16 @@
 
 require 'bigdecimal'
 require_relative 'dynamic_trail'
+require_relative 'hwm_giveback'
 
 module CoindcxBot
   module Strategy
-    Signal = Struct.new(:action, :pair, :side, :stop_price, :reason, :metadata, keyword_init: true)
-
     class TrendContinuation
       def initialize(strategy_config)
         @cfg = strategy_config.transform_keys(&:to_sym)
       end
 
-      def evaluate(pair:, candles_htf:, candles_exec:, position:, ltp:)
+      def evaluate(pair:, candles_htf:, candles_exec:, position:, ltp:, regime_hint: nil)
         exec = candles_exec
         htf = candles_htf
         return hold(pair, 'insufficient_exec_bars') if exec.size < warmup_exec
@@ -193,6 +192,9 @@ module CoindcxBot
         if side == :long
           return close_signal(pair, side, id, 'stop') if price <= stop
 
+          hwm = HwmGiveback.check(pair: pair, position: position, ltp: price, strategy_cfg: @cfg)
+          return hwm if hwm
+
           risk = entry - stop
           if !partial && risk.positive? && price >= entry + risk
             return Signal.new(action: :partial, pair: pair, side: side, stop_price: nil, reason: 'one_r',
@@ -227,6 +229,9 @@ module CoindcxBot
           end
         else
           return close_signal(pair, side, id, 'stop') if price >= stop
+
+          hwm = HwmGiveback.check(pair: pair, position: position, ltp: price, strategy_cfg: @cfg)
+          return hwm if hwm
 
           risk = stop - entry
           if !partial && risk.positive? && price <= entry - risk

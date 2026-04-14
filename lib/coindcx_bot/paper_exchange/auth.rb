@@ -12,7 +12,8 @@ module CoindcxBot
     module Auth
       module_function
 
-      # CoinDCX::REST::Futures::MarketData uses `auth: false` for these GETs — no X-AUTH headers on the wire.
+      # CoinDCX live may require signed requests for some of these paths; the client uses auth where needed.
+      # Paper skips middleware for these GETs so unauthenticated curl/tests still work; signed GETs are also skipped.
       PUBLIC_MARKET_GET_PATHS = %w[
         /exchange/v1/derivatives/futures/data/instrument
         /exchange/v1/derivatives/futures/data/active_instruments
@@ -125,8 +126,10 @@ module CoindcxBot
         end
 
         def lookup_api_key_row(api_key)
-          rows = @store.db.execute('SELECT user_id, api_secret, api_key FROM pe_api_keys')
-          hit = rows.find { |h| Store.normalize_api_key(h['api_key']) == api_key }
+          hit = @store.db.get_first_row(
+            'SELECT user_id, api_secret FROM pe_api_keys WHERE api_key = ? LIMIT 1',
+            [api_key]
+          )
           return nil unless hit
 
           { 'user_id' => hit['user_id'], 'api_secret' => hit['api_secret'] }

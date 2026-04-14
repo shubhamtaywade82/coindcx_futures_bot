@@ -8,7 +8,7 @@ This file replaces an earlier draft (`new_improvments.md`) that mixed chat trans
 
 ### Runtime and config
 
-- **`runtime.dry_run` / `runtime.paper`**: `Config#dry_run?` is true if either flag is set (`lib/coindcx_bot/config.rb`).
+- **`runtime.dry_run`**: `Config#dry_run?` is true when this flag is truthy (`lib/coindcx_bot/config.rb`). The old `runtime.paper` key is rejected at load time.
 - **`paper:` config block**: `slippage_bps`, `fee_bps`, `db_path` — documented in `config/bot.yml.example` and read in `Core::Engine#build_broker` for **`PaperBroker`**. The **paper exchange** harness also reads **`paper:`** for slippage/fee when seeding the Rack app.
 - **`paper_exchange:`** (optional): `enabled`, `api_base_url`, `tick_path` — when **`enabled`** and **`dry_run?`**, the engine uses **`GatewayPaperBroker`** and sets **`CoinDCX.configure { api_base_url }`** to the simulator. See **`docs/paper_exchange.md`**.
 - **`Config#paper_config`**: Returns the raw `paper` hash from YAML (defaults are applied in the engine for slippage/fee/db_path, not merged in `paper_config` itself).

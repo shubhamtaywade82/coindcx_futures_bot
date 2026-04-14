@@ -1,18 +1,38 @@
 # frozen_string_literal: true
 
 require 'fileutils'
+require 'io/console'
 require 'tty-cursor'
 require 'tty-logger'
 require 'tty-screen'
 
+require_relative 'engine_log_filter'
+require_relative 'theme'
+
 module CoindcxBot
   module Tui
     class App
+      include Theme
       RENDER_INTERVAL = 0.25
       KEYBOARD_POLL   = 1
+      MIN_TUI_COLS    = 100
+      MIN_TUI_ROWS    = 28
 
       def self.start
         new.run
+      end
+
+      # Strips leading slashes so `/focus 1` and `focus 1` both work.
+      def self.normalize_palette_command(buf)
+        buf.to_s.strip.downcase.sub(%r{\A/+}, '').strip
+      end
+
+      def initialize
+        @cmd_mode = false
+        @cmd_buf = +''
+        @cmd_feedback = nil
+        @focus = nil
+        @stdin_raw_mode = false
       end
 
       def run
@@ -21,18 +41,27 @@ module CoindcxBot
         config = CoindcxBot::Config.load
         setup_terminal
         tick_store = TickStore.new
+        order_book_store = OrderBookStore.new
         @render_loop = nil
         @ltp_poller = nil
         @tui_footer_poll_interval = nil
+        @focus = FocusRing.new(config.pairs)
         engine = CoindcxBot::Core::Engine.new(
           config: config,
           logger: build_logger,
           tick_store: tick_store,
-          on_tick: ->(_tick) { @render_loop&.request_redraw }
+          order_book_store: order_book_store,
+          on_tick: ->(_tick) { @render_loop&.request_redraw },
+          on_market_data: -> { @render_loop&.request_redraw }
         )
 
         symbols = config.pairs
-        panels  = build_panels(tick_store: tick_store, engine: engine, symbols: symbols)
+        panels  = build_panels(
+          tick_store: tick_store,
+          order_book_store: order_book_store,
+          engine: engine,
+          symbols: symbols
+        )
         @render_loop = RenderLoop.new(panels: panels, interval: RENDER_INTERVAL)
         start_ltp_rest_poller(config: config, symbols: symbols, tick_store: tick_store)
 
@@ -54,11 +83,25 @@ module CoindcxBot
       private
 
       def setup_terminal
+        validate_terminal_size!
         $stdout.sync = true
         $stderr.sync = true
         redirect_stderr_for_tui!
+        enable_stdin_raw_if_interactive!
         print TTY::Cursor.hide
         print "\e[2J\e[H"
+      end
+
+      def validate_terminal_size!
+        cols = TTY::Screen.width
+        rows = TTY::Screen.height
+        cols = cols.to_i if cols
+        rows = rows.to_i if rows
+        return if cols.nil? || rows.nil?
+        return if cols >= MIN_TUI_COLS && rows >= MIN_TUI_ROWS
+
+        warn "CoinDCX TUI: terminal too small (#{cols}x#{rows}); need >= #{MIN_TUI_COLS}x#{MIN_TUI_ROWS}."
+        exit 1
       end
 
       # Never write engine / gem logs to the real terminal while the TUI redraws on stdout — concurrent
@@ -69,6 +112,7 @@ module CoindcxBot
           if tui_verbose?
             path = tui_engine_log_path
             FileUtils.mkdir_p(File.dirname(path))
+            maybe_rotate_engine_log(path)
             path
           else
             File::NULL
@@ -106,44 +150,60 @@ module CoindcxBot
           else
             @null_log_io ||= File.open(File::NULL, 'w')
           end
-        TTY::Logger.new(output: out)
+        inner = TTY::Logger.new(output: out)
+        return inner unless tui_verbose?
+
+        EngineLogFilter.new(inner)
       end
 
-      def build_panels(tick_store:, engine:, symbols:)
+      # Set COINDCX_TUI_LOG_MAX_MB (e.g. 128) to rotate an oversized log once at TUI startup (path -> path.1).
+      def maybe_rotate_engine_log(path)
+        max_mb = ENV['COINDCX_TUI_LOG_MAX_MB'].to_s.to_f
+        return if max_mb <= 0
+        return unless File.file?(path)
+
+        limit = (max_mb * 1024 * 1024).to_i
+        return if File.size(path) < limit
+
+        rotated = "#{path}.1"
+        FileUtils.rm_f(rotated)
+        File.rename(path, rotated)
+      rescue StandardError
+        nil
+      end
+
+      def build_panels(tick_store:, order_book_store:, engine:, symbols:)
         origin = 0
 
-        header = Panels::HeaderPanel.new(engine: engine, origin_row: origin)
+        header = Panels::HeaderPanel.new(
+          engine: engine,
+          origin_row: origin,
+          focus_pair_proc: -> { @focus&.current }
+        )
         origin += header.row_count
 
-        matrix = Panels::DeskExecutionOrderPanel.new(
+        regime_strip = Panels::RegimeStripPanel.new(engine: engine, origin_row: origin)
+        origin += regime_strip.row_count
+
+        smc_strip = Panels::SmcSetupStripPanel.new(engine: engine, origin_row: origin)
+        origin += smc_strip.row_count
+
+        grid = Panels::DeskFuturesGridPanel.new(
           engine: engine,
           tick_store: tick_store,
+          order_book_store: order_book_store,
           symbols: symbols,
+          focus_pair_proc: -> { @focus&.current },
           origin_row: origin
         )
-        origin += matrix.row_count
+        origin += grid.row_count
 
-        depth = Panels::DeskMarketDepthPanel.new(
-          engine: engine,
-          tick_store: tick_store,
-          symbols: symbols,
-          origin_row: origin
+        keybar = Panels::KeybarPanel.new(
+          origin_row: origin,
+          footer_text_proc: -> { footer_hint_text },
+          command_line_proc: -> { command_palette_line }
         )
-        origin += depth.row_count
-
-        desk = Panels::DeskRiskStrategyPanel.new(
-          engine: engine,
-          tick_store: tick_store,
-          symbols: symbols,
-          origin_row: origin
-        )
-        origin += desk.row_count
-
-        logs = Panels::EventLogPanel.new(engine: engine, origin_row: origin, max_lines: 6)
-        origin += logs.row_count
-
-        keybar = Panels::KeybarPanel.new(origin_row: origin, footer_text_proc: -> { footer_hint_text })
-        [header, matrix, depth, desk, logs, keybar]
+        [header, regime_strip, smc_strip, grid, keybar]
       end
 
       def start_engine(engine)
@@ -151,7 +211,10 @@ module CoindcxBot
           Thread.current.report_on_exception = false
           engine.run
         rescue StandardError => e
-          warn "[Engine] #{e.class}: #{e.message}"
+          msg = "#{e.class}: #{e.message}"
+          warn "[Engine] #{msg}"
+          engine.engine_loop_failed!(msg)
+          @render_loop&.request_redraw
         end
       end
 
@@ -190,7 +253,23 @@ module CoindcxBot
           else
             ''
           end
-        "#{poll_part}WS tick wake · max #{(RENDER_INTERVAL * 1000).to_i}ms if idle · ^C or q to exit"
+        "#{poll_part}WS tick wake · max #{(RENDER_INTERVAL * 1000).to_i}ms if idle · " \
+          'q quit · p r k o f · n focus · / cmd · Esc cancel cmd'
+      end
+
+      # Dedicated palette row (always visible) — input after `/`, last result otherwise.
+      def command_palette_line
+        prompt = "#{bold('>')}\e[0m "
+        if @cmd_mode
+          "#{prompt}#{@cmd_buf}\e[0m"
+        else
+          fb = @cmd_feedback&.to_s&.strip
+          if fb && !fb.empty?
+            "#{prompt}\e[33m#{fb}\e[0m"
+          else
+            "#{prompt}#{dim('type a command (/ optional) · help · pause · flatten · /focus 0')}"
+          end
+        end
       end
 
       def keyboard_loop(engine)
@@ -206,8 +285,25 @@ module CoindcxBot
       end
 
       def handle_key(cmd, engine)
+        if @cmd_mode
+          case cmd
+          when "\u0003" then return true
+          when "\r", "\n" then run_command_buffer(engine); return false
+          when "\e" then @cmd_mode = false; @cmd_buf.clear; @render_loop&.request_redraw; return false
+          when "\x7f", "\b" then @cmd_buf.chop!; @render_loop&.request_redraw; return false
+          else
+            if printable_cmd_char?(cmd)
+              @cmd_buf << cmd
+              @render_loop&.request_redraw
+            end
+            return false
+          end
+        end
+
         case cmd
         when 'q', 'Q', "\u0003" then true
+        when '/' then @cmd_mode = true; @cmd_buf.clear; @cmd_feedback = nil; @render_loop&.request_redraw; false
+        when 'n' then @focus&.advance!; @render_loop&.request_redraw; false
         when 'p' then engine.pause!;          false
         when 'r' then engine.resume!;         false
         when 'k' then engine.kill_switch_on!; false
@@ -216,6 +312,41 @@ module CoindcxBot
         else false
         end
       end
+
+      def printable_cmd_char?(c)
+        return false if c.nil? || !c.is_a?(String)
+
+        o = c.ord
+        o >= 32 && o < 127
+      end
+
+      def run_command_buffer(engine)
+        raw = self.class.normalize_palette_command(@cmd_buf)
+        @cmd_buf.clear
+        @cmd_mode = false
+        case raw
+        when '', '/'
+          @cmd_feedback = nil
+        when 'pause', 'p' then engine.pause!; @cmd_feedback = 'paused'
+        when 'resume', 'r' then engine.resume!; @cmd_feedback = 'resumed'
+        when 'kill' then engine.kill_switch_on!; @cmd_feedback = 'kill on'
+        when 'kill off', 'killoff', 'kill-off' then engine.kill_switch_off!; @cmd_feedback = 'kill off'
+        when 'flatten', 'flat', 'f' then engine.flatten_all!; @cmd_feedback = 'flatten sent'
+        when 'help', 'h', '?'
+          @cmd_feedback = 'pause resume kill kill-off flatten focus 0 n (optional leading /)'
+        when /\Afocus\s+(\d+)\z/
+          @focus&.select_absolute!(Regexp.last_match(1))
+          @cmd_feedback = "focus #{Regexp.last_match(1)}"
+        when 'n', 'next'
+          @focus&.advance!
+          @cmd_feedback = 'focus next'
+        else
+          @cmd_feedback = "unknown: #{raw[0, 28]}"
+        end
+        @render_loop&.request_redraw
+      end
+
+      # bold() and dim() are provided by `include Theme`
 
       def stdin_interactive?
         return false if ENV['COINDCX_TUI_POLL_ONLY'] == '1'
@@ -233,8 +364,30 @@ module CoindcxBot
         @null_log_io&.close
         @null_log_io = nil
         restore_stderr!
+        disable_stdin_raw!
         print TTY::Cursor.show
-        print "\e[?25h"
+      end
+
+      # Canonical (cooked) tty input is line-buffered: getc sees nothing until Enter. Raw mode delivers
+      # each byte immediately so the command palette can echo while typing.
+      def enable_stdin_raw_if_interactive!
+        return unless stdin_interactive?
+        return unless $stdin.respond_to?(:raw!)
+
+        $stdin.raw!(intr: true)
+        @stdin_raw_mode = true
+      rescue StandardError
+        @stdin_raw_mode = false
+      end
+
+      def disable_stdin_raw!
+        return unless @stdin_raw_mode
+        return unless $stdin.respond_to?(:cooked!)
+
+        $stdin.cooked!
+        @stdin_raw_mode = false
+      rescue StandardError
+        @stdin_raw_mode = false
       end
     end
   end

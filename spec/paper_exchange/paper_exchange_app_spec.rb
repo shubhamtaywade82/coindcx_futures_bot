@@ -2,6 +2,7 @@
 
 require 'spec_helper'
 require 'json'
+require 'faraday'
 require 'coindcx'
 require 'coindcx_bot/paper_exchange'
 
@@ -14,6 +15,30 @@ RSpec.describe 'PaperExchange Rack app' do
     CoindcxBot::PaperExchange::Boot.ensure_seed!(s, api_key: api_key, api_secret: api_secret,
                                                    seed_spot_usdt: '0', seed_futures_usdt: '1_000_000')
     s
+  end
+  let(:fx_stubs) { Faraday::Adapter::Test::Stubs.new }
+  let(:fx_conn) do
+    Faraday.new(url: 'https://api.coindcx.com') do |f|
+      f.adapter :test, fx_stubs
+    end
+  end
+  let(:conversions_feed) do
+    fx_stubs.get('/api/v1/derivatives/futures/data/conversions') do
+      [
+        200,
+        { 'Content-Type' => 'application/json' },
+        '[{"symbol":"USDTINR","margin_currency_short_name":"INR","target_currency_short_name":"USDT",' \
+        '"conversion_price":88.5,"last_updated_at":1}]'
+      ]
+    end
+    CoindcxBot::PaperExchange::ConversionsFeed.new(
+      fallback_inr_per_usdt: BigDecimal('83'),
+      ttl_seconds: 3600,
+      logger: nil,
+      faraday: fx_conn,
+      api_host: 'https://api.coindcx.com',
+      path: '/api/v1/derivatives/futures/data/conversions'
+    )
   end
   let(:app) do
     pe_store = store
@@ -32,7 +57,8 @@ RSpec.describe 'PaperExchange Rack app' do
       positions: positions,
       tick_dispatcher: tick,
       store: pe_store,
-      logger: nil
+      logger: nil,
+      conversions_feed: conversions_feed
     )
     Rack::Builder.new do
       use CoindcxBot::PaperExchange::SqlMutex::Middleware, store: pe_store
@@ -63,6 +89,16 @@ RSpec.describe 'PaperExchange Rack app' do
     env = Rack::MockRequest.env_for('/health', method: 'GET')
     status, = app.call(env)
     expect(status).to eq(200)
+  end
+
+  it 'returns USDTINR conversions as a JSON array on public GET' do
+    env = Rack::MockRequest.env_for('/api/v1/derivatives/futures/data/conversions', method: 'GET')
+    status, _, body = app.call(env)
+    expect(status).to eq(200)
+    j = JSON.parse(body.join)
+    expect(j).to be_an(Array)
+    expect(j.first['symbol']).to eq('USDTINR')
+    expect(j.first['conversion_price']).to eq(88.5)
   end
 
   it 'returns 401 missing_auth_headers when auth headers are absent' do
@@ -136,7 +172,7 @@ RSpec.describe 'PaperExchange Rack app' do
     expect(j.dig('error', 'code')).to eq('no_mark')
   end
 
-  it 'serves public GET instrument without auth (CoinDCX client uses auth: false)' do
+  it 'serves public GET instrument without auth (paper skips auth middleware; live client may sign)' do
     signed_post('/exchange/v1/paper/simulation/tick', { pair: 'B-SOL_USDT', ltp: '123.45' })
     env = Rack::MockRequest.env_for(
       '/exchange/v1/derivatives/futures/data/instrument?pair=B-SOL_USDT&margin_currency_short_name=USDT',
@@ -156,7 +192,9 @@ RSpec.describe 'PaperExchange Rack app' do
       { pair: 'B-SOL_USDT', ltp: '100.5', high: '101', low: '99' }
     )
     expect(status).to eq(200)
-    expect(JSON.parse(body.join)).to include('status' => 'ok')
+    j = JSON.parse(body.join)
+    expect(j).to include('status' => 'ok')
+    expect(j['position_exits']).to eq([])
   end
 
   it 're-seeds pe_api_keys when the row is missing but the request key matches ENV' do
@@ -170,7 +208,9 @@ RSpec.describe 'PaperExchange Rack app' do
       { pair: 'B-SOL_USDT', ltp: '77' }
     )
     expect(status).to eq(200)
-    expect(JSON.parse(body.join)).to include('status' => 'ok')
+    j = JSON.parse(body.join)
+    expect(j).to include('status' => 'ok')
+    expect(j['position_exits']).to eq([])
   ensure
     if prev_k.nil?
       ENV.delete('COINDCX_API_KEY')

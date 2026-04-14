@@ -18,7 +18,7 @@ module CoindcxBot
         @trail_config = trail_config || {}
         @order_book = OrderBook.new
         @funding_rate = BigDecimal((funding_rate_bps || DEFAULT_FUNDING_RATE_BPS).to_s) / 10_000
-        @last_funding_at = Time.now
+        @last_funding_at = Hash.new { |h, k| h[k] = Time.now }
         reconcile_order_book
       end
 
@@ -552,9 +552,10 @@ module CoindcxBot
 
       def maybe_accrue_funding(pair, ltp)
         now = Time.now
-        return unless (now - @last_funding_at) >= FUNDING_INTERVAL_SECONDS
+        last = @last_funding_at[pair]
+        return unless (now - last) >= FUNDING_INTERVAL_SECONDS
 
-        @last_funding_at = now
+        @last_funding_at[pair] = now
         accrue_funding_for_pair(pair, ltp)
       end
 

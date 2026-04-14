@@ -5,6 +5,7 @@ require 'json'
 require 'logger'
 
 require_relative '../display_ltp'
+require_relative '../regime/tui_state'
 require_relative '../synthetic_l1'
 
 module CoindcxBot
@@ -14,17 +15,22 @@ module CoindcxBot
         :pairs, :ticks, :positions, :paused, :kill_switch, :stale, :last_error, :daily_pnl,
         :running, :dry_run, :stale_tick_seconds, :paper_metrics,
         :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
-        :strategy_last_by_pair,
+        :strategy_last_by_pair, :regime, :smc_setup,
+        :exchange_positions, :exchange_positions_error, :exchange_positions_fetched_at,
+        :live_tui_metrics,
         keyword_init: true
       )
 
-      def initialize(config:, logger: nil, tick_store: nil, on_tick: nil)
+      def initialize(config:, logger: nil, tick_store: nil, on_tick: nil, order_book_store: nil,
+                     on_market_data: nil)
         @config = config
         @logger = logger || Logger.new($stdout)
         @journal = Persistence::Journal.new(config.journal_path)
         @bus = EventBus.new
         @tick_store = tick_store
         @on_tick = on_tick
+        @order_book_store = order_book_store
+        @on_market_data = on_market_data
         @stale_seconds = config.runtime.fetch(:stale_tick_seconds, 45).to_i
         @stale_recovery_sleep = config.runtime.fetch(:stale_recovery_sleep_seconds, 5).to_f
         @tracker = PositionTracker.new(
@@ -32,11 +38,13 @@ module CoindcxBot
           stale_tick_seconds: @stale_seconds
         )
         @exposure = Risk::ExposureGuard.new(config: config)
-        @risk = Risk::Manager.new(config: config, journal: @journal, exposure_guard: @exposure)
-        @strategy = build_strategy(config.strategy)
 
         configure_coin_dcx
         @client = CoinDCX.client
+        @fx = Fx::UsdtInrRate.new(client: @client, config: config, logger: @logger)
+        @risk = Risk::Manager.new(config: config, journal: @journal, exposure_guard: @exposure, fx: @fx)
+        @strategy = build_strategy(config.strategy)
+
         @md = Gateways::MarketDataGateway.new(
           client: @client,
           margin_currency_short_name: config.margin_currency_short_name
@@ -53,8 +61,10 @@ module CoindcxBot
           journal: @journal,
           config: config,
           exposure_guard: @exposure,
-          logger: @logger
+          logger: @logger,
+          fx: @fx
         )
+        @coord.reconcile_paper_state!
 
         @candles_htf = {}
         @candles_exec = {}
@@ -66,6 +76,36 @@ module CoindcxBot
         @lookback = config.runtime.fetch(:candle_lookback, 120).to_i
         @ws_tick_at = {}
         @last_strategy_by_pair = {}
+        @regime_ai_mutex = Mutex.new
+        @regime_ai_state = { updated_at: nil, payload: nil, error: nil }
+        @regime_ai_brain = nil
+        @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
+        @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
+        @daily_loss_flatten_warned = false
+        @engine_loop_crashed = false
+        @exchange_positions_tui_mutex = Mutex.new
+        @exchange_positions_tui = { rows: [], error: nil, fetched_at: nil }
+        @futures_wallet_tui_mutex = Mutex.new
+        @futures_wallet_tui = {
+          wallet_amount: nil,
+          wallet_currency: nil,
+          wallet_available: nil,
+          wallet_locked: nil,
+          wallet_cross_order_margin: nil,
+          wallet_cross_user_margin: nil,
+          error: nil,
+          fetched_at: nil
+        }
+        @smc_setup_store = nil
+        @smc_setup_eval = nil
+        @smc_setup_planner = nil
+        @smc_setup_planner_state = { updated_at: nil, error: nil }
+        @smc_setup_planner_mutex = Mutex.new
+        @smc_setup_planner_running = false
+        @regime_ai_running = false
+        @regime_ai_thread_mutex = Mutex.new
+        @smc_setup_mutexes = Hash.new { |h, k| h[k] = Mutex.new }
+        init_smc_setup_stack! if @config.smc_setup_enabled?
 
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
@@ -80,6 +120,10 @@ module CoindcxBot
       end
 
       attr_reader :config, :logger, :journal, :broker
+
+      def inr_per_usdt
+        @fx.inr_per_usdt
+      end
 
       # Wall-clock time of the last **WebSocket** tick for this pair (not REST candle mirrors).
       def last_ws_tick_at(pair)
@@ -104,6 +148,8 @@ module CoindcxBot
 
         pm = @broker.paper? ? paper_snapshot_metrics(ticks) : {}
 
+        ex = exchange_positions_tui_for_snapshot
+        live_metrics = build_live_tui_metrics(ex[:rows], ticks)
         Snapshot.new(
           pairs: @config.pairs,
           ticks: ticks,
@@ -113,7 +159,7 @@ module CoindcxBot
           stale: stale,
           last_error: @last_error,
           daily_pnl: @journal.daily_pnl_inr,
-          running: !@stop,
+          running: !@stop && !@engine_loop_crashed,
           dry_run: @config.dry_run?,
           stale_tick_seconds: @stale_seconds,
           paper_metrics: pm,
@@ -121,12 +167,29 @@ module CoindcxBot
           recent_events: snapshot_recent_events,
           working_orders: @broker.tui_working_orders,
           ws_last_tick_ms_ago: snapshot_ws_last_tick_ms_ago,
-          strategy_last_by_pair: @last_strategy_by_pair.dup
+          strategy_last_by_pair: @last_strategy_by_pair.dup,
+          regime: regime_snapshot_for_tui,
+          smc_setup: smc_setup_overlay_for_tui,
+          exchange_positions: ex[:rows],
+          exchange_positions_error: ex[:error],
+          exchange_positions_fetched_at: ex[:fetched_at],
+          live_tui_metrics: live_metrics
         )
       end
 
       def request_stop!
         @stop = true
+      end
+
+      # Called from the TUI when the main engine thread terminates with an error (after `run` re-raises).
+      def engine_loop_failed!(message)
+        @engine_loop_crashed = true
+        @last_error = message.to_s
+        @logger&.error("[engine] loop terminated: #{message}")
+      end
+
+      def engine_loop_crashed?
+        @engine_loop_crashed
       end
 
       def pause!
@@ -170,6 +233,282 @@ module CoindcxBot
       end
 
       private
+
+      def regime_snapshot_for_tui
+        base = Regime::TuiState.build(@config)
+        merged = base.dup
+        if @hmm_runtime
+          merged = merged.merge(@hmm_runtime.tui_overlay)
+        end
+        return merged unless @config.regime_ai_enabled?
+
+        snap = @regime_ai_mutex.synchronize { @regime_ai_state.dup }
+        merged.merge(Regime::AiBrain.overlay_from_state(snap))
+      end
+
+      # Launches the regime AI analysis in a background thread to avoid blocking tick_cycle.
+      def refresh_regime_ai_if_due
+        return unless @config.regime_ai_enabled?
+
+        now = Time.now
+        @regime_ai_mutex.synchronize do
+          last = @regime_ai_state[:updated_at]
+          return if last && (now - last) < @config.regime_ai_min_interval_seconds
+        end
+
+        already_running = @regime_ai_thread_mutex.synchronize do
+          return if @regime_ai_running
+          @regime_ai_running = true
+          false
+        end
+        return if already_running
+
+        ctx = build_regime_ai_context
+        if @config.regime_ai_include_hmm_context? && @hmm_runtime
+          ctx[:hmm] = @hmm_runtime.hmm_context_for_ai
+        end
+        if ctx[:pairs].empty?
+          @regime_ai_thread_mutex.synchronize { @regime_ai_running = false }
+          return
+        end
+
+        Thread.new do
+          Thread.current.name = 'regime_ai'
+          run_regime_ai_sync(ctx, now)
+        ensure
+          @regime_ai_thread_mutex.synchronize { @regime_ai_running = false }
+        end
+      end
+
+      def run_regime_ai_sync(ctx, started_at)
+        brain = (@regime_ai_brain ||= Regime::AiBrain.new(config: @config, logger: @logger))
+        res = brain.analyze!(ctx)
+        @regime_ai_mutex.synchronize do
+          @regime_ai_state[:updated_at] = started_at
+          if res.ok && res.payload
+            @regime_ai_state[:payload] = res.payload
+            @regime_ai_state[:error] = nil
+          else
+            @regime_ai_state[:error] = res.error_message
+          end
+        end
+      rescue StandardError => e
+        @logger&.warn("[regime_ai] #{e.class}: #{e.message}")
+        @regime_ai_mutex.synchronize { @regime_ai_state[:error] = e.message }
+      end
+
+      def maybe_flatten_on_daily_loss_breach
+        return unless @config.flatten_on_daily_loss_breach?
+        return unless @risk.daily_loss_breached?
+        return if @journal.open_positions.empty?
+        return if @journal.paused? || @journal.kill_switch?
+
+        if !@config.dry_run? && !@config.place_orders?
+          unless @daily_loss_flatten_warned
+            @logger&.warn(
+              '[engine] Daily loss limit breached — flatten skipped: live order placement disabled ' \
+              '(runtime.place_orders / PLACE_ORDER)'
+            )
+            @daily_loss_flatten_warned = true
+          end
+          @journal.set_paused(true) if @config.pause_after_daily_loss_flatten?
+          return
+        end
+
+        unless @daily_loss_flatten_warned
+          @logger&.warn('[engine] Daily loss limit breached — flattening all positions (risk.flatten_on_daily_loss_breach)')
+          @daily_loss_flatten_warned = true
+        end
+        @coord.flatten_all(@config.pairs, ltps: flatten_ltps_for_pairs)
+        @journal.set_paused(true) if @config.pause_after_daily_loss_flatten?
+      rescue StandardError => e
+        @logger&.error("[engine] Daily loss flatten failed: #{e.message}")
+        @journal.set_paused(true) if @config.pause_after_daily_loss_flatten?
+      end
+
+      def build_regime_ai_context
+        max_pairs = @config.regime_ai_max_pairs
+        n = @config.regime_ai_bars_per_pair
+        pairs = @config.pairs.first(max_pairs)
+        candles_by_pair = pairs.to_h do |p|
+          arr = Array(@candles_exec[p]).last(n)
+          rows = arr.map do |c|
+            { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
+          end
+          [p, rows]
+        end
+        {
+          pairs: pairs,
+          candles_by_pair: candles_by_pair,
+          positions: @journal.open_positions,
+          exec_resolution: @exec_res,
+          htf_resolution: @htf_res
+        }
+      end
+
+      def regime_hint_for(pair)
+        return nil unless @hmm_runtime
+
+        st = @hmm_runtime.state_for(pair)
+        return nil unless st
+
+        {
+          tier: Regime::Allocation.vol_tier(st.vol_rank, st.vol_rank_total),
+          state: st
+        }
+      end
+
+      def init_smc_setup_stack!
+        @smc_setup_store = SmcSetup::TradeSetupStore.new(
+          journal: @journal,
+          max_active_setups_per_pair: @config.smc_setup_max_active_setups_per_pair
+        )
+        @smc_setup_store.reload!
+        smc_cfg = SmcConfluence::Configuration.from_hash(@config.strategy[:smc_confluence] || {})
+        @smc_setup_eval = SmcSetup::TickEvaluator.new(
+          config: @config,
+          journal: @journal,
+          coordinator: @coord,
+          risk: @risk,
+          store: @smc_setup_store,
+          logger: @logger,
+          smc_configuration: smc_cfg,
+          regime_sizer: @regime_sizer,
+          setup_mutex_factory: ->(id) { @smc_setup_mutexes[id] }
+        )
+      end
+
+      def run_smc_setup_evaluator!
+        return unless @smc_setup_eval && @smc_setup_store
+
+        @config.pairs.each do |pair|
+          next if @journal.paused? || @journal.kill_switch?
+
+          stale = ws_feed_stale?(pair)
+          ltp = @tracker.ltp(pair)
+          exec = @candles_exec[pair] || []
+          @smc_setup_eval.evaluate_pair!(pair: pair, ltp: ltp, candles_exec: exec, stale: stale)
+        end
+      end
+
+      # Launches the SMC planner in a background thread to avoid blocking tick_cycle.
+      # The planner calls Ollama (timeout up to 90s) — running it inline would stall
+      # SL/TP fills and signal generation for the entire duration.
+      def refresh_smc_setup_planner_if_due
+        return unless @config.smc_setup_planner_enabled?
+        return unless @smc_setup_store
+
+        now = Time.now
+        last = @smc_setup_planner_state[:updated_at]
+        return if last && (now - last) < @config.smc_setup_planner_interval_seconds
+
+        already_running = @smc_setup_planner_mutex.synchronize do
+          return if @smc_setup_planner_running
+          @smc_setup_planner_running = true
+          false
+        end
+        return if already_running
+
+        ctx = build_smc_planner_context
+        if ctx[:pairs].empty?
+          @smc_setup_planner_mutex.synchronize { @smc_setup_planner_running = false }
+          return
+        end
+
+        Thread.new do
+          Thread.current.name = 'smc_planner'
+          run_smc_planner_sync(ctx, now)
+        ensure
+          @smc_setup_planner_mutex.synchronize { @smc_setup_planner_running = false }
+        end
+      end
+
+      def run_smc_planner_sync(ctx, started_at)
+        brain = (@smc_setup_planner ||= SmcSetup::PlannerBrain.new(config: @config, logger: @logger))
+        res = brain.plan!(ctx)
+        @smc_setup_planner_state[:updated_at] = started_at
+        if res.ok && res.payload
+          begin
+            @smc_setup_store.upsert_from_hash!(
+              res.payload,
+              reset_state: @config.smc_setup_planner_reset_state?
+            )
+            sid = res.payload[:setup_id] || res.payload['setup_id']
+            pair = res.payload[:pair] || res.payload['pair']
+            @logger&.info("[smc_setup:planner] upserted setup_id=#{sid} pair=#{pair} (Ollama → TradeSetup store)")
+            @smc_setup_planner_state[:error] = nil
+          rescue SmcSetup::Validator::ValidationError => e
+            @smc_setup_planner_state[:error] = e.message
+          end
+        else
+          @smc_setup_planner_state[:error] = res.error_message
+        end
+      rescue StandardError => e
+        @logger&.warn("[smc_setup:planner] #{e.class}: #{e.message}")
+        @smc_setup_planner_state[:error] = e.message
+      end
+
+      def build_smc_planner_context
+        pairs = @config.pairs
+        n = 24
+        candles_by_pair = pairs.to_h do |p|
+          arr = Array(@candles_exec[p]).last(n)
+          rows = arr.map do |c|
+            { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
+          end
+          [p, rows]
+        end
+        {
+          pairs: pairs,
+          candles_by_pair: candles_by_pair,
+          open_count: @journal.open_positions.size,
+          exec_resolution: @exec_res,
+          htf_resolution: @htf_res
+        }
+      end
+
+      def smc_setup_skip_strategy_entries?(pair)
+        return false unless @config.smc_setup_disable_strategy_entries?
+        return false unless @smc_setup_store
+        return false if @tracker.open_position_for(pair)
+
+        @smc_setup_store.pair_has_actionable?(pair)
+      end
+
+      def smc_setup_overlay_for_tui
+        return SmcSetup::TuiOverlay::DISABLED unless @config.smc_setup_enabled?
+
+        st = @smc_setup_planner_state
+        rows = []
+        if @smc_setup_store
+          @config.pairs.each do |p|
+            @smc_setup_store.records_for_pair(p).each do |rec|
+              rows << {
+                setup_id: rec.setup_id,
+                pair: rec.pair,
+                state: rec.state,
+                direction: rec.trade_setup.direction.to_s,
+                gatekeeper: rec.trade_setup.gatekeeper
+              }
+            end
+          end
+        end
+
+        err = st[:error].to_s
+        err = "#{err[0, 70]}…" if err.length > 71
+
+        {
+          enabled: true,
+          planner_enabled: @config.smc_setup_planner_enabled?,
+          gatekeeper_enabled: @config.smc_setup_gatekeeper_enabled?,
+          auto_execute: @config.smc_setup_auto_execute?,
+          planner_last_at: st[:updated_at],
+          planner_error: err,
+          planner_interval_s: @config.smc_setup_planner_interval_seconds,
+          active_count: rows.size,
+          active_setups: rows
+        }
+      end
 
       def snapshot_capital_inr
         v = @config.raw[:capital_inr] || @config.raw['capital_inr']
@@ -321,8 +660,26 @@ module CoindcxBot
       def build_strategy(strategy_cfg)
         name = (strategy_cfg[:name] || 'trend_continuation').to_s
         case name
+        when 'regime_vol_tier'
+          merged = @config.regime_strategy_section.merge(strategy_cfg.transform_keys(&:to_sym))
+          inner = build_inner_strategy_for_regime_wrapper(strategy_cfg)
+          Strategy::RegimeVolTier.new(merged, inner: inner)
         when 'supertrend_profit'
           Strategy::SupertrendProfit.new(strategy_cfg)
+        when 'smc_confluence'
+          Strategy::SmcConfluence.new(strategy_cfg)
+        else
+          Strategy::TrendContinuation.new(strategy_cfg)
+        end
+      end
+
+      def build_inner_strategy_for_regime_wrapper(strategy_cfg)
+        inner_name = (strategy_cfg[:inner_strategy] || 'trend_continuation').to_s
+        case inner_name
+        when 'supertrend_profit'
+          Strategy::SupertrendProfit.new(strategy_cfg)
+        when 'smc_confluence'
+          Strategy::SmcConfluence.new(strategy_cfg)
         else
           Strategy::TrendContinuation.new(strategy_cfg)
         end
@@ -338,7 +695,8 @@ module CoindcxBot
           change_pct: tick.change_pct,
           updated_at: tick.received_at,
           bid: bid,
-          ask: ask
+          ask: ask,
+          mark: tick.mark_price
         )
       end
 
@@ -370,7 +728,8 @@ module CoindcxBot
             change_pct: t.change_pct,
             updated_at: t.received_at,
             bid: bid,
-            ask: ask
+            ask: ask,
+            mark: t.mark_price
           )
         end
       end
@@ -418,6 +777,21 @@ module CoindcxBot
         end
       end
 
+      def order_book_ltp_hint(pair)
+        row = @tick_store&.snapshot&.dig(pair)
+        if row&.ltp&.to_f&.positive?
+          return row.ltp
+        end
+
+        px = @tracker.ltp(pair)
+        return nil if px.nil?
+
+        bd = BigDecimal(px.to_s)
+        bd.positive? ? bd.to_f : nil
+      rescue ArgumentError, TypeError
+        nil
+      end
+
       def run_ws_loop
         conn = @ws.connect
         unless conn.ok?
@@ -440,6 +814,24 @@ module CoindcxBot
         end
         @last_error = "ws order sub: #{ou.message}" if ou.failure?
 
+        if @order_book_store
+          @config.pairs.each do |pair|
+            ob = @ws.subscribe_futures_order_book(instrument: pair, depth: 10) do |book|
+              ltp_hint = order_book_ltp_hint(pair)
+              @order_book_store.update(
+                pair: book[:pair],
+                bids: book[:bids],
+                asks: book[:asks],
+                ltp_hint: ltp_hint
+              )
+              @on_market_data&.call
+            rescue StandardError => e
+              @logger&.warn("order book ws #{pair}: #{e.message}")
+            end
+            @last_error = "ws orderbook #{pair}: #{ob.message}" if ob.failure?
+          end
+        end
+
         until @stop
           sleep 0.1
         end
@@ -449,16 +841,25 @@ module CoindcxBot
       end
 
       def tick_cycle
+        @fx.refresh_if_stale!
         @journal.reset_daily_pnl_if_new_day!
+        @daily_loss_flatten_warned = false unless @risk.daily_loss_breached?
         load_candles
+        @hmm_runtime&.refresh!(@candles_exec)
         seed_tracker_from_last_candle_if_no_ltp
         refresh_tracker_from_exec_candle_when_ws_stale
         mirror_tracker_into_tick_store
         run_paper_process_tick if @broker.paper?
+        maybe_flatten_on_daily_loss_breach
         # Entry gating must be **per pair**: if ETH has no WS ticks, SOL must still be allowed to open.
         # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
         @last_strategy_by_pair = {}
+        run_smc_setup_evaluator!
         @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
+        refresh_smc_setup_planner_if_due
+        refresh_regime_ai_if_due
+        refresh_exchange_positions_for_tui_if_due
+        refresh_futures_wallet_for_tui_if_due
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
@@ -588,17 +989,39 @@ module CoindcxBot
       def process_pair(pair, stale)
         return if @journal.paused? || @journal.kill_switch?
 
+        if smc_setup_skip_strategy_entries?(pair)
+          hold = Strategy::Signal.new(
+            action: :hold,
+            pair: pair,
+            side: nil,
+            stop_price: nil,
+            reason: 'smc_setup_pending',
+            metadata: {}
+          )
+          @last_strategy_by_pair[pair.to_s] = { action: :hold, reason: 'smc_setup_pending' }
+          log_strategy_signal(pair, hold) if @strategy_signal_trace
+          return
+        end
+
         htf = @candles_htf[pair] || []
         exec = @candles_exec[pair] || []
         pos = @tracker.open_position_for(pair)
         ltp = @tracker.ltp(pair)
+        if pos && ltp
+          u = CoindcxBot::Strategy::UnrealizedPnl.position_usdt(pos, ltp)
+          unless u.nil?
+            peak = @journal.bump_peak_unrealized_usdt(pos[:id], u)
+            pos = pos.merge(peak_unrealized_usdt: peak.to_s('F')) if peak
+          end
+        end
 
         sig = @strategy.evaluate(
           pair: pair,
           candles_htf: htf,
           candles_exec: exec,
           position: pos,
-          ltp: ltp
+          ltp: ltp,
+          regime_hint: regime_hint_for(pair)
         )
 
         @last_strategy_by_pair[pair.to_s] = { action: sig.action, reason: sig.reason.to_s }
@@ -631,6 +1054,10 @@ module CoindcxBot
           end
 
           qty = @risk.size_quantity(entry_price: entry, stop_price: sig.stop_price, side: sig.side)
+          if @regime_sizer
+            mult = @regime_sizer.multiplier_for(@journal)
+            qty = (qty * mult).round(6, BigDecimal::ROUND_DOWN)
+          end
           if qty.nil? || qty <= 0
             @logger&.info("[engine] #{pair} #{sig.action} blocked: zero_quantity (check stop distance vs risk)") if @strategy_signal_trace
             return
@@ -640,6 +1067,130 @@ module CoindcxBot
         else
           exit_for_close = sig.action == :close ? ltp : nil
           @coord.apply(sig, exit_price: exit_for_close)
+        end
+      end
+
+      # Read-only CoinDCX futures positions for TUI (POST list only; never places or exits orders).
+      def exchange_positions_tui_for_snapshot
+        return { rows: [], error: nil, fetched_at: nil } unless @config.tui_exchange_positions_enabled?
+
+        @exchange_positions_tui_mutex.synchronize { @exchange_positions_tui.dup }
+      end
+
+      def refresh_exchange_positions_for_tui_if_due
+        return unless @config.tui_exchange_positions_enabled?
+
+        interval = @config.tui_exchange_positions_refresh_seconds
+        now = Time.now
+        @exchange_positions_tui_mutex.synchronize do
+          at = @exchange_positions_tui[:fetched_at]
+          return if at && (now - at) < interval
+        end
+
+        res = @account.list_positions(
+          margin_currency_short_name: @config.tui_exchange_positions_margin_currencies,
+          page: 1,
+          size: 50
+        )
+        rows =
+          if res.ok?
+            normalize_exchange_positions_payload(res.value)
+          else
+            []
+          end
+        err = res.ok? ? nil : res.message.to_s
+        @exchange_positions_tui_mutex.synchronize do
+          @exchange_positions_tui = { rows: rows, error: err, fetched_at: Time.now }
+        end
+      rescue StandardError => e
+        @logger&.warn("[tui] exchange positions: #{e.message}")
+        @exchange_positions_tui_mutex.synchronize do
+          @exchange_positions_tui = { rows: [], error: e.message, fetched_at: Time.now }
+        end
+      end
+
+      def normalize_exchange_positions_payload(value)
+        list =
+          case value
+          when Array
+            value
+          when Hash
+            value[:positions] || value['positions'] || value[:data] || value['data'] || []
+          else
+            []
+          end
+        Array(list).map { |h| h.is_a?(Hash) ? h.transform_keys(&:to_sym) : {} }
+      end
+
+      def build_live_tui_metrics(exchange_rows, ticks_hash)
+        return {} unless @config.tui_exchange_mirror?
+
+        w = @futures_wallet_tui_mutex.synchronize { @futures_wallet_tui.dup }
+        unreal = CoindcxBot::Tui::LiveAccountMirror.sum_unrealized_usdt(exchange_rows, ticks_hash)
+        realized = CoindcxBot::Tui::LiveAccountMirror.sum_realized_usdt(exchange_rows)
+        open_n = CoindcxBot::Tui::LiveAccountMirror.open_on_configured_pairs(exchange_rows, @config.pairs)
+        h = {
+          wallet_amount: w[:wallet_amount],
+          wallet_currency: w[:wallet_currency],
+          wallet_available: w[:wallet_available],
+          wallet_locked: w[:wallet_locked],
+          wallet_cross_order_margin: w[:wallet_cross_order_margin],
+          wallet_cross_user_margin: w[:wallet_cross_user_margin],
+          realized_usdt: realized,
+          unrealized_usdt: unreal,
+          open_positions_count: open_n,
+          wallet_error: w[:error]
+        }
+        h.compact
+      end
+
+      def refresh_futures_wallet_for_tui_if_due
+        return unless @config.tui_exchange_mirror?
+        return if @config.dry_run?
+
+        interval = @config.tui_exchange_positions_refresh_seconds
+        now = Time.now
+        @futures_wallet_tui_mutex.synchronize do
+          at = @futures_wallet_tui[:fetched_at]
+          return if at && (now - at) < interval
+        end
+
+        res = @account.futures_wallet(margin_currency_short_name: @config.margin_currency_short_name)
+        snap = nil
+        err = nil
+        if res.ok?
+          snap = CoindcxBot::Tui::LiveAccountMirror.extract_wallet_snapshot_for_display(
+            res.value,
+            @config.margin_currency_short_name
+          )
+        else
+          err = res.message.to_s
+        end
+        @futures_wallet_tui_mutex.synchronize do
+          @futures_wallet_tui = {
+            wallet_amount: snap&.dig(:balance),
+            wallet_currency: snap&.dig(:currency),
+            wallet_available: snap&.dig(:available_balance),
+            wallet_locked: snap&.dig(:locked_balance),
+            wallet_cross_order_margin: snap&.dig(:cross_order_margin),
+            wallet_cross_user_margin: snap&.dig(:cross_user_margin),
+            error: err,
+            fetched_at: Time.now
+          }
+        end
+      rescue StandardError => e
+        @logger&.warn("[tui] futures wallet: #{e.message}")
+        @futures_wallet_tui_mutex.synchronize do
+          @futures_wallet_tui = {
+            wallet_amount: nil,
+            wallet_currency: nil,
+            wallet_available: nil,
+            wallet_locked: nil,
+            wallet_cross_order_margin: nil,
+            wallet_cross_user_margin: nil,
+            error: e.message,
+            fetched_at: Time.now
+          }
         end
       end
     end

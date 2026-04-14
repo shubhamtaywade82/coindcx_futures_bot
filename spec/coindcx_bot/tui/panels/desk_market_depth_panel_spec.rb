@@ -22,7 +22,13 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
       recent_events: [],
       working_orders: [],
       ws_last_tick_ms_ago: 1,
-      strategy_last_by_pair: {}
+      strategy_last_by_pair: {},
+      regime: CoindcxBot::Regime::TuiState.disabled,
+      smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+      exchange_positions: [],
+      exchange_positions_error: nil,
+      exchange_positions_fetched_at: nil,
+      live_tui_metrics: {}
     )
   end
   let(:config) do
@@ -30,7 +36,12 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
       CoindcxBot::Config,
       risk: { max_daily_loss_inr: 1500 },
       strategy: { name: 'trend' },
-      resolved_max_daily_loss_inr: BigDecimal('1500')
+      inr_per_usdt: BigDecimal('83'),
+      resolved_max_daily_loss_inr: BigDecimal('1500'),
+      execution: { order_defaults: {} },
+      trading_mode_label: 'SWING',
+      scalper_mode?: false,
+      tui_exchange_positions_enabled?: false
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
@@ -45,7 +56,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
   end
 
   before do
-    allow(TTY::Screen).to receive(:width).and_return(100)
+    allow(engine).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+    allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(100)
     allow(engine).to receive(:ws_feed_stale?).with('B-SOL_USDT').and_return(false)
   end
 

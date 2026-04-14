@@ -6,17 +6,55 @@ require 'securerandom'
 module CoindcxBot
   module Execution
     class Coordinator
-      def initialize(broker:, journal:, config:, exposure_guard:, logger:)
+      def initialize(broker:, journal:, config:, exposure_guard:, logger:, fx:)
         @broker = broker
         @journal = journal
         @config = config
         @exposure = exposure_guard
         @logger = logger
+        @fx = fx
         @dry = config.dry_run?
       end
 
       def flatten_all(pairs, ltps: {})
         pairs.each { |pair| flatten_pair(pair, ltp: ltps[pair] || ltps[pair.to_s] || ltps[pair.to_sym]) }
+      end
+
+      def reconcile_paper_state!
+        return unless @broker.paper? && @broker.respond_to?(:open_positions)
+
+        journal_pos = @journal.open_positions.map { |r| [r[:pair].to_s, r] }.to_h
+        paper_pos = @broker.open_positions.map { |r| [r[:pair].to_s, r] }.to_h
+
+        # 1. In Paper but NOT in Journal -> Crash between place_order & journal_open
+        # Close paper position to sync with Journal.
+        paper_pos.each do |pair, p_row|
+          next if journal_pos.key?(pair)
+          @logger&.warn("[reconcile] Paper position found for #{pair} without Journal entry. Closing to sync.")
+          @broker.close_position(
+            pair: pair,
+            side: p_row[:side],
+            quantity: BigDecimal(p_row[:quantity].to_s),
+            ltp: p_row[:entry_price] ? BigDecimal(p_row[:entry_price].to_s) : BigDecimal('0'),
+            position_id: p_row[:id]
+          )
+        end
+
+        # 2. In Journal but NOT in Paper -> Journal thinks it's open, but exchange doesn't
+        # Close journal position so TUI/engine reflects reality.
+        journal_pos.each do |pair, j_row|
+          next if paper_pos.key?(pair)
+          @logger&.warn("[reconcile] Journal position found for #{pair} without Paper entry. Closing to sync.")
+          @journal.close_position(j_row[:id])
+          @journal.log_event(
+            'signal_close',
+            pair: pair,
+            reason: 'startup_reconciliation',
+            position_id: j_row[:id],
+            outcome: 'reconciled_orphan',
+            pnl_booked: false
+          )
+        end
       end
 
       def apply(signal, quantity: nil, entry_price: nil, exit_price: nil)
@@ -65,6 +103,11 @@ module CoindcxBot
 
         if @broker.paper?
           paper_flatten_pair(pair_s, ltp)
+        elsif live_orders_disabled?
+          @logger&.warn(
+            "[live] flatten skipped for #{pair_s}: order placement disabled (runtime.place_orders / PLACE_ORDER)"
+          )
+          return :ok
         else
           @broker.close_position(pair: pair_s, side: nil, quantity: 0, ltp: 0)
         end
@@ -145,6 +188,21 @@ module CoindcxBot
       end
 
       def open_via_live_broker(signal, quantity, entry_price, leverage)
+        if live_orders_disabled?
+          @journal.log_event(
+            'open_failed',
+            pair: signal.pair,
+            action: signal.action.to_s,
+            reason: signal.reason.to_s,
+            leverage: leverage,
+            detail: 'live_orders_disabled'
+          )
+          @logger&.warn(
+            "[live] order placement disabled (runtime.place_orders / PLACE_ORDER) — skipping open for #{signal.pair}"
+          )
+          return :failed
+        end
+
         result = @broker.place_order(rest_futures_open_order(signal, quantity, leverage))
         if result == :failed
           @journal.log_event(
@@ -172,6 +230,7 @@ module CoindcxBot
       end
 
       def journal_open(signal, quantity, entry_price)
+        smc_id = smc_setup_id_from_signal(signal)
         @journal.insert_position(
           pair: signal.pair,
           side: signal.side.to_s,
@@ -179,8 +238,18 @@ module CoindcxBot
           quantity: quantity,
           stop_price: signal.stop_price,
           trail_price: nil,
-          initial_stop_price: signal.stop_price
+          initial_stop_price: signal.stop_price,
+          smc_setup_id: smc_id
         )
+      end
+
+      def smc_setup_id_from_signal(signal)
+        m = signal.metadata
+        return nil unless m.is_a?(Hash)
+
+        v = m[:smc_setup_id] || m['smc_setup_id']
+        s = v&.to_s&.strip
+        s&.empty? ? nil : s
       end
 
       def close_position(signal, exit_price: nil)
@@ -250,6 +319,21 @@ module CoindcxBot
       end
 
       def close_via_live_broker(signal, close_id, exit_price)
+        if live_orders_disabled?
+          @journal.log_event(
+            'signal_close',
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            position_id: close_id,
+            outcome: 'live_orders_disabled',
+            pnl_booked: false
+          )
+          @logger&.warn(
+            "[live] exit disabled (runtime.place_orders / PLACE_ORDER) — skipping close for #{signal.pair} id=#{close_id}"
+          )
+          return :failed
+        end
+
         result = @broker.close_position(
           pair: signal.pair.to_s,
           side: nil,
@@ -314,6 +398,10 @@ module CoindcxBot
           order_type: 'market_order',
           client_order_id: "coindcx-bot-#{SecureRandom.uuid}"
         }
+      end
+
+      def live_orders_disabled?
+        !@broker.paper? && !@config.place_orders?
       end
 
       def metadata_symbols(signal)
@@ -392,7 +480,7 @@ module CoindcxBot
         end
 
         usdt = raw.nil? ? BigDecimal('0') : BigDecimal(raw.to_s)
-        inr = usdt * @config.inr_per_usdt
+        inr = usdt * @fx.inr_per_usdt
         fill_s = paper_close_fill_price_for_event(result)
         @journal.add_daily_pnl_inr(inr)
         @journal.log_event(

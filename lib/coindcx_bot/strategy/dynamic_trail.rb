@@ -96,12 +96,15 @@ module CoindcxBot
           volf = vol_factor(atr5, atr14)
           dist = trail_distance(atr14, tier_mult, vf, volf)
 
-          close_price = candles.last.close
+          # Use ltp (bar high for longs, passed as `high || ltp` by the caller) as the chandelier
+          # reference — conventional chandelier-exit semantics anchor the trail to the bar high,
+          # not close, to give the position room to breathe on wick-heavy candles.
+          ref_price = ltp
           candidate =
             if side == :long
-              candidate_long(candles, close_price, dist)
+              candidate_long(candles, ref_price, dist)
             else
-              candidate_short(candles, close_price, dist)
+              candidate_short(candles, ref_price, dist)
             end
 
           # Break-even gate: once at least 1R in profit, stop must be above entry
@@ -177,19 +180,19 @@ module CoindcxBot
           [raw, floor].max
         end
 
-        # Candidate stop for long: max of chandelier and recent swing low.
-        def candidate_long(candles, close_price, distance)
+        # Candidate stop for long: max of chandelier (anchored to bar high) and recent swing low.
+        def candidate_long(candles, ref_price, distance)
           lookback = cfg_i(:trail_swing_lookback, SWING_LOOKBACK)
           swing    = candles.last(lookback).map(&:low).min
-          chandelier = close_price - distance
+          chandelier = ref_price - distance
           [swing, chandelier].max
         end
 
-        # Candidate stop for short: min of chandelier and recent swing high.
-        def candidate_short(candles, close_price, distance)
+        # Candidate stop for short: min of chandelier (anchored to bar high/ltp) and recent swing high.
+        def candidate_short(candles, ref_price, distance)
           lookback = cfg_i(:trail_swing_lookback, SWING_LOOKBACK)
           swing    = candles.last(lookback).map(&:high).max
-          chandelier = close_price + distance
+          chandelier = ref_price + distance
           [swing, chandelier].min
         end
 

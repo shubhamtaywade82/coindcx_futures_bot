@@ -124,16 +124,18 @@ module CoindcxBot
           [user_id, p, *OPEN_STATUSES]
         )
 
-        results = []
+        tick_fills = []
+        position_exits = []
         rows.each do |row|
           wo = working_order_from_row(row)
           fill = @fill_engine.evaluate(wo, ltp: ltp, high: high, low: low)
           next unless fill
 
-          apply_fill!(user_id, row, fill, ltp: ltp)
-          results << { order_id: row['id'], fill: fill }
+          exit_row = apply_fill!(user_id, row, fill, ltp: ltp)
+          tick_fills << { order_id: row['id'], fill: fill }
+          position_exits << exit_row if exit_row
         end
-        results
+        { tick_fills: tick_fills, position_exits: position_exits }
       end
 
       def ensure_funds!(user_id, need)
@@ -259,7 +261,7 @@ module CoindcxBot
             ) VALUES (?, ?, ?, ?, ?, 'standard', 'open', ?, ?, ?, ?, ?, NULL, ?, 'cross', '0', ?, ?, ?)
           SQL
           [
-            user_id, o[:client_order_id], pair, side, ot,
+            user_id, o[:client_order_id], pair, o[:side], ot,
             price.to_s('F'),
             (o[:limit_price] ? o[:limit_price].to_s : nil),
             (o[:stop_price] ? o[:stop_price].to_s : nil),
@@ -287,6 +289,7 @@ module CoindcxBot
         )
       end
 
+      # Returns a position_exit row for the bot journal when this fill fully closes an exchange position.
       def apply_fill!(user_id, row, fill, ltp:)
         oid = row['id'].to_i
         qty = BigDecimal(row['remaining_quantity'].to_s)
@@ -302,9 +305,19 @@ module CoindcxBot
         entry_side = api_side_to_position_side(row['side'])
         closing = pos && pos['side'] != entry_side
 
+        position_exit = nil
         if closing
           ensure_funds!(user_id, fee)
-          apply_position_close!(user_id, pos, fill_qty, fill[:fill_price], fee, now)
+          close_meta = apply_position_close!(user_id, pos, fill_qty, fill[:fill_price], fee, now)
+          if close_meta[:fully_closed]
+            position_exit = {
+              pair: close_meta[:pair].to_s,
+              realized_pnl_usdt: close_meta[:realized_pnl_usdt],
+              fill_price: close_meta[:fill_price],
+              position_id: close_meta[:position_id],
+              trigger: fill[:trigger].to_s
+            }
+          end
         else
           @ledger.post_batch!(
             user_id: user_id,
@@ -342,6 +355,7 @@ module CoindcxBot
         )
 
         log_event(new_rem.zero? ? 'order.filled' : 'order.partially_filled', order_id: oid)
+        position_exit
       end
 
       def release_reserved_margin!(user_id, row, partial: BigDecimal('1'))
@@ -401,6 +415,8 @@ module CoindcxBot
         log_event('position.updated', position_id: pos['id'])
       end
 
+      # Returns metadata for simulation-tick API: incremental net USDT PnL (after fee) for this close leg,
+      # and whether the exchange position row is fully closed (journal sync only on full close).
       def apply_position_close!(user_id, pos, close_qty, exit_price, fee, now)
         pos_q = BigDecimal(pos['quantity'].to_s)
         close_q = [BigDecimal(close_qty.to_s), pos_q].min
@@ -430,7 +446,8 @@ module CoindcxBot
         new_real = prev_real + pnl
 
         remaining = pos_q - close_q
-        if remaining.zero?
+        fully_closed = remaining.zero?
+        if fully_closed
           @db.execute(
             <<~SQL,
               UPDATE pe_positions SET status = 'closed', quantity = '0', realized_pnl_session = ?, updated_at = ?
@@ -450,6 +467,14 @@ module CoindcxBot
           )
           log_event('position.updated', position_id: pos['id'])
         end
+
+        {
+          fully_closed: fully_closed,
+          position_id: pos['id'],
+          pair: pos['pair'].to_s,
+          realized_pnl_usdt: net,
+          fill_price: exit_price
+        }
       end
 
       def compute_pnl(side, entry, exit_p, qty)

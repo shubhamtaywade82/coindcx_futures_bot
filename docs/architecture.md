@@ -18,11 +18,19 @@ The "Orchestrator." It wires everything together.
 ### C. Strategy (`lib/coindcx_bot/strategy/`)
 The "Brain." Pure Ruby logic.
 - **TrendContinuation**: Analyzes price action (EMA, ATR, Volume) to find entries. It emits signals but never places orders itself.
+- **RegimeVolTier**: Wraps an inner strategy (`inner_strategy:`) and can block **new** entries when the HMM reports high volatility or uncertainty (`regime.strategy` keys).
 - **Benefit**: 100% testable without network access.
+
+### C2. Regime (`lib/coindcx_bot/regime/`)
+Quantitative + optional narrative layer (see [`hmm_regime_trading_spec.md`](hmm_regime_trading_spec.md)).
+- **Features** / **GaussianHmmDiag** / **HmmEngine**: causal feature matrix, diagonal Gaussian HMM (Baum–Welch training, BIC selection, forward-only filtering).
+- **HmmRuntime**: per-pair or `scope: global` lifecycle, persistence under `regime.hmm.persistence_path`, merges **`quant_display`** into `Engine#snapshot` `:regime` for the TUI.
+- **AiBrain** (`ollama-client`, optional `ollama_agent` retries): advisory JSON analyst; when `regime.ai.include_hmm_context` is true, the prompt includes HMM summaries. **Does not place orders.**
 
 ### D. Risk Management (`lib/coindcx_bot/risk/`)
 The "Gatekeeper."
 - **Manager**: Enforces the ₹50k capital limit and ₹1k daily loss cap. It intercepts signals and rejects them if they violate risk rules.
+- **RegimeSizer** (optional, `regime.risk.enabled`): scales entry quantity by daily drawdown vs `capital_inr` (halt / reduce tiers).
 - **Benefit**: Hard safety limits that can't be bypassed by strategy bugs.
 
 ### E. TUI (`lib/coindcx_bot/tui/`)

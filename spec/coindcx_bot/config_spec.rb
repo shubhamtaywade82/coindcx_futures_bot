@@ -3,11 +3,51 @@
 require 'bigdecimal'
 
 RSpec.describe CoindcxBot::Config do
-  it 'treats runtime.paper as dry_run (paper trading mode)' do
+  it 'reads risk.flatten_on_daily_loss_breach and pause_after_daily_loss_flatten' do
+    on = described_class.new(minimal_bot_config(risk: minimal_bot_config[:risk].merge(flatten_on_daily_loss_breach: true, pause_after_daily_loss_flatten: true)))
+    expect(on.flatten_on_daily_loss_breach?).to be(true)
+    expect(on.pause_after_daily_loss_flatten?).to be(true)
+  end
+
+  it 'reads smc_setup.enabled' do
+    off = described_class.new(minimal_bot_config)
+    expect(off.smc_setup_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(smc_setup: { enabled: true }))
+    expect(on.smc_setup_enabled?).to be(true)
+  end
+
+  it 'reads regime.ai.enabled as regime_ai_enabled? only when regime is on' do
+    off = described_class.new(minimal_bot_config(regime: { enabled: false, ai: { enabled: true } }))
+    expect(off.regime_ai_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(regime: { enabled: true, ai: { enabled: true } }))
+    expect(on.regime_ai_enabled?).to be(true)
+  end
+
+  it 'reads regime.enabled as regime_enabled?' do
+    on = described_class.new(minimal_bot_config(regime: { enabled: true }))
+    expect(on.regime_enabled?).to be(true)
+    off = described_class.new(minimal_bot_config(regime: { enabled: false }))
+    expect(off.regime_enabled?).to be(false)
+  end
+
+  it 'defaults tui exchange position margins to [USDT, INR] when margin_currency_short_name is blank' do
+    cfg = described_class.new(minimal_bot_config.merge(margin_currency_short_name: ''))
+    expect(cfg.tui_exchange_positions_margin_currencies).to eq(%w[USDT INR])
+  end
+
+  it 'uses runtime.tui_exchange_positions_margins when set' do
     cfg = described_class.new(
-      minimal_bot_config(runtime: { journal_path: '/tmp/x.sqlite3', paper: true, dry_run: false })
+      minimal_bot_config(runtime: { tui_exchange_positions_margins: %w[usdt inr] })
     )
-    expect(cfg.dry_run?).to be(true)
+    expect(cfg.tui_exchange_positions_margin_currencies).to eq(%w[USDT INR])
+  end
+
+  it 'rejects runtime.paper (use runtime.dry_run only)' do
+    bad = minimal_bot_config(runtime: { paper: true })
+    expect { described_class.new(bad) }.to raise_error(
+      CoindcxBot::Config::ConfigurationError,
+      /runtime\.paper/
+    )
   end
 
   it 'rejects per_trade_inr_min greater than max' do
@@ -63,11 +103,84 @@ RSpec.describe CoindcxBot::Config do
   it 'does not enable paper exchange when not in dry_run' do
     cfg = described_class.new(
       minimal_bot_config(
-        runtime: { dry_run: false, paper: false },
+        runtime: { dry_run: false },
         paper_exchange: { enabled: true, api_base_url: 'http://127.0.0.1:9292' }
       )
     )
     expect(cfg.paper_exchange_enabled?).to be(false)
+  end
+
+  it 'defaults place_orders? to true when live and runtime.place_orders is omitted' do
+    cfg = described_class.new(minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3' }))
+    expect(cfg.place_orders?).to be(true)
+  end
+
+  it 'is false when live and runtime.place_orders is false' do
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3', place_orders: false })
+    )
+    expect(cfg.place_orders?).to be(false)
+  end
+
+  it 'treats place_orders? as true in paper mode regardless of runtime.place_orders' do
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: true, journal_path: '/tmp/x.sqlite3', place_orders: false })
+    )
+    expect(cfg.place_orders?).to be(true)
+  end
+
+  it 'enables tui_exchange_mirror when live and place_orders is false' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        runtime: {
+          dry_run: false,
+          journal_path: '/tmp/x.sqlite3',
+          place_orders: false,
+          tui_exchange_positions: true
+        }
+      )
+    )
+    expect(cfg.tui_exchange_mirror?).to be(true)
+  end
+
+  it 'disables tui_exchange_mirror when live with place_orders unless runtime.tui_exchange_mirror is set' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        runtime: {
+          dry_run: false,
+          journal_path: '/tmp/x.sqlite3',
+          place_orders: true,
+          tui_exchange_positions: true
+        }
+      )
+    )
+    expect(cfg.tui_exchange_mirror?).to be(false)
+  end
+
+  it 'lets PLACE_ORDER env override YAML when live' do
+    prev = ENV['PLACE_ORDER']
+    ENV['PLACE_ORDER'] = '0'
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3', place_orders: true })
+    )
+    expect(cfg.place_orders?).to be(false)
+  ensure
+    prev.nil? ? ENV.delete('PLACE_ORDER') : ENV['PLACE_ORDER'] = prev
+  end
+
+  it 'fx_enabled? defaults true when fx section absent' do
+    cfg = described_class.new(minimal_bot_config)
+    expect(cfg.fx_enabled?).to be(true)
+  end
+
+  it 'fx_enabled? is false when fx.enabled is false' do
+    cfg = described_class.new(minimal_bot_config(fx: { enabled: false }))
+    expect(cfg.fx_enabled?).to be(false)
+  end
+
+  it 'fx_ttl_seconds defaults to 60 and clamps low values to 5' do
+    expect(described_class.new(minimal_bot_config).fx_ttl_seconds).to eq(60)
+    expect(described_class.new(minimal_bot_config(fx: { ttl_seconds: 2 })).fx_ttl_seconds).to eq(5)
   end
 
   it 'accepts up to Config::MAX_PAIRS instruments' do
@@ -87,5 +200,61 @@ RSpec.describe CoindcxBot::Config do
     expect do
       described_class.new(minimal_bot_config(pairs: too_many))
     end.to raise_error(CoindcxBot::Config::ConfigurationError, /got #{CoindcxBot::Config::MAX_PAIRS + 1}/)
+  end
+
+  describe 'scalper mode' do
+    around do |ex|
+      prev = ENV[CoindcxBot::ScalperProfile::ENV_KEY]
+      ENV.delete(CoindcxBot::ScalperProfile::ENV_KEY)
+      ex.run
+      if prev
+        ENV[CoindcxBot::ScalperProfile::ENV_KEY] = prev
+      else
+        ENV.delete(CoindcxBot::ScalperProfile::ENV_KEY)
+      end
+    end
+
+    it 'applies scalper defaults for missing keys when runtime.mode is scalper' do
+      base = minimal_bot_config
+      cfg = described_class.new(
+        base.merge(
+          runtime: base[:runtime].except(:refresh_candles_seconds).merge(mode: 'scalper'),
+          strategy: base[:strategy].except(:execution_resolution, :higher_timeframe_resolution)
+        )
+      )
+      expect(cfg.scalper_mode?).to be(true)
+      expect(cfg.trading_mode_label).to eq('SCALP')
+      expect(cfg.runtime[:refresh_candles_seconds]).to eq(12)
+      expect(cfg.strategy[:execution_resolution]).to eq('5m')
+      expect(cfg.strategy[:higher_timeframe_resolution]).to eq('15m')
+      expect(cfg.flatten_on_daily_loss_breach?).to be(true)
+      expect(cfg.pause_after_daily_loss_flatten?).to be(true)
+    end
+
+    it 'does not override explicit runtime or strategy keys when scalper' do
+      cfg = described_class.new(
+        minimal_bot_config(
+          runtime: minimal_bot_config[:runtime].merge(mode: 'scalper', refresh_candles_seconds: 30),
+          strategy: minimal_bot_config[:strategy].merge(execution_resolution: '1h')
+        )
+      )
+      expect(cfg.runtime[:refresh_candles_seconds]).to eq(30)
+      expect(cfg.strategy[:execution_resolution]).to eq('1h')
+      expect(cfg.strategy[:higher_timeframe_resolution]).to eq('1h')
+    end
+
+    it 'enables scalper via ENV and forces swing off via COINDCX_BOT_MODE=swing' do
+      ENV[CoindcxBot::ScalperProfile::ENV_KEY] = 'scalper'
+      expect(described_class.new(minimal_bot_config).scalper_mode?).to be(true)
+
+      ENV[CoindcxBot::ScalperProfile::ENV_KEY] = 'swing'
+      cfg = described_class.new(
+        minimal_bot_config(
+          runtime: minimal_bot_config[:runtime].merge(mode: 'scalper')
+        )
+      )
+      expect(cfg.scalper_mode?).to be(false)
+      expect(cfg.runtime[:refresh_candles_seconds]).to eq(60)
+    end
   end
 end

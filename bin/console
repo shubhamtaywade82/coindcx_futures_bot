@@ -1,0 +1,54 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'bundler/setup'
+require 'dotenv/load'
+require_relative '../lib/coindcx_bot'
+
+# Attempt to load AI Brains if present
+begin
+  require_relative '../lib/coindcx_bot/regime/ai_brain'
+  require_relative '../lib/coindcx_bot/smc_setup/planner_brain'
+  require_relative '../lib/coindcx_bot/smc_setup/gatekeeper_brain'
+rescue LoadError
+  # Might not have the dependencies natively installed locally
+end
+
+puts '==================================================='
+puts '🔥 CoinDCX Futures Bot Console'
+puts '==================================================='
+puts "API Keys loaded: #{ENV.key?('COINDCX_API_KEY') ? 'Yes' : 'No'}"
+puts "Ollama Agent Model: #{ENV['OLLAMA_AGENT_MODEL'] || 'Unknown/Default'}"
+puts "Ollama Base URL: #{ENV['OLLAMA_BASE_URL'] || 'http://localhost:11434'}"
+puts ''
+
+config = CoindcxBot::Config.load
+puts "Config loaded into `config` object. (Mode: #{config.trading_mode_label})"
+puts ''
+
+context =
+  begin
+    CoindcxBot::Console::RegimeAiContextLoader.fetch!(config: config)
+  rescue CoindcxBot::Console::RegimeAiContextLoader::Error => e
+    warn "[console] #{e.message}"
+    nil
+  end
+
+if context
+  pairs = context[:pairs].join(', ')
+  sizes = context[:candles_by_pair].transform_values(&:size)
+  puts "Live CoinDCX OHLCV loaded for #{pairs} (#{sizes.inspect}, exec #{context[:exec_resolution]})."
+else
+  puts 'No `context` yet — set COINDCX_API_KEY and COINDCX_API_SECRET, then:'
+  puts '  context = CoindcxBot::Console::RegimeAiContextLoader.fetch!(config: config)'
+  puts 'Optional: pass `positions:` or default loads open positions from the journal.'
+end
+
+puts 'Try running an AI analysis test using:'
+puts '  brain = CoindcxBot::Regime::AiBrain.new(config: config)'
+puts '  res = brain.analyze!(context)' if context
+puts '  puts res.inspect' if context
+puts 'See docs/ai_console_testing.md for SMC planner + raw prompt inspection.'
+puts '==================================================='
+
+binding.irb

@@ -1,9 +1,0 @@
-risk:
-  max_capital_inr: 50000
-  risk_per_trade_inr: 250
-  max_daily_loss_inr: 1000
-trading:
-  allowed_symbols:
-    - SOLUSDT.P
-    - ETHUSDT.P
-  leverage: 2
