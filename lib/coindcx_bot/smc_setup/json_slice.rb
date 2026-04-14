@@ -9,6 +9,8 @@ module CoindcxBot
 
       def parse_object(raw)
         s = raw.to_s.strip
+        # Strip <think>...</think> reasoning blocks that may contain intermediate { or }
+        s = s.gsub(%r{<think>.*?</think>}m, '')
         s = s.sub(/\A```(?:json)?\s*/i, '').sub(/```\s*\z/m, '')
         i = s.index('{')
         j = s.rindex('}')

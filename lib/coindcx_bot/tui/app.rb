@@ -7,10 +7,12 @@ require 'tty-logger'
 require 'tty-screen'
 
 require_relative 'engine_log_filter'
+require_relative 'theme'
 
 module CoindcxBot
   module Tui
     class App
+      include Theme
       RENDER_INTERVAL = 0.25
       KEYBOARD_POLL   = 1
       MIN_TUI_COLS    = 100
@@ -344,13 +346,7 @@ module CoindcxBot
         @render_loop&.request_redraw
       end
 
-      def bold(str)
-        "\e[1m#{str}\e[0m"
-      end
-
-      def dim(str)
-        "\e[2m#{str}\e[0m"
-      end
+      # bold() and dim() are provided by `include Theme`
 
       def stdin_interactive?
         return false if ENV['COINDCX_TUI_POLL_ONLY'] == '1'

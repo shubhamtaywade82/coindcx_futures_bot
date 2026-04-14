@@ -21,9 +21,8 @@ RSpec.describe CoindcxBot::Execution::PaperBroker, 'funding fees' do
         logger: nil,
         funding_rate_bps: 10
       )
-      # Force the interval to have elapsed
-      broker.instance_variable_set(:@last_funding_at,
-                                   Time.now - CoindcxBot::Execution::PaperBroker::FUNDING_INTERVAL_SECONDS - 1)
+      # Force the interval to have elapsed for this pair
+      broker.instance_variable_get(:@last_funding_at)['B-SOL_USDT'] = Time.now - CoindcxBot::Execution::PaperBroker::FUNDING_INTERVAL_SECONDS - 1
 
       broker.place_order(
         pair: 'B-SOL_USDT', side: 'long', quantity: BigDecimal('10'),

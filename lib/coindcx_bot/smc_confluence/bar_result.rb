@@ -6,6 +6,7 @@ module CoindcxBot
       attr_reader :bar_index,
                   :bos_bull, :bos_bear, :choch_bull, :choch_bear, :structure_bias,
                   :in_bull_ob, :in_bear_ob, :bull_ob_valid, :bear_ob_valid,
+                  :bull_ob_lo, :bear_ob_hi,
                   :recent_bull_sweep, :recent_bear_sweep,
                   :liq_sweep_bull, :liq_sweep_bear,
                   :ms_trend,
@@ -28,6 +29,8 @@ module CoindcxBot
         @in_bear_ob = attrs[:in_bear_ob]
         @bull_ob_valid = attrs[:bull_ob_valid]
         @bear_ob_valid = attrs[:bear_ob_valid]
+        @bull_ob_lo = attrs[:bull_ob_lo]
+        @bear_ob_hi = attrs[:bear_ob_hi]
         @recent_bull_sweep = attrs[:recent_bull_sweep]
         @recent_bear_sweep = attrs[:recent_bear_sweep]
         @liq_sweep_bull = attrs[:liq_sweep_bull]
@@ -74,6 +77,8 @@ module CoindcxBot
           'in_bear_ob' => in_bear_ob,
           'bull_ob_valid' => bull_ob_valid,
           'bear_ob_valid' => bear_ob_valid,
+          'bull_ob_lo' => bull_ob_lo,
+          'bear_ob_hi' => bear_ob_hi,
           'recent_bull_sweep' => recent_bull_sweep,
           'recent_bear_sweep' => recent_bear_sweep,
           'liq_sweep_bull' => liq_sweep_bull,

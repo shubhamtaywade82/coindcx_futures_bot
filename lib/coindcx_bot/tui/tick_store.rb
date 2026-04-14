@@ -5,9 +5,12 @@ module CoindcxBot
     class TickStore
       Tick = Data.define(:symbol, :ltp, :change_pct, :updated_at, :bid, :ask, :mark)
 
+      HISTORY_CAP = 40 # max price points kept per symbol for sparklines
+
       def initialize
         @mutex = Mutex.new
         @ticks = {}
+        @history = {} # symbol → Array<Float> (last HISTORY_CAP ltp values)
       end
 
       def update(symbol:, ltp:, change_pct: nil, updated_at: nil, bid: nil, ask: nil, mark: nil)
@@ -39,11 +42,26 @@ module CoindcxBot
             ask: ask_v,
             mark: mark_v
           )
+
+          # Append to price history for sparklines
+          hist = (@history[sym] ||= [])
+          hist << ltp.to_f
+          hist.shift while hist.size > HISTORY_CAP
         end
       end
 
       def snapshot
         @mutex.synchronize { @ticks.dup.freeze }
+      end
+
+      # Returns the last N LTP values for a symbol (oldest → newest).
+      def price_history(symbol, max: HISTORY_CAP)
+        @mutex.synchronize do
+          arr = @history[symbol.to_s]
+          return [] if arr.nil? || arr.empty?
+
+          arr.last(max).dup
+        end
       end
 
       def stale?(symbol, threshold_seconds: 5)

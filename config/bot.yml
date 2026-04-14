@@ -45,11 +45,11 @@ strategy:
   stop_distance_pct_for_sizing: 0.012
   # Fraction of price from entry; also closes on opposite SMC signal. Use 0 for TP-off (exit on flip only).
   take_profit_pct: 0.004
-  htf_alignment: false
+  htf_alignment: true
   # Looser CE = more signals (more chop). Tighten min_score / swings if over-trading.
   smc_confluence:
-    min_score: 1
-    sig_cooldown: 1
+    min_score: 3
+    sig_cooldown: 5
     smc_swing: 6
     ms_swing: 6
     tl_pivot_len: 6
@@ -64,7 +64,7 @@ strategy:
     # Optional OHLCV layers (each adds up to +1 on the matching side score when true):
     fvg_confluence: true
     premium_discount_lookback: 20
-    signal_mode: bos_relaxed
+    signal_mode: choch_strict
     # Flip on opposite SMC only when mark is green vs entry (omit min_gain = flip even when red).
     close_on_opposite_smc: true
     opposite_smc_min_gain_pct: 0
@@ -126,7 +126,7 @@ smc_setup:
   planner_enabled: true
   planner_interval_seconds: 120
   planner_reset_state: false
-  auto_execute: false
+  auto_execute: true
   disable_strategy_entries: false
   gatekeeper_enabled: false
   max_active_setups_per_pair: 2

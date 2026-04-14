@@ -5,12 +5,17 @@ require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
 require_relative '../term_width'
+require_relative '../theme'
+require_relative '../ansi_string'
 
 module CoindcxBot
   module Tui
     module Panels
       # Top status strip: execution-first summary (mode, engine, kill, feed, then FOCUS/LEV, latency last).
       class HeaderPanel
+        include Theme
+        include AnsiString
+
         def initialize(engine:, origin_row: 0, origin_col: 0, output: $stdout, focus_pair_proc: nil)
           @engine = engine
           @focus_pair_proc = focus_pair_proc
@@ -27,10 +32,10 @@ module CoindcxBot
 
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row)     << clear_line(line_mode_engine_kill_ws_lat_feed(snap, w))
-          buf << move(@row + 1) << clear_line(line_balance_net_real_unreal_dd_risk(snap, vm, w))
-          buf << move(@row + 2) << clear_line(line_pos_ord_err_last(snap, vm, w))
-          buf << move(@row + 3) << clear_line(dim('─' * [[w - 1, 40].max, 120].min))
+          buf << move(@row)     << clr(line_mode_engine_kill_ws_lat_feed(snap, w))
+          buf << move(@row + 1) << clr(line_balance_net_real_unreal_dd_risk(snap, vm, w))
+          buf << move(@row + 2) << clr(line_pos_ord_err_last(snap, vm, w))
+          buf << move(@row + 3) << clr(muted('─' * [[w - 1, 40].max, 120].min))
           buf << @cursor.restore
 
           @output.print buf.string
@@ -68,28 +73,31 @@ module CoindcxBot
             if @engine.engine_loop_crashed?
               on_red(' ENGINE: CRASHED ')
             elsif snap.running
-              green('ENGINE: RUN')
+              profit('ENGINE: RUN')
             else
-              red('ENGINE: STOP')
+              loss('ENGINE: STOP')
             end
           pause = snap.paused ? on_yellow(' PAUSED ') : nil
-          kill = snap.kill_switch ? on_red(' KILL: ON ') : dim('KILL: OFF')
+          kill = snap.kill_switch ? on_red(' KILL: ON ') : muted('KILL: OFF')
           ws =
             if snap.stale
-              red('WS: ○')
+              loss('WS: ○')
             else
-              green('WS: ●')
+              profit('WS: ●')
             end
           lat =
             if snap.ws_last_tick_ms_ago
-              dim('LAT: ') + cyan("#{snap.ws_last_tick_ms_ago}ms")
+              muted('LAT: ') + accent("#{snap.ws_last_tick_ms_ago}ms")
             else
-              dim('LAT: —')
+              muted('LAT: —')
             end
-          feed = snap.stale ? on_yellow(' FEED: STALE ') : green('FEED: OK')
+          feed = snap.stale ? on_yellow(' FEED: STALE ') : profit('FEED: OK')
           join_compact(
             w,
-            ["MODE: #{mode}", profile, regime_header_fragment(snap), eng, pause, kill, ws, feed, focus_fragment, leverage_fragment, lat].compact
+            [
+              "MODE: #{mode}", profile, regime_header_fragment(snap), eng, pause,
+              kill, ws, feed, focus_fragment, leverage_fragment, lat
+            ].compact
           )
         end
 
@@ -106,14 +114,14 @@ module CoindcxBot
                 funding_s,
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
-              ].compact.join(dim(' │ '))
+              ].compact.join(muted(' │ '))
             else
               [
-                dim('REAL USDT: —'),
-                dim('UNREAL USDT: —'),
+                muted('REAL USDT: —'),
+                muted('UNREAL USDT: —'),
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
-              ].join(dim(' │ '))
+              ].join(muted(' │ '))
             end
           join_compact(w, [bal, net, rest])
         end
@@ -131,17 +139,17 @@ module CoindcxBot
           elsif snap.capital_inr
             bold('BAL: ') + fmt_inr(snap.capital_inr)
           else
-            dim('BAL: —')
+            muted('BAL: —')
           end
         rescue ArgumentError, TypeError
-          dim('BAL: —')
+          muted('BAL: —')
         end
 
         def line_pos_ord_err_last(snap, vm, w)
           pos_n = Array(snap.positions).size
           ord_n = Array(snap.working_orders).size
-          err = snap.last_error ? red('1') : dim('0')
-          last = cyan(vm.last_event_type.to_s)
+          err = snap.last_error ? loss('1') : muted('0')
+          last = accent(vm.last_event_type.to_s)
           join_compact(
             w,
             [
@@ -154,42 +162,33 @@ module CoindcxBot
         end
 
         def fmt_dd(pct)
-          return dim('—') if pct.nil?
+          return muted('—') if pct.nil?
 
           v = pct.to_f
           s = format('%+.2f%%', v)
-          v.negative? ? red(s) : dim(s)
-        end
-
-        def color_risk_band(band)
-          case band
-          when 'CRIT' then on_red(" #{band} ")
-          when 'HIGH' then red(band)
-          when 'MED' then yellow(band)
-          else green(band)
-          end
+          v.negative? ? loss(s) : muted(s)
         end
 
         def colored_inr(v)
           bd = BigDecimal(v.to_s)
           s = fmt_inr(bd)
-          return green(s) if bd.positive?
-          return red(s) if bd.negative?
+          return profit(s) if bd.positive?
+          return loss(s) if bd.negative?
 
-          dim(s)
+          neutral(s)
         rescue ArgumentError, TypeError
-          dim('₹0.00')
+          muted('₹0.00')
         end
 
         def colored_num(v)
           bd = BigDecimal((v || 0).to_s)
           s = fmt_num(bd)
-          return green(s) if bd.positive?
-          return red(s) if bd.negative?
+          return profit(s) if bd.positive?
+          return loss(s) if bd.negative?
 
-          yellow(s)
+          warning(s)
         rescue ArgumentError, TypeError
-          dim('0.00')
+          muted('0.00')
         end
 
         def paper_metrics?(snap)
@@ -212,23 +211,23 @@ module CoindcxBot
           cfg = @engine.config
           return nil unless cfg.respond_to?(:scalper_mode?) && cfg.scalper_mode?
 
-          yellow('SCALP')
+          warning('SCALP')
         end
 
         def regime_header_fragment(snap)
           r = snap.regime
           return nil unless r.is_a?(Hash) && r[:enabled]
 
-          return green('REGIME·LIVE') if r[:active]
+          return profit('REGIME·LIVE') if r[:active]
 
-          cyan('REGIME·ON')
+          accent('REGIME·ON')
         end
 
         def focus_fragment
           p = @focus_pair_proc&.call
           return nil if p.nil? || p.to_s.strip.empty?
 
-          dim('FOCUS: ') + cyan(compact_instrument_label(p))
+          muted('FOCUS: ') + accent(compact_instrument_label(p))
         end
 
         def leverage_fragment
@@ -242,7 +241,7 @@ module CoindcxBot
           v = [a, b].compact.min
           return nil if v.nil? || v <= 0
 
-          dim('LEV: ') + yellow("#{v}x")
+          muted('LEV: ') + warning("#{v}x")
         end
 
         def optional_positive_int(raw)
@@ -258,23 +257,12 @@ module CoindcxBot
         end
 
         def join_compact(_w, parts)
-          parts.join(dim(' │ '))
+          parts.join(muted(' │ '))
         end
 
-        def clear_line(content)
+        def clr(content)
           "#{content}\e[K"
         end
-
-        def bold(str)           = "\e[1m#{str}\e[0m"
-        def bold_magenta(str)   = "\e[1;35m#{str}\e[0m"
-        def bold_red(str)       = "\e[1;31m#{str}\e[0m"
-        def cyan(str)           = "\e[36m#{str}\e[0m"
-        def green(str)          = "\e[32m#{str}\e[0m"
-        def yellow(str)         = "\e[33m#{str}\e[0m"
-        def red(str)            = "\e[31m#{str}\e[0m"
-        def dim(str)            = "\e[2m#{str}\e[0m"
-        def on_yellow(str)      = "\e[43;30m#{str}\e[0m"
-        def on_red(str)         = "\e[41;37m#{str}\e[0m"
       end
     end
   end

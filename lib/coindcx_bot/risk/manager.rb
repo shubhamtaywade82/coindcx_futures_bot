@@ -24,7 +24,36 @@ module CoindcxBot
         return [:reject, 'symbol_already_open'] if open_positions.any? { |p| p[:pair] == pair }
         return [:reject, 'max_positions'] unless @guard.within_concurrency?(open_positions.size)
 
+        cb = evaluate_circuit_breaker
+        return [:reject, cb] if cb
+
         [:ok, nil]
+      end
+
+      def evaluate_circuit_breaker
+        limit = @config.risk.fetch(:consecutive_loss_limit, 3)
+        return nil if limit <= 0
+
+        # Look at the most recent realized trades to see if they are a streak of losses
+        recent = @journal.recent_events(limit).select { |e| e['type'] == 'paper_realized' }
+        return nil if recent.size < limit
+
+        recent_losses = recent.take(limit).all? do |e|
+          payload = JSON.parse(e['payload'] || '{}')
+          pnl = BigDecimal(payload['pnl_usdt'] || '0')
+          pnl.negative?
+        end
+
+        return nil unless recent_losses
+
+        # Check if the streak happened recently (within the last hour)
+        last_loss = recent.first
+        return nil unless last_loss
+        
+        cooldown = @config.risk.fetch(:circuit_breaker_cooldown_minutes, 60)
+        return nil if Time.now.to_i - last_loss['ts'].to_i > (cooldown * 60)
+
+        "circuit_breaker_streak"
       end
 
       def size_quantity(entry_price:, stop_price:, side:)

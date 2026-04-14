@@ -275,6 +275,8 @@ module CoindcxBot
           in_bear_ob: in_bear_ob,
           bull_ob_valid: bull_ob_valid,
           bear_ob_valid: bear_ob_valid,
+          bull_ob_lo: s.bull_ob_lo,
+          bear_ob_hi: s.bear_ob_hi,
           recent_bull_sweep: recent_bull_sweep,
           recent_bear_sweep: recent_bear_sweep,
           liq_sweep_bull: liq_sweep_bull,

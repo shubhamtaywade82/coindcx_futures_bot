@@ -20,6 +20,43 @@ module CoindcxBot
         pairs.each { |pair| flatten_pair(pair, ltp: ltps[pair] || ltps[pair.to_s] || ltps[pair.to_sym]) }
       end
 
+      def reconcile_paper_state!
+        return unless @broker.paper? && @broker.respond_to?(:open_positions)
+
+        journal_pos = @journal.open_positions.map { |r| [r[:pair].to_s, r] }.to_h
+        paper_pos = @broker.open_positions.map { |r| [r[:pair].to_s, r] }.to_h
+
+        # 1. In Paper but NOT in Journal -> Crash between place_order & journal_open
+        # Close paper position to sync with Journal.
+        paper_pos.each do |pair, p_row|
+          next if journal_pos.key?(pair)
+          @logger&.warn("[reconcile] Paper position found for #{pair} without Journal entry. Closing to sync.")
+          @broker.close_position(
+            pair: pair,
+            side: p_row[:side],
+            quantity: BigDecimal(p_row[:quantity].to_s),
+            ltp: p_row[:entry_price] ? BigDecimal(p_row[:entry_price].to_s) : BigDecimal('0'),
+            position_id: p_row[:id]
+          )
+        end
+
+        # 2. In Journal but NOT in Paper -> Journal thinks it's open, but exchange doesn't
+        # Close journal position so TUI/engine reflects reality.
+        journal_pos.each do |pair, j_row|
+          next if paper_pos.key?(pair)
+          @logger&.warn("[reconcile] Journal position found for #{pair} without Paper entry. Closing to sync.")
+          @journal.close_position(j_row[:id])
+          @journal.log_event(
+            'signal_close',
+            pair: pair,
+            reason: 'startup_reconciliation',
+            position_id: j_row[:id],
+            outcome: 'reconciled_orphan',
+            pnl_booked: false
+          )
+        end
+      end
+
       def apply(signal, quantity: nil, entry_price: nil, exit_price: nil)
         case signal.action
         when :hold

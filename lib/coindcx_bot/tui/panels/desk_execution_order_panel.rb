@@ -3,12 +3,17 @@
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../theme'
+require_relative '../ansi_string'
 
 module CoindcxBot
   module Tui
     module Panels
       # Execution matrix (per-symbol rows) + order flow (working orders). Data from {DeskViewModel}.
       class DeskExecutionOrderPanel
+        include Theme
+        include AnsiString
+
         def initialize(engine:, tick_store:, symbols:, origin_row:, origin_col: 0, output: $stdout)
           @engine = engine
           @tick_store = tick_store
@@ -31,19 +36,19 @@ module CoindcxBot
           buf = StringIO.new
           buf << @cursor.save
           r = @row
-          buf << move(r) << clear_line(top_rule(left_w, right_w))
+          buf << move(r) << clr(top_rule(left_w, right_w))
           r += 1
-          buf << move(r) << clear_line(title_row(left_w, right_w))
+          buf << move(r) << clr(title_row(left_w, right_w))
           r += 1
-          buf << move(r) << clear_line(mid_rule(left_w, right_w))
+          buf << move(r) << clr(mid_rule(left_w, right_w))
           r += 1
-          buf << move(r) << clear_line(header_row(left_w, right_w))
+          buf << move(r) << clr(header_row(left_w, right_w))
           r += 1
           h.times do |i|
-            buf << move(r + i) << clear_line(data_row(exec_lines[i], ord_lines[i], left_w, right_w))
+            buf << move(r + i) << clr(data_row(exec_lines[i], ord_lines[i], left_w, right_w))
           end
           r += h
-          buf << move(r) << clear_line(bot_rule(left_w, right_w))
+          buf << move(r) << clr(bot_rule(left_w, right_w))
           buf << @cursor.restore
 
           @output.print buf.string
@@ -70,37 +75,31 @@ module CoindcxBot
         end
 
         def format_exec_cell(row)
-          return dim('·') if row.nil?
+          return muted('·') if row.nil?
 
           sym = truncate(row[:symbol].to_s, 11)
-          pnl = format_pnl_cell(row[:pnl_usdt], row[:pnl_label])
+          pnl = color_pnl(row[:pnl_usdt], row[:pnl_label])
           parts = [
-            yellow(sym),
-            dim(row[:side].to_s.ljust(5)),
-            dim(row[:qty].to_s.ljust(7)),
-            dim(row[:entry].to_s.ljust(7)),
-            cyan(row[:ltp].to_s.ljust(7)),
+            warning(sym),
+            muted(row[:side].to_s.ljust(5)),
+            muted(row[:qty].to_s.ljust(7)),
+            muted(row[:entry].to_s.ljust(7)),
+            accent(row[:ltp].to_s.ljust(7)),
             pnl
           ]
-          parts.join(dim(' '))
-        end
-
-        def format_pnl_cell(u, label)
-          return dim('—') if u.nil?
-
-          u.positive? ? green(label.to_s) : u.negative? ? red(label.to_s) : yellow(label.to_s)
+          parts.join(muted(' '))
         end
 
         def format_ord_cell(row)
-          return dim('·') if row.nil?
+          return muted('·') if row.nil?
 
-          lat = row[:latency] ? cyan("#{row[:latency]}ms") : dim('—')
+          lat = row[:latency] ? accent("#{row[:latency]}ms") : muted('—')
           [
-            yellow(row[:type_abbr].to_s.ljust(4)),
-            dim(row[:symbol].to_s.ljust(12)),
-            green(row[:status].to_s.ljust(7)),
+            warning(row[:type_abbr].to_s.ljust(4)),
+            muted(row[:symbol].to_s.ljust(12)),
+            profit(row[:status].to_s.ljust(7)),
             lat
-          ].join(dim(' '))
+          ].join(muted(' '))
         end
 
         def term_width
@@ -131,22 +130,22 @@ module CoindcxBot
         # Column spacing matches {#format_exec_cell} / {#format_ord_cell} (ANSI-safe pad/truncate on the row).
         def format_exec_header_line
           [
-            dim('SYMBOL'.ljust(11)),
-            dim('SIDE'.ljust(5)),
-            dim('QTY'.ljust(7)),
-            dim('ENTRY'.ljust(7)),
-            dim('LTP'.ljust(7)),
-            dim('PNL')
-          ].join(dim(' '))
+            muted('SYMBOL'.ljust(11)),
+            muted('SIDE'.ljust(5)),
+            muted('QTY'.ljust(7)),
+            muted('ENTRY'.ljust(7)),
+            muted('LTP'.ljust(7)),
+            muted('PNL')
+          ].join(muted(' '))
         end
 
         def format_ord_header_line
           [
-            dim('TYPE'.ljust(4)),
-            dim('PAIR'.ljust(12)),
-            dim('STATUS'.ljust(7)),
-            dim('LAT')
-          ].join(dim(' '))
+            muted('TYPE'.ljust(4)),
+            muted('PAIR'.ljust(12)),
+            muted('STATUS'.ljust(7)),
+            muted('LAT')
+          ].join(muted(' '))
         end
 
         def data_row(exec_row, ord_row, left_w, right_w)
@@ -157,39 +156,7 @@ module CoindcxBot
 
         # Pad/truncate using visible width (ANSI-aware). Ruby String#ljust counts escapes as columns.
         def pad_or_truncate_visible(str, w)
-          v = visible_len(str)
-          return "#{str}#{' ' * (w - v)}" if v < w
-          return str if v == w
-
-          "#{slice_visible(str, w - 1)}…"
-        end
-
-        def visible_len(s)
-          s.gsub(/\e\[[0-9;]*m/, '').length
-        end
-
-        def slice_visible(s, max_chars)
-          out = +''
-          n = 0
-          i = 0
-          while i < s.length && n < max_chars
-            if s[i] == "\e"
-              j = s.index('m', i)
-              if j
-                out << s[i..j]
-                i = j + 1
-                next
-              end
-            end
-            out << s[i]
-            n += 1
-            i += 1
-          end
-          out
-        end
-
-        def truncate(s, max)
-          s.length <= max ? s : "#{s[0, max - 1]}…"
+          pad_visible(str, w)
         end
 
         def top_rule(left_w, right_w)
@@ -215,16 +182,9 @@ module CoindcxBot
           t.ljust(w)
         end
 
-        def clear_line(content)
+        def clr(content)
           "#{content}\e[K"
         end
-
-        def bold(str)   = "\e[1m#{str}\e[0m"
-        def green(str)  = "\e[32m#{str}\e[0m"
-        def yellow(str) = "\e[33m#{str}\e[0m"
-        def red(str)    = "\e[31m#{str}\e[0m"
-        def cyan(str)   = "\e[36m#{str}\e[0m"
-        def dim(str)    = "\e[2m#{str}\e[0m"
       end
     end
   end

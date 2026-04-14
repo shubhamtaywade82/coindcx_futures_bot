@@ -63,6 +63,7 @@ module CoindcxBot
           logger: @logger,
           fx: @fx
         )
+        @coord.reconcile_paper_state!
 
         @candles_htf = {}
         @candles_exec = {}
@@ -87,6 +88,10 @@ module CoindcxBot
         @smc_setup_eval = nil
         @smc_setup_planner = nil
         @smc_setup_planner_state = { updated_at: nil, error: nil }
+        @smc_setup_planner_mutex = Mutex.new
+        @smc_setup_planner_running = false
+        @regime_ai_running = false
+        @regime_ai_thread_mutex = Mutex.new
         @smc_setup_mutexes = Hash.new { |h, k| h[k] = Mutex.new }
         init_smc_setup_stack! if @config.smc_setup_enabled?
 
@@ -227,6 +232,7 @@ module CoindcxBot
         merged.merge(Regime::AiBrain.overlay_from_state(snap))
       end
 
+      # Launches the regime AI analysis in a background thread to avoid blocking tick_cycle.
       def refresh_regime_ai_if_due
         return unless @config.regime_ai_enabled?
 
@@ -236,16 +242,35 @@ module CoindcxBot
           return if last && (now - last) < @config.regime_ai_min_interval_seconds
         end
 
+        already_running = @regime_ai_thread_mutex.synchronize do
+          return if @regime_ai_running
+          @regime_ai_running = true
+          false
+        end
+        return if already_running
+
         ctx = build_regime_ai_context
         if @config.regime_ai_include_hmm_context? && @hmm_runtime
           ctx[:hmm] = @hmm_runtime.hmm_context_for_ai
         end
-        return if ctx[:pairs].empty?
+        if ctx[:pairs].empty?
+          @regime_ai_thread_mutex.synchronize { @regime_ai_running = false }
+          return
+        end
 
+        Thread.new do
+          Thread.current.name = 'regime_ai'
+          run_regime_ai_sync(ctx, now)
+        ensure
+          @regime_ai_thread_mutex.synchronize { @regime_ai_running = false }
+        end
+      end
+
+      def run_regime_ai_sync(ctx, started_at)
         brain = (@regime_ai_brain ||= Regime::AiBrain.new(config: @config, logger: @logger))
         res = brain.analyze!(ctx)
         @regime_ai_mutex.synchronize do
-          @regime_ai_state[:updated_at] = now
+          @regime_ai_state[:updated_at] = started_at
           if res.ok && res.payload
             @regime_ai_state[:payload] = res.payload
             @regime_ai_state[:error] = nil
@@ -340,6 +365,9 @@ module CoindcxBot
         end
       end
 
+      # Launches the SMC planner in a background thread to avoid blocking tick_cycle.
+      # The planner calls Ollama (timeout up to 90s) — running it inline would stall
+      # SL/TP fills and signal generation for the entire duration.
       def refresh_smc_setup_planner_if_due
         return unless @config.smc_setup_planner_enabled?
         return unless @smc_setup_store
@@ -348,12 +376,31 @@ module CoindcxBot
         last = @smc_setup_planner_state[:updated_at]
         return if last && (now - last) < @config.smc_setup_planner_interval_seconds
 
-        ctx = build_smc_planner_context
-        return if ctx[:pairs].empty?
+        already_running = @smc_setup_planner_mutex.synchronize do
+          return if @smc_setup_planner_running
+          @smc_setup_planner_running = true
+          false
+        end
+        return if already_running
 
+        ctx = build_smc_planner_context
+        if ctx[:pairs].empty?
+          @smc_setup_planner_mutex.synchronize { @smc_setup_planner_running = false }
+          return
+        end
+
+        Thread.new do
+          Thread.current.name = 'smc_planner'
+          run_smc_planner_sync(ctx, now)
+        ensure
+          @smc_setup_planner_mutex.synchronize { @smc_setup_planner_running = false }
+        end
+      end
+
+      def run_smc_planner_sync(ctx, started_at)
         brain = (@smc_setup_planner ||= SmcSetup::PlannerBrain.new(config: @config, logger: @logger))
         res = brain.plan!(ctx)
-        @smc_setup_planner_state[:updated_at] = now
+        @smc_setup_planner_state[:updated_at] = started_at
         if res.ok && res.payload
           begin
             @smc_setup_store.upsert_from_hash!(

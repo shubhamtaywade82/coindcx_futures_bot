@@ -3,12 +3,17 @@
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../theme'
+require_relative '../ansi_string'
 
 module CoindcxBot
   module Tui
     module Panels
       # L1-style quote strip: bid/ask/spread from {TickStore} (REST RT + instrument enrich); em dash when API omits book.
       class DeskMarketDepthPanel
+        include Theme
+        include AnsiString
+
         # Plain header only — data rows use ANSI-aware columns (sprintf breaks width with escapes).
         HEADER = '  %-14s %8s %8s %8s %8s %7s  %-8s'
 
@@ -30,9 +35,9 @@ module CoindcxBot
 
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row) << bold('MARKET DEPTH (L1)') << dim("  #{'─' * [w - 22, 8].max}")
+          buf << move(@row) << bold('MARKET DEPTH (L1)') << muted("  #{'─' * [w - 22, 8].max}")
           buf << move(@row + 1) << bold(format(HEADER, 'SYMBOL', 'BID', 'ASK', 'SPREAD', 'Δ%', 'AGE', 'STATE'))
-          buf << move(@row + 2) << dim('─' * [w - 1, 40].max)
+          buf << move(@row + 2) << muted('─' * [w - 1, 40].max)
 
           @symbols.each_with_index do |_sym, idx|
             buf << move(@row + 3 + idx) << format_depth_row(rows[idx])
@@ -52,21 +57,21 @@ module CoindcxBot
         def format_depth_row(d)
           if d.nil?
             return depth_row_line(
-              dim('—'), dim('—'), dim('—'), dim('—'), dim('—'), dim('—'), dim('—')
+              muted('—'), muted('—'), muted('—'), muted('—'), muted('—'), muted('—'), muted('—')
             )
           end
 
           sym = d[:symbol].to_s
           sym = "#{sym[0, 12]}…" if sym.length > 13
           chg = d[:chg_pct].to_s
-          chg_col = chg.start_with?('-') ? red(chg) : chg == '—' ? dim(chg) : green(chg)
+          chg_col = chg.start_with?('-') ? loss(chg) : chg == '—' ? muted(chg) : profit(chg)
           depth_row_line(
-            dim(sym),
-            dim(d[:bid].to_s),
-            dim(d[:ask].to_s),
-            dim(d[:spread].to_s),
+            muted(sym),
+            muted(d[:bid].to_s),
+            muted(d[:ask].to_s),
+            muted(d[:spread].to_s),
             chg_col,
-            dim(d[:age].to_s),
+            muted(d[:age].to_s),
             colorize_state(d[:state].to_s)
           )
         end
@@ -93,47 +98,17 @@ module CoindcxBot
           align == :left ? "#{str}#{spaces}" : "#{spaces}#{str}"
         end
 
-        def visible_len(s)
-          s.gsub(/\e\[[0-9;]*m/, '').length
-        end
-
-        def slice_visible(s, max_chars)
-          out = +''
-          n = 0
-          i = 0
-          while i < s.length && n < max_chars
-            if s[i] == "\e"
-              j = s.index('m', i)
-              if j
-                out << s[i..j]
-                i = j + 1
-                next
-              end
-            end
-            out << s[i]
-            n += 1
-            i += 1
-          end
-          out
-        end
-
         def colorize_state(state)
           case state
-          when 'LIVE' then green(state)
-          when 'LAG' then yellow(state)
-          else red(state)
+          when 'LIVE' then profit(state)
+          when 'LAG' then warning(state)
+          else loss(state)
           end
         end
 
         def move(row)
           @cursor.move_to(@col, row)
         end
-
-        def bold(str)   = "\e[1m#{str}\e[0m"
-        def green(str)  = "\e[32m#{str}\e[0m"
-        def yellow(str) = "\e[33m#{str}\e[0m"
-        def red(str)    = "\e[31m#{str}\e[0m"
-        def dim(str)    = "\e[2m#{str}\e[0m"
       end
     end
   end

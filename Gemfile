@@ -10,8 +10,8 @@ ruby '>= 3.2'
 gem 'coindcx-client', path: '../coindcx-client'
 
 # Regime AI (local Ollama): trading analyst via ollama-client; optional retries via ollama_agent.
-gem 'ollama-client', path: '../../../ai-workspace/ollama-client'
-gem 'ollama_agent', path: '../../../ai-workspace/ollama_agent'
+gem 'ollama-client'
+gem 'ollama_agent'
 
 gem 'bigdecimal'
 # ~> 2.8 aligns with optional ollama_agent (dev); Dotenv.load usage is unchanged from 3.x

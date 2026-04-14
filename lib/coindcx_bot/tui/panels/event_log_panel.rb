@@ -3,11 +3,14 @@
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../theme'
 
 module CoindcxBot
   module Tui
     module Panels
       class EventLogPanel
+        include Theme
+
         def initialize(engine:, origin_row:, max_lines: 6, origin_col: 0, output: $stdout)
           @engine = engine
           @row = origin_row
@@ -26,16 +29,16 @@ module CoindcxBot
           buf = StringIO.new
           buf << @cursor.save
           rule = '─' * [[w - 6, 12].max, 0].max
-          buf << move(@row) << clear_line("#{bold('EVENT LOG (FIFO)')} #{dim(rule)}")
+          buf << move(@row) << clr("#{bold('EVENT LOG (FIFO)')} #{muted(rule)}")
 
           @max_lines.times do |i|
             line =
               if i < events.size
                 format_event(events[i], w)
               else
-                dim('·')
+                muted('·')
               end
-            buf << move(@row + 1 + i) << clear_line(dim('│ ') + line)
+            buf << move(@row + 1 + i) << clr(muted('│ ') + line)
           end
 
           buf << @cursor.restore
@@ -78,12 +81,9 @@ module CoindcxBot
           bits.join(' ')
         end
 
-        def clear_line(content)
+        def clr(content)
           "#{content}\e[K"
         end
-
-        def bold(str) = "\e[1m#{str}\e[0m"
-        def dim(str)   = "\e[2m#{str}\e[0m"
       end
     end
   end
