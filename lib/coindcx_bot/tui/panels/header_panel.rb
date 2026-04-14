@@ -54,7 +54,8 @@ module CoindcxBot
             tick_ticks: {},
             symbols: Array(snap.pairs),
             ws_stale_fn: ->(sym) { @engine.ws_feed_stale?(sym) },
-            config: @engine.config
+            config: @engine.config,
+            inr_per_usdt: @engine.config.inr_per_usdt
           )
         end
 
@@ -104,7 +105,8 @@ module CoindcxBot
 
         def line_balance_net_real_unreal_dd_risk(snap, vm, w)
           bal = balance_line(snap)
-          net = bold('NET: ') + colored_inr(snap.daily_pnl)
+          net_inr = net_pnl_inr_for_header(snap, vm)
+          net = bold('NET: ') + colored_inr(net_inr)
           rest =
             if paper_metrics?(snap)
               pm = snap.paper_metrics
@@ -134,6 +136,12 @@ module CoindcxBot
               ].join(muted(' │ '))
             end
           join_compact(w, [bal, net, rest])
+        end
+
+        # Desk-wide daily PnL: **journal today (INR)**; live exchange mirror adds **open uPnL (USDT × FX)** so NET
+        # matches DD / UTIL (+DeskViewModel#daily_pnl_inr_for_desk+).
+        def net_pnl_inr_for_header(_snap, vm)
+          vm.daily_pnl_inr_for_desk
         end
 
         # Paper: config capital (INR) + (realized + unrealized) USDT × inr_per_usdt (mark-to-market equity).

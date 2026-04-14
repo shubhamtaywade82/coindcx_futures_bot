@@ -15,16 +15,18 @@ module CoindcxBot
           tick_ticks: tick_store.snapshot,
           symbols: Array(symbols).map(&:to_s),
           ws_stale_fn: ->(sym) { engine.ws_feed_stale?(sym) },
-          config: engine.config
+          config: engine.config,
+          inr_per_usdt: engine.config.inr_per_usdt
         )
       end
 
-      def initialize(snapshot:, tick_ticks:, symbols:, ws_stale_fn:, config:)
+      def initialize(snapshot:, tick_ticks:, symbols:, ws_stale_fn:, config:, inr_per_usdt: nil)
         @snap = snapshot
         @tick_ticks = tick_ticks
         @symbols = symbols
         @ws_stale_fn = ws_stale_fn
         @config = config
+        @inr_per_usdt = inr_per_usdt || @config.inr_per_usdt
       end
 
       def inner_height
@@ -53,12 +55,16 @@ module CoindcxBot
         ev[:type].to_s.upcase
       end
 
+      def daily_pnl_inr_for_desk
+        CoindcxBot::Tui::LiveAccountMirror.combined_daily_pnl_inr_for_header(@snap, @inr_per_usdt)
+      end
+
       def risk_band
         kill = @snap.kill_switch
         return 'CRIT' if kill
 
         max_loss = daily_loss_limit_inr
-        pnl = @snap.daily_pnl
+        pnl = daily_pnl_inr_for_desk
         return 'LOW' if max_loss.nil? || max_loss <= 0
 
         loss = pnl.negative? ? -pnl : BigDecimal('0')
@@ -73,14 +79,14 @@ module CoindcxBot
         cap = @snap.capital_inr
         return nil if cap.nil? || cap.zero?
 
-        ((@snap.daily_pnl / cap) * 100).round(2)
+        ((daily_pnl_inr_for_desk / cap) * 100).round(2)
       end
 
       def loss_utilization_pct
         max_loss = daily_loss_limit_inr
         return nil if max_loss.nil? || max_loss <= 0
 
-        pnl = @snap.daily_pnl
+        pnl = daily_pnl_inr_for_desk
         loss = pnl.negative? ? -pnl : BigDecimal('0')
         # Float for stable "%" display (BigDecimal#to_s can use exponent form for some values).
         ((loss / max_loss) * 100).round(1).to_f

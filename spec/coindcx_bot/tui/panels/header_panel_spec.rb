@@ -212,6 +212,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         # Would be wrong if 1541.08 were treated as USDT at 83 INR/USDT (~127_909)
         expect(output.string).not_to include('127909')
       end
+
+      it 'shows NET as journal today plus open unrealized USDT converted at inr_per_usdt' do
+        panel.render
+        # -10095.40 + (-41.82 * 83) = -13566.46
+        expect(output.string).to include('13566.46')
+      end
     end
 
     context 'with paper metrics' do

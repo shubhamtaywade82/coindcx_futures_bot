@@ -93,6 +93,69 @@ RSpec.describe CoindcxBot::Tui::LiveAccountMirror do
     end
   end
 
+  describe '.combined_daily_pnl_inr_for_header' do
+    let(:snap_class) { CoindcxBot::Core::Engine::Snapshot }
+
+    it 'adds open unrealized USDT at FX to journal daily INR when live mirror metrics are present' do
+      snap = snap_class.new(
+        pairs: %w[B-SOL_USDT],
+        ticks: {},
+        positions: [],
+        paused: false,
+        kill_switch: false,
+        stale: false,
+        last_error: nil,
+        daily_pnl: BigDecimal('-10_000'),
+        running: true,
+        dry_run: false,
+        stale_tick_seconds: 45,
+        paper_metrics: {},
+        capital_inr: BigDecimal('50_000'),
+        recent_events: [],
+        working_orders: [],
+        ws_last_tick_ms_ago: 5,
+        strategy_last_by_pair: {},
+        regime: CoindcxBot::Regime::TuiState.disabled,
+        smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+        exchange_positions: [],
+        exchange_positions_error: nil,
+        exchange_positions_fetched_at: nil,
+        live_tui_metrics: { unrealized_usdt: BigDecimal('-2') }
+      )
+      combined = described_class.combined_daily_pnl_inr_for_header(snap, BigDecimal('83'))
+      expect(combined).to eq(BigDecimal('-10_166'))
+    end
+
+    it 'returns journal daily only when dry_run' do
+      snap = snap_class.new(
+        pairs: %w[B-SOL_USDT],
+        ticks: {},
+        positions: [],
+        paused: false,
+        kill_switch: false,
+        stale: false,
+        last_error: nil,
+        daily_pnl: BigDecimal('-100'),
+        running: true,
+        dry_run: true,
+        stale_tick_seconds: 45,
+        paper_metrics: {},
+        capital_inr: BigDecimal('50_000'),
+        recent_events: [],
+        working_orders: [],
+        ws_last_tick_ms_ago: 5,
+        strategy_last_by_pair: {},
+        regime: CoindcxBot::Regime::TuiState.disabled,
+        smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+        exchange_positions: [],
+        exchange_positions_error: nil,
+        exchange_positions_fetched_at: nil,
+        live_tui_metrics: { unrealized_usdt: BigDecimal('-99') }
+      )
+      expect(described_class.combined_daily_pnl_inr_for_header(snap, BigDecimal('83'))).to eq(BigDecimal('-100'))
+    end
+  end
+
   describe '.sum_unrealized_usdt' do
     it 'marks to market when pnl is absent but avg_price and LTP exist' do
       rows = [

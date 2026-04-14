@@ -36,6 +36,7 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskMarketDepthPanel do
       CoindcxBot::Config,
       risk: { max_daily_loss_inr: 1500 },
       strategy: { name: 'trend' },
+      inr_per_usdt: BigDecimal('83'),
       resolved_max_daily_loss_inr: BigDecimal('1500'),
       execution: { order_defaults: {} },
       trading_mode_label: 'SWING',

@@ -8,6 +8,7 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       CoindcxBot::Config,
       risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
       strategy: { name: 'supertrend_profit' },
+      inr_per_usdt: BigDecimal('83'),
       resolved_max_daily_loss_inr: BigDecimal('1500'),
       execution: { order_defaults: { leverage: 5 } },
       trading_mode_label: 'SWING',
@@ -130,6 +131,7 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
           CoindcxBot::Config,
           risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
           strategy: { name: 'smc_confluence' },
+          inr_per_usdt: BigDecimal('83'),
           resolved_max_daily_loss_inr: BigDecimal('1500'),
           execution: { order_defaults: { leverage: 5 } },
           trading_mode_label: 'SCALP',
@@ -214,6 +216,18 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       it 'counts open positions from the mirrored list' do
         expect(vm.display_open_positions_count).to eq(1)
       end
+
+      it 'uses journal plus unrealized for desk daily PnL when live mirror metrics exist' do
+        vm_mirror = described_class.new(
+          snapshot: snapshot,
+          tick_ticks: tick_ticks,
+          symbols: %w[B-ETH_USDT],
+          ws_stale_fn: ->(_) { false },
+          config: config,
+          inr_per_usdt: BigDecimal('83')
+        )
+        expect(vm_mirror.daily_pnl_inr_for_desk).to eq(BigDecimal('-1037.5'))
+      end
     end
   end
 
@@ -227,6 +241,7 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         CoindcxBot::Config,
         risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
         strategy: { name: 'supertrend_profit' },
+        inr_per_usdt: BigDecimal('83'),
         resolved_max_daily_loss_inr: BigDecimal('1500'),
         execution: { order_defaults: { margin_currency_short_name: 'USDT' } },
         trading_mode_label: 'SWING',
@@ -259,6 +274,7 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         CoindcxBot::Config,
         risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
         strategy: { name: 'supertrend_profit' },
+        inr_per_usdt: BigDecimal('83'),
         resolved_max_daily_loss_inr: BigDecimal('1500'),
         execution: { order_defaults: { leverage: 5 } },
         trading_mode_label: 'SWING',
@@ -293,6 +309,7 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         CoindcxBot::Config,
         risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
         strategy: { name: 'supertrend_profit' },
+        inr_per_usdt: BigDecimal('83'),
         resolved_max_daily_loss_inr: BigDecimal('1500'),
         execution: { order_defaults: { leverage: 5 } },
         trading_mode_label: 'SWING',

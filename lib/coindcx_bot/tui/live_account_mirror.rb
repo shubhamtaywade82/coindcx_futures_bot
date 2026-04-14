@@ -73,6 +73,22 @@ module CoindcxBot
         Array(rows).count { |r| row_open?(r) }
       end
 
+      # Live exchange mirror: **journal today (realized INR)** plus **open uPnL** (USDT × FX) for header NET / DD.
+      # Journal alone misses open MTM; UNREAL USDT stays as the raw contract-currency leg.
+      def combined_daily_pnl_inr_for_header(snap, inr_per_usdt)
+        base = snap.daily_pnl
+        return base if snap.dry_run
+
+        m = snap.live_tui_metrics
+        return base unless m.is_a?(Hash) && m.key?(:unrealized_usdt)
+
+        unreal = BigDecimal((m[:unrealized_usdt] || 0).to_s)
+        fx = BigDecimal(inr_per_usdt.to_s)
+        base + (unreal * fx)
+      rescue ArgumentError, TypeError
+        base
+      end
+
       def open_on_configured_pairs(rows, configured_pairs)
         want = configured_pairs.map { |p| futures_pair_key(p) }.to_set
         Array(rows).count do |r|
