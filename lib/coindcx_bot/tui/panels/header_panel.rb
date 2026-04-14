@@ -55,7 +55,7 @@ module CoindcxBot
             symbols: Array(snap.pairs),
             ws_stale_fn: ->(sym) { @engine.ws_feed_stale?(sym) },
             config: @engine.config,
-            inr_per_usdt: @engine.config.inr_per_usdt
+            inr_per_usdt: @engine.inr_per_usdt
           )
         end
 
@@ -120,9 +120,10 @@ module CoindcxBot
               ].compact.join(muted(' │ '))
             elsif live_tui_metrics?(snap)
               m = snap.live_tui_metrics
+              real = m[:realized_usdt] || BigDecimal('0')
               unreal = m[:unrealized_usdt] || BigDecimal('0')
               [
-                muted('REAL USDT: —'),
+                "#{bold('REAL USDT: ')}#{fmt_num(real)}",
                 "#{bold('UNREAL USDT: ')}#{colored_num(unreal)}",
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
@@ -138,8 +139,7 @@ module CoindcxBot
           join_compact(w, [bal, net, rest])
         end
 
-        # Desk-wide daily PnL: **journal today (INR)**; live exchange mirror adds **open uPnL (USDT × FX)** so NET
-        # matches DD / UTIL (+DeskViewModel#daily_pnl_inr_for_desk+).
+        # Desk-wide daily PnL: live mirror uses **exchange REAL+UNREAL (USDT) × FX** (+DeskViewModel#daily_pnl_inr_for_desk+).
         def net_pnl_inr_for_header(_snap, vm)
           vm.daily_pnl_inr_for_desk
         end
@@ -247,6 +247,7 @@ module CoindcxBot
             m.key?(:wallet_cross_order_margin) ||
             m.key?(:wallet_cross_user_margin) ||
             m.key?(:balance_usdt) ||
+            m.key?(:realized_usdt) ||
             m.key?(:unrealized_usdt) ||
             m.key?(:open_positions_count)
         end

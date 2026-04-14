@@ -1127,6 +1127,7 @@ module CoindcxBot
 
         w = @futures_wallet_tui_mutex.synchronize { @futures_wallet_tui.dup }
         unreal = CoindcxBot::Tui::LiveAccountMirror.sum_unrealized_usdt(exchange_rows, ticks_hash)
+        realized = CoindcxBot::Tui::LiveAccountMirror.sum_realized_usdt(exchange_rows)
         open_n = CoindcxBot::Tui::LiveAccountMirror.open_on_configured_pairs(exchange_rows, @config.pairs)
         h = {
           wallet_amount: w[:wallet_amount],
@@ -1135,6 +1136,7 @@ module CoindcxBot
           wallet_locked: w[:wallet_locked],
           wallet_cross_order_margin: w[:wallet_cross_order_margin],
           wallet_cross_user_margin: w[:wallet_cross_user_margin],
+          realized_usdt: realized,
           unrealized_usdt: unreal,
           open_positions_count: open_n,
           wallet_error: w[:error]

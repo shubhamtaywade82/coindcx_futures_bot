@@ -199,6 +199,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           live_tui_metrics: {
             wallet_amount: BigDecimal('1541.08'),
             wallet_currency: 'INR',
+            realized_usdt: BigDecimal('0'),
             unrealized_usdt: BigDecimal('-41.82'),
             open_positions_count: 1
           }
@@ -213,10 +214,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         expect(output.string).not_to include('127909')
       end
 
-      it 'shows NET as journal today plus open unrealized USDT converted at inr_per_usdt' do
+      it 'shows NET as exchange REAL+UNREAL USDT at inr_per_usdt (not journal)' do
         panel.render
-        # -10095.40 + (-41.82 * 83) = -13566.46
-        expect(output.string).to include('13566.46')
+        # (0 + (-41.82)) * 83 = -3471.06
+        expect(output.string).to include('3471.06')
+        expect(output.string).to include('REAL USDT:')
+        expect(output.string).to include('0.00')
       end
     end
 

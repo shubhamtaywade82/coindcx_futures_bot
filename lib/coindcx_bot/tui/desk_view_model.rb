@@ -16,7 +16,8 @@ module CoindcxBot
           symbols: Array(symbols).map(&:to_s),
           ws_stale_fn: ->(sym) { engine.ws_feed_stale?(sym) },
           config: engine.config,
-          inr_per_usdt: engine.config.inr_per_usdt
+          # Same as +Engine#inr_per_usdt+: CoinDCX conversions when +fx.enabled+, else +config.inr_per_usdt+.
+          inr_per_usdt: engine.inr_per_usdt
         )
       end
 

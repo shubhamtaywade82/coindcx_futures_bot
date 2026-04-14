@@ -48,6 +48,28 @@ module CoindcxBot
         nil
       end
 
+      def realized_usdt_from_row(row)
+        r = row.is_a?(Hash) ? row.transform_keys(&:to_sym) : {}
+        raw = r[:realized_pnl_session] || r[:realised_pnl_session] || r[:session_realized_pnl] ||
+              r[:realized_pnl] || r[:realizedPnl] || r[:total_realized_pnl] ||
+              r['realized_pnl_session'] || r['realised_pnl_session'] || r['session_realized_pnl'] ||
+              r['realized_pnl'] || r['realizedPnl'] || r['total_realized_pnl']
+        return BigDecimal('0') if raw.nil? || raw.to_s.strip.empty?
+
+        BigDecimal(raw.to_s)
+      rescue ArgumentError, TypeError
+        BigDecimal('0')
+      end
+
+      # Session / row **realized** in USDT (exchange field names vary). Open rows only — same scope as uPnL sums.
+      def sum_realized_usdt(rows)
+        Array(rows).sum(BigDecimal('0')) do |r|
+          next BigDecimal('0') unless row_open?(r)
+
+          realized_usdt_from_row(r)
+        end
+      end
+
       # Sums exchange-reported uPnL when present; otherwise marks each open row to market using +ticks_by_pair+
       # (+{ "B-SOL_USDT" => { price: bd } }+ / engine tick shape).
       def sum_unrealized_usdt(rows, ticks_by_pair = nil)
@@ -73,8 +95,10 @@ module CoindcxBot
         Array(rows).count { |r| row_open?(r) }
       end
 
-      # Live exchange mirror: **journal today (realized INR)** plus **open uPnL** (USDT × FX) for header NET / DD.
-      # Journal alone misses open MTM; UNREAL USDT stays as the raw contract-currency leg.
+      # Live exchange mirror: **NET / DD** use **exchange USDT only** — (+realized_usdt + unrealized_usdt+) × FX when
+      # +realized_usdt+ is present in +live_tui_metrics+ (summed from open position rows). Avoids mixing the SQLite
+      # journal (paper/live bookkeeping) with live account MTM. Legacy: if +realized_usdt+ is absent, falls back to
+      # journal today + unreal × FX.
       def combined_daily_pnl_inr_for_header(snap, inr_per_usdt)
         base = snap.daily_pnl
         return base if snap.dry_run
@@ -84,6 +108,11 @@ module CoindcxBot
 
         unreal = BigDecimal((m[:unrealized_usdt] || 0).to_s)
         fx = BigDecimal(inr_per_usdt.to_s)
+        if m.key?(:realized_usdt)
+          realized = BigDecimal((m[:realized_usdt] || 0).to_s)
+          return (realized + unreal) * fx
+        end
+
         base + (unreal * fx)
       rescue ArgumentError, TypeError
         base

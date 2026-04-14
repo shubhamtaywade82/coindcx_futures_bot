@@ -96,7 +96,37 @@ RSpec.describe CoindcxBot::Tui::LiveAccountMirror do
   describe '.combined_daily_pnl_inr_for_header' do
     let(:snap_class) { CoindcxBot::Core::Engine::Snapshot }
 
-    it 'adds open unrealized USDT at FX to journal daily INR when live mirror metrics are present' do
+    it 'uses exchange REAL+UNREAL USDT at FX when realized_usdt is present (ignores journal)' do
+      snap = snap_class.new(
+        pairs: %w[B-SOL_USDT],
+        ticks: {},
+        positions: [],
+        paused: false,
+        kill_switch: false,
+        stale: false,
+        last_error: nil,
+        daily_pnl: BigDecimal('-10_000'),
+        running: true,
+        dry_run: false,
+        stale_tick_seconds: 45,
+        paper_metrics: {},
+        capital_inr: BigDecimal('50_000'),
+        recent_events: [],
+        working_orders: [],
+        ws_last_tick_ms_ago: 5,
+        strategy_last_by_pair: {},
+        regime: CoindcxBot::Regime::TuiState.disabled,
+        smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+        exchange_positions: [],
+        exchange_positions_error: nil,
+        exchange_positions_fetched_at: nil,
+        live_tui_metrics: { realized_usdt: BigDecimal('5'), unrealized_usdt: BigDecimal('-2') }
+      )
+      combined = described_class.combined_daily_pnl_inr_for_header(snap, BigDecimal('83'))
+      expect(combined).to eq(BigDecimal('249')) # (5 + (-2)) * 83
+    end
+
+    it 'falls back to journal plus unreal when realized_usdt is omitted (legacy snapshots)' do
       snap = snap_class.new(
         pairs: %w[B-SOL_USDT],
         ticks: {},
@@ -153,6 +183,16 @@ RSpec.describe CoindcxBot::Tui::LiveAccountMirror do
         live_tui_metrics: { unrealized_usdt: BigDecimal('-99') }
       )
       expect(described_class.combined_daily_pnl_inr_for_header(snap, BigDecimal('83'))).to eq(BigDecimal('-100'))
+    end
+  end
+
+  describe '.sum_realized_usdt' do
+    it 'sums realized fields on open rows only' do
+      rows = [
+        { pair: 'B-SOL_USDT', active_pos: '-1', realized_pnl_session: '12.5' },
+        { pair: 'B-ETH_USDT', active_pos: '0', realized_pnl_session: '99' }
+      ]
+      expect(described_class.sum_realized_usdt(rows)).to eq(BigDecimal('12.5'))
     end
   end
 

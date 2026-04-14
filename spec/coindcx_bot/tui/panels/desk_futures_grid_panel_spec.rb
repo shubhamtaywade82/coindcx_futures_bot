@@ -63,6 +63,7 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
   end
 
   before do
+    allow(engine).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
     allow(engine).to receive(:ws_feed_stale?).and_return(false)
     tick_store.update(symbol: 'B-SOL_USDT', ltp: 150.0, bid: 149.9, ask: 150.1)
     order_book_store.update(

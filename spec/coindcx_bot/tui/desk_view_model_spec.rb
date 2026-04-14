@@ -170,6 +170,7 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
           live_tui_metrics: {
             wallet_amount: BigDecimal('1000'),
             wallet_currency: 'USDT',
+            realized_usdt: BigDecimal('0'),
             unrealized_usdt: BigDecimal('-12.5'),
             open_positions_count: 1
           }
@@ -323,6 +324,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
           live_tui_metrics: {
             wallet_amount: BigDecimal('1000'),
             wallet_currency: 'INR',
+            realized_usdt: BigDecimal('0'),
+            unrealized_usdt: BigDecimal('0'),
             wallet_locked: BigDecimal('50'),
             wallet_cross_order_margin: BigDecimal('10'),
             wallet_cross_user_margin: BigDecimal('20')
