@@ -61,6 +61,9 @@ strategy:
     sess_liq_pct: 0.18
     tl_retest_pct: 0.22
     vp_bars: 60
+    # Optional OHLCV layers (each adds up to +1 on the matching side score when true):
+    fvg_confluence: true
+    premium_discount_lookback: 20
     signal_mode: bos_relaxed
     # Flip on opposite SMC only when mark is green vs entry (omit min_gain = flip even when red).
     close_on_opposite_smc: true

@@ -112,7 +112,9 @@ module CoindcxBot
       end
 
       def min_exec_bars
-        [@smc_cfg.vp_bars, @smc_cfg.smc_swing * 4 + 10, @smc_cfg.ms_swing * 4 + 10, @smc_cfg.liq_lookback + 5, 50].max
+        pd = @smc_cfg.premium_discount_lookback
+        pd_floor = (pd.is_a?(Integer) && pd.positive?) ? (pd + 5) : 0
+        [@smc_cfg.vp_bars, @smc_cfg.smc_swing * 4 + 10, @smc_cfg.ms_swing * 4 + 10, @smc_cfg.liq_lookback + 5, pd_floor, 50].max
       end
 
       def stop_distance_pct
@@ -163,7 +165,11 @@ module CoindcxBot
           choch_bull: last.choch_bull,
           choch_bear: last.choch_bear,
           bos_bull: last.bos_bull,
-          bos_bear: last.bos_bear
+          bos_bear: last.bos_bear,
+          fvg_bull_align: last.fvg_bull_align,
+          fvg_bear_align: last.fvg_bear_align,
+          in_discount: last.in_discount,
+          in_premium: last.in_premium
         }
       end
 

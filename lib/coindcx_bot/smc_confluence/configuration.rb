@@ -7,7 +7,7 @@ module CoindcxBot
       attr_reader :smc_swing, :ob_body_pct, :ob_expire, :liq_lookback, :liq_wick_pct,
                   :ms_swing, :tl_pivot_len, :tl_retest_pct, :vp_bars, :vp_rows,
                   :poc_zone_pct, :sess_liq_pct, :min_score, :sig_cooldown, :atr_period,
-                  :signal_mode
+                  :signal_mode, :fvg_confluence, :premium_discount_lookback
 
       # signal_mode: :choch_strict (Pine parity) or :bos_relaxed (BOS or CHOCH counts as primary trigger for score gate)
       def initialize(
@@ -26,7 +26,9 @@ module CoindcxBot
         min_score: 3,
         sig_cooldown: 5,
         atr_period: 14,
-        signal_mode: :choch_strict
+        signal_mode: :choch_strict,
+        fvg_confluence: false,
+        premium_discount_lookback: nil
       )
         @smc_swing = Integer(smc_swing)
         @ob_body_pct = Float(ob_body_pct)
@@ -44,6 +46,8 @@ module CoindcxBot
         @sig_cooldown = Integer(sig_cooldown)
         @atr_period = Integer(atr_period)
         @signal_mode = normalize_signal_mode(signal_mode)
+        @fvg_confluence = coerce_bool(fvg_confluence)
+        @premium_discount_lookback = normalize_premium_discount_lookback(premium_discount_lookback)
       end
 
       def bos_relaxed?
@@ -74,11 +78,30 @@ module CoindcxBot
           min_score: sym[:min_score],
           sig_cooldown: sym[:sig_cooldown],
           atr_period: sym[:atr_period],
-          signal_mode: sym[:signal_mode]
+          signal_mode: sym[:signal_mode],
+          fvg_confluence: sym[:fvg_confluence],
+          premium_discount_lookback: sym[:premium_discount_lookback]
         }.compact
       end
 
       private
+
+      def coerce_bool(value)
+        return false if value.nil?
+        return true if value == true
+        return false if value == false
+
+        %w[1 true yes on].include?(value.to_s.strip.downcase)
+      end
+
+      def normalize_premium_discount_lookback(raw)
+        return nil if raw.nil?
+
+        n = Integer(raw)
+        n.positive? ? n : nil
+      rescue ArgumentError, TypeError
+        nil
+      end
 
       def normalize_signal_mode(raw)
         s = raw.to_s.strip.downcase

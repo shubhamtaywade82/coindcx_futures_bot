@@ -14,7 +14,8 @@ module CoindcxBot
                   :vp_bull_conf, :vp_bear_conf, :near_poc, :near_vah, :near_val,
                   :long_score, :short_score, :long_signal, :short_signal,
                   :pdh_sweep, :pdl_sweep,
-                  :pdh, :pdl, :poc, :vah, :val_line, :atr14
+                  :pdh, :pdl, :poc, :vah, :val_line, :atr14,
+                  :fvg_bull_align, :fvg_bear_align, :in_discount, :in_premium
 
       def initialize(**attrs)
         @bar_index = attrs[:bar_index]
@@ -55,6 +56,10 @@ module CoindcxBot
         @vah = attrs[:vah]
         @val_line = attrs[:val_line]
         @atr14 = attrs[:atr14]
+        @fvg_bull_align = attrs.fetch(:fvg_bull_align, false)
+        @fvg_bear_align = attrs.fetch(:fvg_bear_align, false)
+        @in_discount = attrs.fetch(:in_discount, false)
+        @in_premium = attrs.fetch(:in_premium, false)
       end
 
       def serialize
@@ -96,7 +101,11 @@ module CoindcxBot
           'poc' => poc,
           'vah' => vah,
           'val' => val_line,
-          'atr14' => atr14
+          'atr14' => atr14,
+          'fvg_bull_align' => fvg_bull_align,
+          'fvg_bear_align' => fvg_bear_align,
+          'in_discount' => in_discount,
+          'in_premium' => in_premium
         }
       end
     end

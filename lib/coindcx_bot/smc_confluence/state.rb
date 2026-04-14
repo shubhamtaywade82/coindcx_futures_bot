@@ -21,7 +21,8 @@ module CoindcxBot
                     :last_sig_bar, :prev_calendar_date,
                     :prev_liq_lo, :prev_liq_hi,
                     :prev_tl_bear_val, :prev_tl_bull_val,
-                    :atr_prev
+                    :atr_prev,
+                    :active_fvgs
 
       def initialize
         reset_initial
@@ -86,6 +87,7 @@ module CoindcxBot
         @prev_tl_bear_val = nil
         @prev_tl_bull_val = nil
         @atr_prev = nil
+        @active_fvgs = []
       end
     end
   end
