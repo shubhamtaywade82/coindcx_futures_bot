@@ -4,7 +4,7 @@ Standalone Ruby futures trading bot for **CoinDCX** (USDT-margined), built aroun
 
 **Scope:** intended for a small whitelist (e.g. SOL + ETH perpetuals), trend-continuation style entries, trailing exits — not a generic multi-exchange framework.
 
-**Changelog:** [`CHANGELOG.md`](CHANGELOG.md). **Doc index:** [`docs/README.md`](docs/README.md). **HTTP paper exchange (optional):** [`docs/paper_exchange.md`](docs/paper_exchange.md).
+**Changelog:** [`CHANGELOG.md`](CHANGELOG.md). **Doc index:** [`docs/README.md`](docs/README.md). **Three run modes (paper / live observe / live):** [`docs/operating_modes.md`](docs/operating_modes.md). **HTTP paper exchange (optional):** [`docs/paper_exchange.md`](docs/paper_exchange.md).
 
 The engine subscribes to the private **order update** Socket.io stream when running and appends a redacted snippet of each payload to the SQLite `event_log` (audit trail only; it does not reconcile positions automatically). Public futures ticks use **both** `@prices-futures` (`price-change`) and `@trades-futures` (`new-trade`) so LTP and staleness reflect trade flow, not only slow mark/LTP pushes.
 
@@ -63,7 +63,7 @@ COINDCX_BOT_CONFIG=/path/to/bot.yml bundle exec bin/bot run
 
 **Optional HTTP simulator:** run `bundle exec bin/paper-exchange` and set **`paper_exchange.enabled`** + **`paper_exchange.api_base_url`** so the bot uses **`GatewayPaperBroker`** against a local CoinDCX-shaped API (signed simulation ticks). See [`docs/paper_exchange.md`](docs/paper_exchange.md).
 
-Use **`runtime.dry_run: true`** until order payloads are validated. In paper mode the bot:
+Use **`runtime.dry_run: true`** until order payloads are validated. For a compact comparison of **paper vs live-with-orders-off vs live trading**, see [`docs/operating_modes.md`](docs/operating_modes.md). In paper mode the bot:
 
 - **Journals opens and closes** in SQLite (`positions` + `event_log`) so strategy state matches a live run.
 - **Does not** call `futures.orders.create` or account exit APIs.

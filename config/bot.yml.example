@@ -144,6 +144,7 @@ execution:
     margin_currency_short_name: USDT
     # leverage: 5   # optional; TUI/header fall back to risk.max_leverage when omitted
 
+# Three ways to run: paper (dry_run true) vs live observe (dry_run false + place_orders false) vs live trading — docs/operating_modes.md
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 120
