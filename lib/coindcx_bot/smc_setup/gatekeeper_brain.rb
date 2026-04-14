@@ -80,7 +80,7 @@ module CoindcxBot
       end
 
       def ensure_ollama_loaded!
-        require 'ollama-client'
+        require 'ollama_client'
       end
 
       def resolved_model
