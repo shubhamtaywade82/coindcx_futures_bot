@@ -4,12 +4,20 @@ require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
 require_relative '../term_width'
+require_relative '../theme'
+require_relative '../ansi_string'
+require_relative '../sparkline'
 
 module CoindcxBot
   module Tui
     module Panels
       # Three-column futures desk: L2 book (focus pair) | execution + orders | risk + event log.
       class DeskFuturesGridPanel
+        include Theme
+        include AnsiString
+
+        DEPTH_BLOCKS = %w[▏ ▎ ▍ ▌ ▋ ▊ ▉ █].freeze
+
         def initialize(engine:, tick_store:, order_book_store:, symbols:, focus_pair_proc:, origin_row:,
                        origin_col: 0, output: $stdout)
           @engine = engine
@@ -45,26 +53,29 @@ module CoindcxBot
           buf << @cursor.save
           r = @row
 
-          buf << move(r) << clear_line(outer_top_rule(left_w, mid_w, right_w))
+          buf << move(r) << clr(outer_top_rule(left_w, mid_w, right_w))
           r += 1
-          buf << move(r) << clear_line(title_row(left_w, mid_w, right_w, ew, ow, focus))
+          buf << move(r) << clr(title_row(left_w, mid_w, right_w, ew, ow, focus))
           r += 1
-          buf << move(r) << clear_line(mid_rule(left_w, mid_w, right_w))
+          buf << move(r) << clr(mid_rule(left_w, mid_w, right_w))
           r += 1
-          buf << move(r) << clear_line(header_row(left_w, ew, ow, right_w, wide_exec: wide_exec))
+          buf << move(r) << clr(header_row(left_w, ew, ow, right_w, wide_exec: wide_exec))
           r += 1
 
+          # Pre-compute max quantity for depth bars
+          max_qty = compute_max_quantity(book_rows)
+
           h.times do |i|
-            left = format_book_cell(book_rows[i], left_w)
+            left = format_book_cell(book_rows[i], left_w, max_qty)
             ex = pad_visible(format_exec_cell(exec_rows[i], ew, wide_exec: wide_exec), ew)
             ord = pad_visible(format_ord_cell(ord_rows[i]), ow)
             mid = "#{ex}│#{ord}"
             right = format_sidebar_row(sidebar, events, i, h, right_w, sidebar_reserved: sidebar_reserved)
-            buf << move(r + i) << clear_line("│#{left}│#{mid}│#{right}│")
+            buf << move(r + i) << clr("│#{left}│#{mid}│#{right}│")
           end
 
           r += h
-          buf << move(r) << clear_line(outer_bot_rule(left_w, mid_w, right_w))
+          buf << move(r) << clr(outer_bot_rule(left_w, mid_w, right_w))
           buf << @cursor.restore
 
           @output.print buf.string
@@ -84,6 +95,33 @@ module CoindcxBot
           out.first(h)
         end
 
+        # ── Depth heatmap bars ────────────────────────────────────────
+
+        def compute_max_quantity(book_rows)
+          max = 0.0
+          book_rows.each do |row|
+            next unless row.is_a?(Hash)
+
+            q = row[:quantity].to_f
+            max = q if q > max
+          end
+          max
+        end
+
+        def depth_bar(quantity, max_qty, bar_width)
+          return ' ' * bar_width if max_qty <= 0
+
+          ratio = quantity.to_f / max_qty
+          # Each character position = 1/bar_width of full. Sub-character precision via block chars.
+          full_units = (ratio * bar_width * 8).to_i
+          full_blocks = full_units / 8
+          remainder = full_units % 8
+
+          bar = '█' * full_blocks
+          bar += DEPTH_BLOCKS[remainder - 1] if remainder > 0 && bar.length < bar_width
+          bar.ljust(bar_width)[0, bar_width]
+        end
+
         # Split the BOOK column between price and quantity using the same rules as row rendering.
         def book_column_splits(left_col_w)
           avail = left_col_w - 4
@@ -93,83 +131,109 @@ module CoindcxBot
           [px_w, qty_w]
         end
 
-        def format_book_cell(row, w)
+        def format_book_cell(row, w, max_qty)
           line =
             case row
             when :empty
-              dim('·')
+              muted('·')
             when Hash
               px_w, qty_w = book_column_splits(w)
-              side = row[:side] == :ask ? red('A') : green('B')
+              side = row[:side] == :ask ? loss('A') : profit('B')
               px = format_exec_qty(row[:price].to_s, px_w)
               q = format_exec_qty(row[:quantity].to_s, qty_w)
-              "#{side} #{dim(px.ljust(px_w))} #{dim(q.rjust(qty_w))}"
+              bar_w = [w - px_w - qty_w - 5, 0].max
+              bar_str =
+                if bar_w >= 3
+                  bar_raw = depth_bar(row[:quantity], max_qty, bar_w)
+                  row[:side] == :ask ? bar_ask(bar_raw) : bar_bid(bar_raw)
+                else
+                  ''
+                end
+              "#{side} #{accent(px.ljust(px_w))} #{muted(q.rjust(qty_w))}#{bar_str.empty? ? '' : " #{bar_str}"}"
             else
-              dim('·')
+              muted('·')
             end
           pad_visible(line, w)
         end
 
+        # ── Execution (positions) ────────────────────────────────────
+
         def format_exec_cell(row, max_visible, wide_exec:)
-          return dim('·') if row.nil?
+          return muted('·') if row.nil?
 
           sym = compact_pair_symbol(row[:symbol])
+          spark = render_sparkline_for(row[:symbol])
+
           if wide_exec
-            line = format_exec_cell_wide(row, sym)
-            line = shrink_exec_line_to_fit(row, sym) if visible_len(line) > max_visible
-            line = format_exec_cell_compact(row, sym) if visible_len(line) > max_visible
+            line = format_exec_cell_wide(row, sym, spark)
+            line = shrink_exec_line_to_fit(row, sym, spark) if visible_len(line) > max_visible
+            line = format_exec_cell_compact(row, sym, spark) if visible_len(line) > max_visible
             line
           else
-            format_exec_cell_compact(row, sym)
+            format_exec_cell_compact(row, sym, spark)
           end
         end
 
-        def format_exec_cell_wide(row, sym)
+        def render_sparkline_for(symbol)
+          hist = @tick_store.price_history(symbol.to_s, max: 12)
+          return nil if hist.size < 3
+
+          raw = Sparkline.render(hist, width: 8)
+          accent(raw)
+        end
+
+        def format_exec_cell_wide(row, sym, spark)
           lst = (row[:last] || row[:ltp]).to_s
           mrk = row[:mark].to_s
           side = row[:side].to_s.upcase
           side = side[0, 5].ljust(5) if side.length > 5
           side = side.ljust(5)
-          [
-            yellow(truncate(sym, 6).ljust(6)),
-            dim(side),
-            dim(format_exec_qty(row[:qty], 10).ljust(10)),
-            dim(row[:entry].to_s.ljust(8)),
-            cyan(lst.ljust(8)),
-            dim(mrk.ljust(8)),
-            dim(row[:sl].to_s.ljust(7)),
-            format_pnl_cell(row[:pnl_usdt], row[:pnl_label])
-          ].join(dim(' '))
+          parts = [
+            warning(truncate(sym, 6).ljust(6)),
+            muted(side),
+            muted(format_exec_qty(row[:qty], 10).ljust(10)),
+            muted(row[:entry].to_s.ljust(8)),
+            accent(lst.ljust(8)),
+            muted(mrk.ljust(8)),
+            muted(row[:sl].to_s.ljust(7)),
+            color_pnl(row[:pnl_usdt], row[:pnl_label])
+          ]
+          parts << spark if spark
+          parts.join(muted(' '))
         end
 
-        def format_exec_cell_compact(row, sym)
+        def format_exec_cell_compact(row, sym, spark)
           mrk = row[:mark].to_s
           px = mrk.strip.empty? || mrk == '—' ? (row[:last] || row[:ltp]).to_s : mrk
-          [
-            yellow(truncate(sym, 5).ljust(5)),
-            dim(side_abbrev(row[:side])),
-            dim(format_exec_qty(row[:qty], 9).ljust(9)),
-            dim(row[:entry].to_s.ljust(7)),
-            dim(px.ljust(8)),
-            format_pnl_cell(row[:pnl_usdt], pnl_short_label(row))
-          ].join(dim(' '))
+          parts = [
+            warning(truncate(sym, 5).ljust(5)),
+            muted(side_abbrev(row[:side])),
+            muted(format_exec_qty(row[:qty], 9).ljust(9)),
+            muted(row[:entry].to_s.ljust(7)),
+            muted(px.ljust(8)),
+            color_pnl(row[:pnl_usdt], pnl_short_label(row))
+          ]
+          parts << spark if spark
+          parts.join(muted(' '))
         end
 
-        def shrink_exec_line_to_fit(row, sym)
+        def shrink_exec_line_to_fit(row, sym, spark)
           lst = (row[:last] || row[:ltp]).to_s
           mrk = row[:mark].to_s
           side = row[:side].to_s.upcase
           side = side[0, 5].ljust(5)
-          [
-            yellow(truncate(sym, 6).ljust(6)),
-            dim(side),
-            dim(format_exec_qty(row[:qty], 10).ljust(10)),
-            dim(row[:entry].to_s.ljust(8)),
-            cyan(lst.ljust(8)),
-            dim(mrk.ljust(8)),
-            dim(row[:sl].to_s.ljust(7)),
-            format_pnl_cell(row[:pnl_usdt], pnl_short_label(row))
-          ].join(dim(' '))
+          parts = [
+            warning(truncate(sym, 6).ljust(6)),
+            muted(side),
+            muted(format_exec_qty(row[:qty], 10).ljust(10)),
+            muted(row[:entry].to_s.ljust(8)),
+            accent(lst.ljust(8)),
+            muted(mrk.ljust(8)),
+            muted(row[:sl].to_s.ljust(7)),
+            color_pnl(row[:pnl_usdt], pnl_short_label(row))
+          ]
+          parts << spark if spark
+          parts.join(muted(' '))
         end
 
         def pnl_short_label(row)
@@ -212,28 +276,32 @@ module CoindcxBot
           truncate(s, max_chars)
         end
 
-        def format_ord_cell(row)
-          return dim('·') if row.nil?
+        # ── Orders ───────────────────────────────────────────────────
 
-          lat = row[:latency] ? cyan("#{row[:latency]}ms") : dim('—')
+        def format_ord_cell(row)
+          return muted('·') if row.nil?
+
+          lat = row[:latency] ? accent("#{row[:latency]}ms") : muted('—')
           [
-            yellow(row[:type_abbr].to_s.ljust(3)),
-            dim(truncate(row[:symbol].to_s, 9).ljust(9)),
-            green(row[:status].to_s[0, 3].ljust(3)),
+            warning(row[:type_abbr].to_s.ljust(3)),
+            muted(truncate(row[:symbol].to_s, 9).ljust(9)),
+            profit(row[:status].to_s[0, 3].ljust(3)),
             lat
-          ].join(dim(' '))
+          ].join(muted(' '))
         end
+
+        # ── Sidebar (risk summary + events) ──────────────────────────
 
         def format_sidebar_row(sidebar, events, i, h, w, sidebar_reserved:)
           text =
             if i < sidebar_reserved
-              sidebar[i] || dim('·')
+              sidebar[i] || muted('·')
             else
               ev_i = i - sidebar_reserved
               if ev_i < events.size
                 format_event(events[ev_i], w)
               else
-                dim('·')
+                muted('·')
               end
             end
           pad_visible(text, w)
@@ -257,6 +325,8 @@ module CoindcxBot
           bits << oc.to_s if oc.to_s.strip != ''
           bits.join(' ')
         end
+
+        # ── Layout ───────────────────────────────────────────────────
 
         def term_width
           TermWidth.columns
@@ -313,37 +383,41 @@ module CoindcxBot
 
         def header_row(lw, ew, ow, rw, wide_exec:)
           px_w, qty_w = book_column_splits(lw)
-          lh = [dim('S'), dim('PRICE'.ljust(px_w)), dim('QTY'.rjust(qty_w))].join(dim(' '))
+          bar_w = [lw - px_w - qty_w - 5, 0].max
+          bar_hdr = bar_w >= 3 ? muted('VOL'.ljust(bar_w)) : ''
+          lh = [muted('S'), muted('PRICE'.ljust(px_w)), muted('QTY'.rjust(qty_w))]
+          lh << bar_hdr unless bar_hdr.empty?
+          lh_str = lh.join(muted(' '))
           eh =
             if wide_exec
               [
-                dim('SYM'.ljust(6)),
-                dim('SIDE'.ljust(5)),
-                dim('QTY'.ljust(10)),
-                dim('ENT'.ljust(8)),
-                dim('LAST'.ljust(8)),
-                dim('MARK'.ljust(8)),
-                dim('SL'.ljust(7)),
-                dim('PNL')
-              ].join(dim(' '))
+                muted('SYM'.ljust(6)),
+                muted('SIDE'.ljust(5)),
+                muted('QTY'.ljust(10)),
+                muted('ENT'.ljust(8)),
+                muted('LAST'.ljust(8)),
+                muted('MARK'.ljust(8)),
+                muted('SL'.ljust(7)),
+                muted('PNL')
+              ].join(muted(' '))
             else
               [
-                dim('SYM'.ljust(5)),
-                dim('S'),
-                dim('QTY'.ljust(9)),
-                dim('ENT'.ljust(7)),
-                dim('MARK'.ljust(8)),
-                dim('PNL')
-              ].join(dim(' '))
+                muted('SYM'.ljust(5)),
+                muted('S'),
+                muted('QTY'.ljust(9)),
+                muted('ENT'.ljust(7)),
+                muted('MARK'.ljust(8)),
+                muted('PNL')
+              ].join(muted(' '))
             end
           oh = [
-            dim('T'.ljust(3)),
-            dim('PAIR'.ljust(9)),
-            dim('ST'.ljust(3)),
-            dim('LAT')
-          ].join(dim(' '))
-          rh = dim('SUMMARY · EVENTS')
-          "│#{pad_visible(lh, lw)}│#{pad_visible(eh, ew)}│#{pad_visible(oh, ow)}│#{pad_visible(rh, rw)}│"
+            muted('T'.ljust(3)),
+            muted('PAIR'.ljust(9)),
+            muted('ST'.ljust(3)),
+            muted('LAT')
+          ].join(muted(' '))
+          rh = muted('SUMMARY · EVENTS')
+          "│#{pad_visible(lh_str, lw)}│#{pad_visible(eh, ew)}│#{pad_visible(oh, ow)}│#{pad_visible(rh, rw)}│"
         end
 
         def pad_plain(text, w)
@@ -351,62 +425,13 @@ module CoindcxBot
           t.ljust(w)
         end
 
-        def format_pnl_cell(u, label)
-          return dim('—') if u.nil?
-
-          u.positive? ? green(label.to_s) : u.negative? ? red(label.to_s) : yellow(label.to_s)
-        end
-
-        def pad_visible(str, w)
-          v = visible_len(str)
-          return "#{str}#{' ' * (w - v)}" if v < w
-          return str if v == w
-
-          "#{slice_visible(str, w - 1)}…"
-        end
-
-        def visible_len(s)
-          s.gsub(/\e\[[0-9;]*m/, '').length
-        end
-
-        def slice_visible(s, max_chars)
-          out = +''
-          n = 0
-          i = 0
-          while i < s.length && n < max_chars
-            if s[i] == "\e"
-              j = s.index('m', i)
-              if j
-                out << s[i..j]
-                i = j + 1
-                next
-              end
-            end
-            out << s[i]
-            n += 1
-            i += 1
-          end
-          out
-        end
-
-        def truncate(s, max)
-          s.length <= max ? s : "#{s[0, max - 1]}…"
-        end
-
         def move(row)
           @cursor.move_to(@col, row)
         end
 
-        def clear_line(content)
+        def clr(content)
           "#{content}\e[K"
         end
-
-        def bold(str)   = "\e[1m#{str}\e[0m"
-        def green(str)  = "\e[32m#{str}\e[0m"
-        def yellow(str) = "\e[33m#{str}\e[0m"
-        def red(str)    = "\e[31m#{str}\e[0m"
-        def cyan(str)   = "\e[36m#{str}\e[0m"
-        def dim(str)    = "\e[2m#{str}\e[0m"
       end
     end
   end

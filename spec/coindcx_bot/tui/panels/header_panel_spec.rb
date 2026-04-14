@@ -13,7 +13,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       inr_per_usdt: BigDecimal('83'),
       resolved_max_daily_loss_inr: BigDecimal('1500'),
       execution: { order_defaults: { leverage: 5 } },
-      scalper_mode?: false
+      scalper_mode?: false,
+      place_orders?: true
     )
   end
   let(:snapshot) do
@@ -39,7 +40,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
       exchange_positions: [],
       exchange_positions_error: nil,
-      exchange_positions_fetched_at: nil
+      exchange_positions_fetched_at: nil,
+      live_tui_metrics: {}
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }
@@ -90,6 +92,19 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       expect(output.string).to include('SCALP')
     end
 
+    it 'shows EXE·OFF when live and place_orders is false' do
+      allow(config).to receive(:place_orders?).and_return(false)
+      live_snap = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(dry_run: false))
+      eng = double('engine', snapshot: live_snap, broker: broker_double, config: config)
+      allow(eng).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+      allow(eng).to receive(:ws_feed_stale?).and_return(false)
+      allow(eng).to receive(:engine_loop_crashed?).and_return(false)
+      described_class.new(engine: eng, origin_row: 0, output: output).render
+      rendered = output.string
+      expect(rendered).to include('LIVE')
+      expect(rendered).to include('EXE·OFF')
+    end
+
     it 'renders REGIME·ON when snapshot.regime.enabled and not yet active' do
       snap_on = CoindcxBot::Core::Engine::Snapshot.new(
         **snapshot.to_h.merge(regime: CoindcxBot::Regime::TuiState::STANDBY)
@@ -133,7 +148,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
           exchange_positions: [],
           exchange_positions_error: nil,
-          exchange_positions_fetched_at: nil
+          exchange_positions_fetched_at: nil,
+          live_tui_metrics: {}
         )
       end
 
@@ -153,6 +169,58 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       3.times { panel.render }
 
       expect(output.string.scan('PAPER').size).to eq(3)
+    end
+
+    context 'with live TUI metrics (INR futures wallet)' do
+      let(:snapshot) do
+        CoindcxBot::Core::Engine::Snapshot.new(
+          pairs: %w[B-ETH_USDT],
+          ticks: {},
+          positions: [],
+          paused: false,
+          kill_switch: false,
+          stale: false,
+          last_error: nil,
+          daily_pnl: BigDecimal('-10095.40'),
+          running: true,
+          dry_run: false,
+          stale_tick_seconds: 45,
+          paper_metrics: {},
+          capital_inr: BigDecimal('50_000'),
+          recent_events: [],
+          working_orders: [],
+          ws_last_tick_ms_ago: 10,
+          strategy_last_by_pair: {},
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+          exchange_positions: [],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: nil,
+          live_tui_metrics: {
+            wallet_amount: BigDecimal('1541.08'),
+            wallet_currency: 'INR',
+            realized_usdt: BigDecimal('0'),
+            unrealized_usdt: BigDecimal('-41.82'),
+            open_positions_count: 1
+          }
+        )
+      end
+
+      it 'shows futures wallet balance in INR without applying inr_per_usdt' do
+        panel.render
+        expect(output.string).to include('BAL:')
+        expect(output.string).to include('1541.08')
+        # Would be wrong if 1541.08 were treated as USDT at 83 INR/USDT (~127_909)
+        expect(output.string).not_to include('127909')
+      end
+
+      it 'shows NET as exchange REAL+UNREAL USDT at inr_per_usdt (not journal)' do
+        panel.render
+        # (0 + (-41.82)) * 83 = -3471.06
+        expect(output.string).to include('3471.06')
+        expect(output.string).to include('REAL USDT:')
+        expect(output.string).to include('0.00')
+      end
     end
 
     context 'with paper metrics' do
@@ -186,7 +254,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
           smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
           exchange_positions: [],
           exchange_positions_error: nil,
-          exchange_positions_fetched_at: nil
+          exchange_positions_fetched_at: nil,
+          live_tui_metrics: {}
         )
       end
 

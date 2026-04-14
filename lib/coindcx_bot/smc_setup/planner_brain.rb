@@ -75,25 +75,20 @@ module CoindcxBot
       end
 
       def ensure_ollama_loaded!
-        require 'ollama-client'
+        require 'ollama_client'
       end
 
       def resolved_model
         m = @config.smc_setup_model
-        return m unless m.empty?
-
-        %w[OLLAMA_AGENT_MODEL OLLAMA_MODEL].each do |k|
-          v = ENV.fetch(k, '').to_s.strip
-          return v unless v.empty?
-        end
-
-        Ollama::Config.new.model
+        m.empty? ? Ollama::Config.new.model : m
       end
 
       def ollama_config_object
         c = Ollama::Config.new
         u = @config.smc_setup_ollama_base_url
         c.base_url = u unless u.empty?
+        k = @config.smc_setup_ollama_api_key
+        c.api_key = k unless k.empty?
         c.timeout = @config.smc_setup_timeout_seconds
         c.temperature = @config.smc_setup_temperature
         c

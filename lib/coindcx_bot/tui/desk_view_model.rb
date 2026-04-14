@@ -15,16 +15,19 @@ module CoindcxBot
           tick_ticks: tick_store.snapshot,
           symbols: Array(symbols).map(&:to_s),
           ws_stale_fn: ->(sym) { engine.ws_feed_stale?(sym) },
-          config: engine.config
+          config: engine.config,
+          # Same as +Engine#inr_per_usdt+: CoinDCX conversions when +fx.enabled+, else +config.inr_per_usdt+.
+          inr_per_usdt: engine.inr_per_usdt
         )
       end
 
-      def initialize(snapshot:, tick_ticks:, symbols:, ws_stale_fn:, config:)
+      def initialize(snapshot:, tick_ticks:, symbols:, ws_stale_fn:, config:, inr_per_usdt: nil)
         @snap = snapshot
         @tick_ticks = tick_ticks
         @symbols = symbols
         @ws_stale_fn = ws_stale_fn
         @config = config
+        @inr_per_usdt = inr_per_usdt || @config.inr_per_usdt
       end
 
       def inner_height
@@ -33,7 +36,7 @@ module CoindcxBot
       end
 
       def execution_rows
-        pos_by_pair = index_positions(@snap.positions)
+        pos_by_pair = positions_index_for_execution
         @symbols.map { |sym| execution_row_for(sym, pos_by_pair) }
       end
 
@@ -53,12 +56,16 @@ module CoindcxBot
         ev[:type].to_s.upcase
       end
 
+      def daily_pnl_inr_for_desk
+        CoindcxBot::Tui::LiveAccountMirror.combined_daily_pnl_inr_for_header(@snap, @inr_per_usdt)
+      end
+
       def risk_band
         kill = @snap.kill_switch
         return 'CRIT' if kill
 
         max_loss = daily_loss_limit_inr
-        pnl = @snap.daily_pnl
+        pnl = daily_pnl_inr_for_desk
         return 'LOW' if max_loss.nil? || max_loss <= 0
 
         loss = pnl.negative? ? -pnl : BigDecimal('0')
@@ -73,14 +80,14 @@ module CoindcxBot
         cap = @snap.capital_inr
         return nil if cap.nil? || cap.zero?
 
-        ((@snap.daily_pnl / cap) * 100).round(2)
+        ((daily_pnl_inr_for_desk / cap) * 100).round(2)
       end
 
       def loss_utilization_pct
         max_loss = daily_loss_limit_inr
         return nil if max_loss.nil? || max_loss <= 0
 
-        pnl = @snap.daily_pnl
+        pnl = daily_pnl_inr_for_desk
         loss = pnl.negative? ? -pnl : BigDecimal('0')
         # Float for stable "%" display (BigDecimal#to_s can use exponent form for some values).
         ((loss / max_loss) * 100).round(1).to_f
@@ -95,7 +102,7 @@ module CoindcxBot
         return 'PAUSED' if @snap.paused
         return 'KILL' if @snap.kill_switch
 
-        pos = Array(@snap.positions)
+        pos = mirror_live_account? ? mirrored_open_positions_list : Array(@snap.positions)
         return 'FLAT' if pos.empty?
         return "#{position_side_label(pos.first)} #{compact_pair_symbol((pos.first[:pair] || pos.first['pair']).to_s)}" if pos.size == 1
 
@@ -120,7 +127,7 @@ module CoindcxBot
       end
 
       def grid_sidebar_lines
-        pos_n = Array(@snap.positions).size
+        pos_n = mirror_live_account? ? mirrored_open_positions_list.size : Array(@snap.positions).size
         ord_n = Array(@snap.working_orders).size
         dd = drawdown_pct
         dd_s = dd.nil? ? '—' : format('%+.2f%%', dd.to_f)
@@ -135,7 +142,34 @@ module CoindcxBot
         ]
         ex = exchange_positions_sidebar_line
         lines << ex if ex
+        wlt = exchange_wallet_sidebar_line
+        lines << wlt if wlt
         lines
+      end
+
+      # Live mirror only: compact futures wallet fields beyond header BAL (+available+, +locked+, cross margins).
+      def exchange_wallet_sidebar_line
+        return nil unless mirror_live_account?
+
+        m = @snap.live_tui_metrics
+        return nil unless m.is_a?(Hash)
+
+        cur = (m[:wallet_currency] || 'INR').to_s.upcase
+        parts = []
+        if m.key?(:wallet_available) && m[:wallet_available] != m[:wallet_amount]
+          parts << "avl#{compact_wallet_amount(m[:wallet_available], cur)}"
+        end
+        parts << "lck#{compact_wallet_amount(m[:wallet_locked], cur)}" if m.key?(:wallet_locked)
+        if m.key?(:wallet_cross_order_margin)
+          parts << "xo#{compact_wallet_amount(m[:wallet_cross_order_margin], cur)}"
+        end
+        if m.key?(:wallet_cross_user_margin)
+          parts << "xu#{compact_wallet_amount(m[:wallet_cross_user_margin], cur)}"
+        end
+        return nil if parts.empty?
+
+        line = "WLT #{parts.join(' · ')}"
+        line.length > 56 ? "#{line[0, 53]}…" : line
       end
 
       # CoinDCX account futures (read-only REST); optional — see runtime.tui_exchange_positions.
@@ -191,7 +225,25 @@ module CoindcxBot
         pm[:total_slippage]
       end
 
+      def display_open_positions_count
+        mirror_live_account? ? mirrored_open_positions_list.size : Array(@snap.positions).size
+      end
+
       private
+
+      def compact_wallet_amount(raw, currency)
+        v = BigDecimal(raw.to_s)
+        case currency.to_s.upcase
+        when 'INR'
+          format('₹%.0f', v)
+        when 'USDT'
+          format('%.2f', v.to_f)
+        else
+          v.to_s('F')
+        end
+      rescue ArgumentError, TypeError
+        '—'
+      end
 
       def optional_positive_int(raw)
         return nil if raw.nil? || raw.to_s.strip.empty?
@@ -216,6 +268,32 @@ module CoindcxBot
           pair = (p[:pair] || p['pair']).to_s
           h[pair] = p
         end
+      end
+
+      def mirror_live_account?
+        @config.respond_to?(:tui_exchange_mirror?) && @config.tui_exchange_mirror? && !@snap.dry_run
+      end
+
+      def positions_index_for_execution
+        idx = index_positions(@snap.positions)
+        return idx unless mirror_live_account?
+
+        Array(@snap.exchange_positions).each do |row|
+          next unless CoindcxBot::Tui::LiveAccountMirror.row_open?(row)
+
+          pair = CoindcxBot::Tui::LiveAccountMirror.normalize_bot_pair(row)
+          next if pair.empty?
+          next unless @symbols.include?(pair)
+
+          pseudo = CoindcxBot::Tui::LiveAccountMirror.pseudo_journal_from_exchange(row)
+          idx[pair] = pseudo if pseudo
+        end
+        idx
+      end
+
+      def mirrored_open_positions_list
+        idx = positions_index_for_execution
+        @symbols.filter_map { |s| (p = idx[s]) ? p : nil }
       end
 
       def exchange_position_open?(row)
@@ -279,20 +357,27 @@ module CoindcxBot
         side = position_side_label(p)
         qty = (p[:quantity] || p['quantity']).to_s
         entry = optional_bd(p[:entry_price] || p['entry_price'])
-        u = unrealized_usdt(p, mark_bd)
+        mark_for_calc = mark_bd || ltp_bd
+        entry_for_display = entry || mark_for_calc
+        raw_ex_u = p[:exchange_unrealized_usdt] || p['exchange_unrealized_usdt']
+        u = if raw_ex_u && !raw_ex_u.to_s.strip.empty?
+              optional_bd(raw_ex_u)
+            else
+              unrealized_usdt(p, mark_for_calc)
+            end
         last_s = fmt_price(ltp_bd)
         {
           symbol: sym,
           side: side,
           qty: qty,
-          entry: fmt_price(entry),
+          entry: fmt_price(entry_for_display),
           ltp: last_s,
           last: last_s,
           mark: fmt_price(mark_bd),
           sl: fmt_stop_price(p),
           liq: '—',
           pnl_usdt: u,
-          pnl_label: fmt_pnl_label(u, p, mark_bd)
+          pnl_label: fmt_pnl_label(u, p, mark_for_calc, entry_for_display)
         }
       end
 
@@ -311,10 +396,10 @@ module CoindcxBot
         s.upcase
       end
 
-      def fmt_pnl_label(u, p, ltp_bd)
+      def fmt_pnl_label(u, p, ltp_bd, entry_override = nil)
         return '—' if u.nil?
 
-        pct = unrealized_pct_str(p, ltp_bd)
+        pct = unrealized_pnl_pct_str(u, p, ltp_bd, entry_override)
         "#{fmt_num(u)} (#{pct})"
       end
 
@@ -421,18 +506,41 @@ module CoindcxBot
         CoindcxBot::Strategy::UnrealizedPnl.position_usdt(p, ltp)
       end
 
-      def unrealized_pct_str(p, ltp)
+      # Parenthetical next to uPnL: **return on entry notional** (+u / (|qty| × entry)+) when +u+ is known,
+      # so exchange-reported PnL stays consistent with the %. Otherwise falls back to signed **price move
+      # from entry** (+(mark−entry)/entry+ for long, +(entry−mark)/entry+ for short).
+      def unrealized_pnl_pct_str(u, p, ltp_bd, entry_override = nil)
+        e = entry_override || optional_bd(p[:entry_price] || p['entry_price'])
+        q = optional_bd(p[:quantity] || p['quantity'])
+        if e && !e.zero? && q && !q.abs.zero?
+          notional = q.abs * e
+          return '0%' if notional.zero?
+
+          pct = (BigDecimal(u.to_s) / notional) * 100
+          return format('%+.2f%%', pct)
+        end
+
+        unrealized_pct_str(p, ltp_bd, entry_override)
+      rescue ArgumentError, TypeError
+        unrealized_pct_str(p, ltp_bd, entry_override)
+      end
+
+      def unrealized_pct_str(p, ltp, entry_override = nil)
         return '—' if ltp.nil?
 
-        e = BigDecimal((p[:entry_price] || p['entry_price']).to_s)
+        e = entry_override || optional_bd(p[:entry_price] || p['entry_price'])
+        return '—' if e.nil?
+
+        e = BigDecimal(e.to_s)
         return '0%' if e.zero?
 
+        l = BigDecimal(ltp.to_s)
         pct =
           case (p[:side] || p['side']).to_s
           when 'long', 'buy'
-            ((ltp - e) / e) * 100
+            ((l - e) / e) * 100
           when 'short', 'sell'
-            ((e - ltp) / e) * 100
+            ((e - l) / e) * 100
           else
             BigDecimal('0')
           end

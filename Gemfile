@@ -2,16 +2,16 @@
 
 source 'https://rubygems.org'
 
-# coindcx-client gemspec requires Ruby >= 3.2
-ruby '>= 3.2'
+# Pinned for rbenv/IDEs; coindcx-client allows >= 3.2 (see Gemfile.lock RUBY VERSION)
+ruby '3.3.4'
 
 # Latest from GitHub (override with `bundle config local.coindcx-client ../coindcx-client` for local dev)
 # gem 'coindcx-client', git: 'https://github.com/shubhamtaywade82/coindcx-client.git', branch: 'main'
 gem 'coindcx-client', path: '../coindcx-client'
 
 # Regime AI (local Ollama): trading analyst via ollama-client; optional retries via ollama_agent.
-gem 'ollama-client', path: '../../../ai-workspace/ollama-client'
-gem 'ollama_agent', path: '../../../ai-workspace/ollama_agent'
+gem 'ollama-client'
+gem 'ollama_agent'
 
 gem 'bigdecimal'
 # ~> 2.8 aligns with optional ollama_agent (dev); Dotenv.load usage is unchanged from 3.x

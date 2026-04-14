@@ -181,7 +181,7 @@ module CoindcxBot
     end
 
     def regime_ai_model
-      regime_ai_section[:model].to_s.strip
+      ENV['OLLAMA_AGENT_MODEL'] || ENV['OLLAMA_MODEL'] || regime_ai_section[:model].to_s.strip
     end
 
     def regime_ai_min_interval_seconds
@@ -203,7 +203,11 @@ module CoindcxBot
     end
 
     def regime_ai_ollama_base_url
-      regime_ai_section[:ollama_base_url].to_s.strip
+      ENV['OLLAMA_BASE_URL'] || regime_ai_section[:ollama_base_url].to_s.strip
+    end
+
+    def regime_ai_ollama_api_key
+      ENV['OLLAMA_API_KEY'] || ''
     end
 
     def regime_ai_temperature
@@ -281,7 +285,7 @@ module CoindcxBot
     end
 
     def smc_setup_model
-      smc_setup_section[:model].to_s.strip
+      ENV['OLLAMA_AGENT_MODEL'] || ENV['OLLAMA_MODEL'] || smc_setup_section[:model].to_s.strip
     end
 
     def smc_setup_timeout_seconds
@@ -295,7 +299,11 @@ module CoindcxBot
     end
 
     def smc_setup_ollama_base_url
-      smc_setup_section[:ollama_base_url].to_s.strip
+      ENV['OLLAMA_BASE_URL'] || smc_setup_section[:ollama_base_url].to_s.strip
+    end
+
+    def smc_setup_ollama_api_key
+      ENV['OLLAMA_API_KEY'] || ''
     end
 
     def smc_setup_use_retry_middleware?
@@ -369,6 +377,20 @@ module CoindcxBot
       truthy?(runtime[:dry_run])
     end
 
+    # Live (+dry_run: false+) only: when false, the engine uses live feeds and read-only account APIs but does not
+    # place or exit futures orders. Ignored in paper (+dry_run: true+). YAML +runtime.place_orders+; env +PLACE_ORDER+
+    # overrides when set (true/false/1/0).
+    def place_orders?
+      return true if dry_run?
+
+      raw_place = runtime[:place_orders]
+      env_place = ENV['PLACE_ORDER'].to_s.strip
+      v = env_place.empty? ? raw_place : env_place
+      return true if v.nil?
+
+      truthy?(v)
+    end
+
     def paper_config
       raw.fetch(:paper, {})
     end
@@ -401,6 +423,18 @@ module CoindcxBot
       f < 5.0 ? 5.0 : f
     rescue ArgumentError, TypeError
       25.0
+    end
+
+    # When true (live only): TUI execution grid + header balance/unrealized mirror CoinDCX account data
+    # (+futures wallet) instead of journal-only rows. Auto-on when +place_orders?+ is false (observe mode).
+    # Optional explicit +runtime.tui_exchange_mirror: true+ when placing live orders but showing exchange rows.
+    def tui_exchange_mirror?
+      return false if dry_run?
+      return false unless tui_exchange_positions_enabled?
+
+      return true unless place_orders?
+
+      truthy?(runtime[:tui_exchange_mirror])
     end
 
     # Body filter for POST /derivatives/futures/positions (CoinDCX often needs this to return rows).

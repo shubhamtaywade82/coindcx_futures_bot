@@ -205,6 +205,37 @@ module CoindcxBot
         vp_bull_conf = near_poc || near_val
         vp_bear_conf = near_poc || near_vah
 
+        # --- Optional: FVG + premium/discount (default off; each adds at most +1 to side score) ---
+        fvg_bull_align = false
+        fvg_bear_align = false
+        if cfg.fvg_confluence
+          s.active_fvgs.reject! { |f| f.invalidated_by_ohlc?(high, low) }
+          nf = Fvg::Detector.at_index(candles, i)
+          s.active_fvgs << nf if nf
+          s.active_fvgs.reject! { |f| f.invalidated_by_ohlc?(high, low) }
+          fvg_bull_align = s.active_fvgs.any? { |f| f.side == :bullish && f.overlaps_bar?(high, low) }
+          fvg_bear_align = s.active_fvgs.any? { |f| f.side == :bearish && f.overlaps_bar?(high, low) }
+        else
+          s.active_fvgs.clear
+        end
+
+        in_discount = false
+        in_premium = false
+        pd_look = cfg.premium_discount_lookback
+        if pd_look&.positive?
+          range_hi, range_lo = rolling_high_low(i, pd_look)
+          pdd = PremiumDiscount.new(range_high: range_hi, range_low: range_lo)
+          in_discount = pdd.discount?(close)
+          in_premium = pdd.premium?(close)
+        end
+
+        long_extras = 0
+        long_extras += 1 if cfg.fvg_confluence && fvg_bull_align
+        long_extras += 1 if pd_look&.positive? && in_discount
+        short_extras = 0
+        short_extras += 1 if cfg.fvg_confluence && fvg_bear_align
+        short_extras += 1 if pd_look&.positive? && in_premium
+
         # --- Signal engine ---
         primary_long = cfg.bos_relaxed? ? (choch_bull || bos_bull) : choch_bull
         primary_short = cfg.bos_relaxed? ? (choch_bear || bos_bear) : choch_bear
@@ -220,8 +251,8 @@ module CoindcxBot
         short_s4 = vp_bear_conf ? 1 : 0
         short_s5 = sess_level_bear ? 1 : 0
         short_s6 = tl_bull_retest ? 1 : 0
-        long_score = long_s1 + long_s2 + long_s3 + long_s4 + long_s5 + long_s6
-        short_score = short_s1 + short_s2 + short_s3 + short_s4 + short_s5 + short_s6
+        long_score = long_s1 + long_s2 + long_s3 + long_s4 + long_s5 + long_s6 + long_extras
+        short_score = short_s1 + short_s2 + short_s3 + short_s4 + short_s5 + short_s6 + short_extras
         cooldown_ok = (i - s.last_sig_bar) >= cfg.sig_cooldown
         long_signal = long_s1 == 1 && long_score >= cfg.min_score && cooldown_ok
         short_signal = short_s1 == 1 && short_score >= cfg.min_score && cooldown_ok
@@ -244,6 +275,8 @@ module CoindcxBot
           in_bear_ob: in_bear_ob,
           bull_ob_valid: bull_ob_valid,
           bear_ob_valid: bear_ob_valid,
+          bull_ob_lo: s.bull_ob_lo,
+          bear_ob_hi: s.bear_ob_hi,
           recent_bull_sweep: recent_bull_sweep,
           recent_bear_sweep: recent_bear_sweep,
           liq_sweep_bull: liq_sweep_bull,
@@ -271,7 +304,11 @@ module CoindcxBot
           poc: poc,
           vah: vah,
           val_line: val_line,
-          atr14: atr14
+          atr14: atr14,
+          fvg_bull_align: fvg_bull_align,
+          fvg_bear_align: fvg_bear_align,
+          in_discount: in_discount,
+          in_premium: in_premium
         )
       end
 

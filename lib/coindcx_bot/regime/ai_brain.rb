@@ -142,25 +142,20 @@ module CoindcxBot
       private
 
       def ensure_ollama_loaded!
-        require 'ollama-client'
+        require 'ollama_client'
       end
 
       def resolved_model
         m = @config.regime_ai_model
-        return m unless m.empty?
-
-        %w[OLLAMA_AGENT_MODEL OLLAMA_MODEL].each do |k|
-          v = ENV.fetch(k, '').to_s.strip
-          return v unless v.empty?
-        end
-
-        Ollama::Config.new.model
+        m.empty? ? Ollama::Config.new.model : m
       end
 
       def ollama_config_object
         c = Ollama::Config.new
         u = @config.regime_ai_ollama_base_url
         c.base_url = u unless u.empty?
+        k = @config.regime_ai_ollama_api_key
+        c.api_key = k unless k.empty?
         c.timeout = @config.regime_ai_timeout_seconds
         c.temperature = @config.regime_ai_temperature
         c

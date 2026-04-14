@@ -17,6 +17,7 @@ module CoindcxBot
         :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
         :strategy_last_by_pair, :regime, :smc_setup,
         :exchange_positions, :exchange_positions_error, :exchange_positions_fetched_at,
+        :live_tui_metrics,
         keyword_init: true
       )
 
@@ -63,6 +64,7 @@ module CoindcxBot
           logger: @logger,
           fx: @fx
         )
+        @coord.reconcile_paper_state!
 
         @candles_htf = {}
         @candles_exec = {}
@@ -83,10 +85,25 @@ module CoindcxBot
         @engine_loop_crashed = false
         @exchange_positions_tui_mutex = Mutex.new
         @exchange_positions_tui = { rows: [], error: nil, fetched_at: nil }
+        @futures_wallet_tui_mutex = Mutex.new
+        @futures_wallet_tui = {
+          wallet_amount: nil,
+          wallet_currency: nil,
+          wallet_available: nil,
+          wallet_locked: nil,
+          wallet_cross_order_margin: nil,
+          wallet_cross_user_margin: nil,
+          error: nil,
+          fetched_at: nil
+        }
         @smc_setup_store = nil
         @smc_setup_eval = nil
         @smc_setup_planner = nil
         @smc_setup_planner_state = { updated_at: nil, error: nil }
+        @smc_setup_planner_mutex = Mutex.new
+        @smc_setup_planner_running = false
+        @regime_ai_running = false
+        @regime_ai_thread_mutex = Mutex.new
         @smc_setup_mutexes = Hash.new { |h, k| h[k] = Mutex.new }
         init_smc_setup_stack! if @config.smc_setup_enabled?
 
@@ -132,6 +149,7 @@ module CoindcxBot
         pm = @broker.paper? ? paper_snapshot_metrics(ticks) : {}
 
         ex = exchange_positions_tui_for_snapshot
+        live_metrics = build_live_tui_metrics(ex[:rows], ticks)
         Snapshot.new(
           pairs: @config.pairs,
           ticks: ticks,
@@ -154,7 +172,8 @@ module CoindcxBot
           smc_setup: smc_setup_overlay_for_tui,
           exchange_positions: ex[:rows],
           exchange_positions_error: ex[:error],
-          exchange_positions_fetched_at: ex[:fetched_at]
+          exchange_positions_fetched_at: ex[:fetched_at],
+          live_tui_metrics: live_metrics
         )
       end
 
@@ -227,6 +246,7 @@ module CoindcxBot
         merged.merge(Regime::AiBrain.overlay_from_state(snap))
       end
 
+      # Launches the regime AI analysis in a background thread to avoid blocking tick_cycle.
       def refresh_regime_ai_if_due
         return unless @config.regime_ai_enabled?
 
@@ -236,16 +256,35 @@ module CoindcxBot
           return if last && (now - last) < @config.regime_ai_min_interval_seconds
         end
 
+        already_running = @regime_ai_thread_mutex.synchronize do
+          return if @regime_ai_running
+          @regime_ai_running = true
+          false
+        end
+        return if already_running
+
         ctx = build_regime_ai_context
         if @config.regime_ai_include_hmm_context? && @hmm_runtime
           ctx[:hmm] = @hmm_runtime.hmm_context_for_ai
         end
-        return if ctx[:pairs].empty?
+        if ctx[:pairs].empty?
+          @regime_ai_thread_mutex.synchronize { @regime_ai_running = false }
+          return
+        end
 
+        Thread.new do
+          Thread.current.name = 'regime_ai'
+          run_regime_ai_sync(ctx, now)
+        ensure
+          @regime_ai_thread_mutex.synchronize { @regime_ai_running = false }
+        end
+      end
+
+      def run_regime_ai_sync(ctx, started_at)
         brain = (@regime_ai_brain ||= Regime::AiBrain.new(config: @config, logger: @logger))
         res = brain.analyze!(ctx)
         @regime_ai_mutex.synchronize do
-          @regime_ai_state[:updated_at] = now
+          @regime_ai_state[:updated_at] = started_at
           if res.ok && res.payload
             @regime_ai_state[:payload] = res.payload
             @regime_ai_state[:error] = nil
@@ -263,6 +302,18 @@ module CoindcxBot
         return unless @risk.daily_loss_breached?
         return if @journal.open_positions.empty?
         return if @journal.paused? || @journal.kill_switch?
+
+        if !@config.dry_run? && !@config.place_orders?
+          unless @daily_loss_flatten_warned
+            @logger&.warn(
+              '[engine] Daily loss limit breached — flatten skipped: live order placement disabled ' \
+              '(runtime.place_orders / PLACE_ORDER)'
+            )
+            @daily_loss_flatten_warned = true
+          end
+          @journal.set_paused(true) if @config.pause_after_daily_loss_flatten?
+          return
+        end
 
         unless @daily_loss_flatten_warned
           @logger&.warn('[engine] Daily loss limit breached — flattening all positions (risk.flatten_on_daily_loss_breach)')
@@ -340,6 +391,9 @@ module CoindcxBot
         end
       end
 
+      # Launches the SMC planner in a background thread to avoid blocking tick_cycle.
+      # The planner calls Ollama (timeout up to 90s) — running it inline would stall
+      # SL/TP fills and signal generation for the entire duration.
       def refresh_smc_setup_planner_if_due
         return unless @config.smc_setup_planner_enabled?
         return unless @smc_setup_store
@@ -348,12 +402,31 @@ module CoindcxBot
         last = @smc_setup_planner_state[:updated_at]
         return if last && (now - last) < @config.smc_setup_planner_interval_seconds
 
-        ctx = build_smc_planner_context
-        return if ctx[:pairs].empty?
+        already_running = @smc_setup_planner_mutex.synchronize do
+          return if @smc_setup_planner_running
+          @smc_setup_planner_running = true
+          false
+        end
+        return if already_running
 
+        ctx = build_smc_planner_context
+        if ctx[:pairs].empty?
+          @smc_setup_planner_mutex.synchronize { @smc_setup_planner_running = false }
+          return
+        end
+
+        Thread.new do
+          Thread.current.name = 'smc_planner'
+          run_smc_planner_sync(ctx, now)
+        ensure
+          @smc_setup_planner_mutex.synchronize { @smc_setup_planner_running = false }
+        end
+      end
+
+      def run_smc_planner_sync(ctx, started_at)
         brain = (@smc_setup_planner ||= SmcSetup::PlannerBrain.new(config: @config, logger: @logger))
         res = brain.plan!(ctx)
-        @smc_setup_planner_state[:updated_at] = now
+        @smc_setup_planner_state[:updated_at] = started_at
         if res.ok && res.payload
           begin
             @smc_setup_store.upsert_from_hash!(
@@ -786,6 +859,7 @@ module CoindcxBot
         refresh_smc_setup_planner_if_due
         refresh_regime_ai_if_due
         refresh_exchange_positions_for_tui_if_due
+        refresh_futures_wallet_for_tui_if_due
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
@@ -1046,6 +1120,78 @@ module CoindcxBot
             []
           end
         Array(list).map { |h| h.is_a?(Hash) ? h.transform_keys(&:to_sym) : {} }
+      end
+
+      def build_live_tui_metrics(exchange_rows, ticks_hash)
+        return {} unless @config.tui_exchange_mirror?
+
+        w = @futures_wallet_tui_mutex.synchronize { @futures_wallet_tui.dup }
+        unreal = CoindcxBot::Tui::LiveAccountMirror.sum_unrealized_usdt(exchange_rows, ticks_hash)
+        realized = CoindcxBot::Tui::LiveAccountMirror.sum_realized_usdt(exchange_rows)
+        open_n = CoindcxBot::Tui::LiveAccountMirror.open_on_configured_pairs(exchange_rows, @config.pairs)
+        h = {
+          wallet_amount: w[:wallet_amount],
+          wallet_currency: w[:wallet_currency],
+          wallet_available: w[:wallet_available],
+          wallet_locked: w[:wallet_locked],
+          wallet_cross_order_margin: w[:wallet_cross_order_margin],
+          wallet_cross_user_margin: w[:wallet_cross_user_margin],
+          realized_usdt: realized,
+          unrealized_usdt: unreal,
+          open_positions_count: open_n,
+          wallet_error: w[:error]
+        }
+        h.compact
+      end
+
+      def refresh_futures_wallet_for_tui_if_due
+        return unless @config.tui_exchange_mirror?
+        return if @config.dry_run?
+
+        interval = @config.tui_exchange_positions_refresh_seconds
+        now = Time.now
+        @futures_wallet_tui_mutex.synchronize do
+          at = @futures_wallet_tui[:fetched_at]
+          return if at && (now - at) < interval
+        end
+
+        res = @account.futures_wallet(margin_currency_short_name: @config.margin_currency_short_name)
+        snap = nil
+        err = nil
+        if res.ok?
+          snap = CoindcxBot::Tui::LiveAccountMirror.extract_wallet_snapshot_for_display(
+            res.value,
+            @config.margin_currency_short_name
+          )
+        else
+          err = res.message.to_s
+        end
+        @futures_wallet_tui_mutex.synchronize do
+          @futures_wallet_tui = {
+            wallet_amount: snap&.dig(:balance),
+            wallet_currency: snap&.dig(:currency),
+            wallet_available: snap&.dig(:available_balance),
+            wallet_locked: snap&.dig(:locked_balance),
+            wallet_cross_order_margin: snap&.dig(:cross_order_margin),
+            wallet_cross_user_margin: snap&.dig(:cross_user_margin),
+            error: err,
+            fetched_at: Time.now
+          }
+        end
+      rescue StandardError => e
+        @logger&.warn("[tui] futures wallet: #{e.message}")
+        @futures_wallet_tui_mutex.synchronize do
+          @futures_wallet_tui = {
+            wallet_amount: nil,
+            wallet_currency: nil,
+            wallet_available: nil,
+            wallet_locked: nil,
+            wallet_cross_order_margin: nil,
+            wallet_cross_user_margin: nil,
+            error: e.message,
+            fetched_at: Time.now
+          }
+        end
       end
     end
   end

@@ -89,6 +89,50 @@ RSpec.describe CoindcxBot::SmcConfluence::Engine do
       last = described_class.run(candles).last.serialize
       expect(last).to be_a(Hash)
       expect(last.keys).to include('long_score', 'short_score', 'choch_bull', 'structure_bias', 'pdh_sweep', 'pdl_sweep')
+      expect(last.keys).to include('fvg_bull_align', 'in_discount')
+    end
+
+    it 'marks in_discount when premium_discount_lookback is set and close is below the rolling midpoint' do
+      cfg = CoindcxBot::SmcConfluence::Configuration.new(
+        smc_swing: 2,
+        ms_swing: 2,
+        tl_pivot_len: 2,
+        liq_lookback: 5,
+        vp_bars: 8,
+        min_score: 10,
+        premium_discount_lookback: 5
+      )
+      candles = []
+      12.times do |i|
+        candles << candle(i, open: 110, high: 120, low: 100, close: 110, volume: 50)
+      end
+      candles << candle(12, open: 106, high: 120, low: 100, close: 105, volume: 50)
+      last = described_class.run(candles, configuration: cfg).last
+      expect(last.in_discount).to be(true)
+      expect(last.in_premium).to be(false)
+    end
+
+    it 'marks fvg_bull_align when fvg_confluence is on and price overlaps an active bullish gap' do
+      cfg = CoindcxBot::SmcConfluence::Configuration.new(
+        smc_swing: 2,
+        ms_swing: 2,
+        tl_pivot_len: 2,
+        liq_lookback: 5,
+        vp_bars: 8,
+        min_score: 10,
+        ob_expire: 200,
+        fvg_confluence: true
+      )
+      candles = []
+      40.times do |i|
+        candles << candle(i, open: 100, high: 101, low: 99, close: 100, volume: 50)
+      end
+      candles << candle(40, open: 99, high: 100, low: 98, close: 99, volume: 50)
+      candles << candle(41, open: 99, high: 101, low: 99, close: 100, volume: 50)
+      candles << candle(42, open: 115, high: 120, low: 110, close: 118, volume: 50)
+      candles << candle(43, open: 107, high: 108, low: 105, close: 106, volume: 50)
+      last = described_class.run(candles, configuration: cfg).last
+      expect(last.fvg_bull_align).to be(true)
     end
 
     it 'exposes bos_relaxed? when signal_mode is bos_relaxed' do

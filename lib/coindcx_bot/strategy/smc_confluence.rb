@@ -18,14 +18,14 @@ module CoindcxBot
         exec = candles_exec
         return hold(pair, 'insufficient_exec_bars') if exec.size < min_exec_bars
 
-        if position
-          return manage_open(pair, position, ltp, exec)
-        end
-
         rows = ::CoindcxBot::SmcConfluence::Candles.from_dto(exec)
         series = ::CoindcxBot::SmcConfluence::Engine.run(rows, configuration: @smc_cfg)
         last = series.last
         return hold(pair, 'no_smc_bar') unless last
+
+        if position
+          return manage_open(pair, position, ltp, exec, last)
+        end
 
         price = BigDecimal((ltp || exec.last.close).to_s)
         return hold(pair, 'no_price') unless price.positive?
@@ -33,7 +33,7 @@ module CoindcxBot
         meta = smc_metadata(last)
 
         if last.long_signal && !htf_blocks_entry?(:long, candles_htf)
-          stop = stop_for_long(price)
+          stop = stop_for_long(price, last)
           Signal.new(
             action: :open_long,
             pair: pair,
@@ -43,7 +43,7 @@ module CoindcxBot
             metadata: meta
           )
         elsif last.short_signal && !htf_blocks_entry?(:short, candles_htf)
-          stop = stop_for_short(price)
+          stop = stop_for_short(price, last)
           Signal.new(
             action: :open_short,
             pair: pair,
@@ -112,7 +112,9 @@ module CoindcxBot
       end
 
       def min_exec_bars
-        [@smc_cfg.vp_bars, @smc_cfg.smc_swing * 4 + 10, @smc_cfg.ms_swing * 4 + 10, @smc_cfg.liq_lookback + 5, 50].max
+        pd = @smc_cfg.premium_discount_lookback
+        pd_floor = (pd.is_a?(Integer) && pd.positive?) ? (pd + 5) : 0
+        [@smc_cfg.vp_bars, @smc_cfg.smc_swing * 4 + 10, @smc_cfg.ms_swing * 4 + 10, @smc_cfg.liq_lookback + 5, pd_floor, 50].max
       end
 
       def stop_distance_pct
@@ -123,12 +125,30 @@ module CoindcxBot
         BigDecimal(@cfg.fetch(:take_profit_pct, 0).to_s)
       end
 
-      def stop_for_long(price)
-        price * (BigDecimal('1') - stop_distance_pct)
+      # Structure-aware stop: use the Order Block boundary when available,
+      # falling back to flat % when no valid OB exists.
+      # For longs: SL = bottom of the bullish OB (institutional demand zone).
+      # For shorts: SL = top of the bearish OB (institutional supply zone).
+      OB_BUFFER_MULT = BigDecimal('0.002') # 0.2% buffer below/above OB edge
+
+      def stop_for_long(price, bar = nil)
+        if bar && bar.respond_to?(:bull_ob_valid) && bar.bull_ob_valid &&
+           bar.respond_to?(:bull_ob_lo) && bar.bull_ob_lo.to_f.positive?
+          ob_lo = BigDecimal(bar.bull_ob_lo.to_s)
+          ob_lo * (BigDecimal('1') - OB_BUFFER_MULT)
+        else
+          price * (BigDecimal('1') - stop_distance_pct)
+        end
       end
 
-      def stop_for_short(price)
-        price * (BigDecimal('1') + stop_distance_pct)
+      def stop_for_short(price, bar = nil)
+        if bar && bar.respond_to?(:bear_ob_valid) && bar.bear_ob_valid &&
+           bar.respond_to?(:bear_ob_hi) && bar.bear_ob_hi.to_f.positive?
+          ob_hi = BigDecimal(bar.bear_ob_hi.to_s)
+          ob_hi * (BigDecimal('1') + OB_BUFFER_MULT)
+        else
+          price * (BigDecimal('1') + stop_distance_pct)
+        end
       end
 
       def htf_alignment?
@@ -163,7 +183,11 @@ module CoindcxBot
           choch_bull: last.choch_bull,
           choch_bear: last.choch_bear,
           bos_bull: last.bos_bull,
-          bos_bear: last.bos_bear
+          bos_bear: last.bos_bear,
+          fvg_bull_align: last.fvg_bull_align,
+          fvg_bear_align: last.fvg_bear_align,
+          in_discount: last.in_discount,
+          in_premium: last.in_premium
         }
       end
 
@@ -204,7 +228,7 @@ module CoindcxBot
         "smc_flat L#{ls}S#{ss}·#{min}"
       end
 
-      def manage_open(pair, position, ltp, exec)
+      def manage_open(pair, position, ltp, exec, last)
         return hold(pair, 'no_ltp') unless ltp
 
         side = position[:side].to_s
@@ -214,7 +238,8 @@ module CoindcxBot
         ltp_bd = BigDecimal(ltp.to_s)
         id = position[:id]
 
-        if side == 'long' && opposite_fire?(exec, :short)
+        # Use the already-computed BarResult instead of re-running the full engine
+        if side == 'long' && last&.short_signal
           if opposite_smc_flip_close_allowed?('long', entry, ltp_bd)
             return Signal.new(action: :close, pair: pair, side: :long, stop_price: nil, reason: 'smc_opposite_short',
                               metadata: { position_id: id })
@@ -222,7 +247,7 @@ module CoindcxBot
 
           return hold(pair, @close_on_opposite_smc ? 'smc_opp_hold_gain' : 'smc_opp_flip_disabled')
         end
-        if side == 'short' && opposite_fire?(exec, :long)
+        if side == 'short' && last&.long_signal
           if opposite_smc_flip_close_allowed?('short', entry, ltp_bd)
             return Signal.new(action: :close, pair: pair, side: :short, stop_price: nil, reason: 'smc_opposite_long',
                               metadata: { position_id: id })
@@ -246,6 +271,8 @@ module CoindcxBot
         hold(pair, 'smc_in_pos')
       end
 
+      # DEPRECATED: kept for backward compatibility if called externally.
+      # The main evaluate path now passes the cached BarResult to manage_open.
       def opposite_fire?(exec, direction)
         rows = ::CoindcxBot::SmcConfluence::Candles.from_dto(exec)
         last = ::CoindcxBot::SmcConfluence::Engine.run(rows, configuration: @smc_cfg).last

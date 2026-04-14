@@ -6,6 +6,7 @@ module CoindcxBot
       attr_reader :bar_index,
                   :bos_bull, :bos_bear, :choch_bull, :choch_bear, :structure_bias,
                   :in_bull_ob, :in_bear_ob, :bull_ob_valid, :bear_ob_valid,
+                  :bull_ob_lo, :bear_ob_hi,
                   :recent_bull_sweep, :recent_bear_sweep,
                   :liq_sweep_bull, :liq_sweep_bear,
                   :ms_trend,
@@ -14,7 +15,8 @@ module CoindcxBot
                   :vp_bull_conf, :vp_bear_conf, :near_poc, :near_vah, :near_val,
                   :long_score, :short_score, :long_signal, :short_signal,
                   :pdh_sweep, :pdl_sweep,
-                  :pdh, :pdl, :poc, :vah, :val_line, :atr14
+                  :pdh, :pdl, :poc, :vah, :val_line, :atr14,
+                  :fvg_bull_align, :fvg_bear_align, :in_discount, :in_premium
 
       def initialize(**attrs)
         @bar_index = attrs[:bar_index]
@@ -27,6 +29,8 @@ module CoindcxBot
         @in_bear_ob = attrs[:in_bear_ob]
         @bull_ob_valid = attrs[:bull_ob_valid]
         @bear_ob_valid = attrs[:bear_ob_valid]
+        @bull_ob_lo = attrs[:bull_ob_lo]
+        @bear_ob_hi = attrs[:bear_ob_hi]
         @recent_bull_sweep = attrs[:recent_bull_sweep]
         @recent_bear_sweep = attrs[:recent_bear_sweep]
         @liq_sweep_bull = attrs[:liq_sweep_bull]
@@ -55,6 +59,10 @@ module CoindcxBot
         @vah = attrs[:vah]
         @val_line = attrs[:val_line]
         @atr14 = attrs[:atr14]
+        @fvg_bull_align = attrs.fetch(:fvg_bull_align, false)
+        @fvg_bear_align = attrs.fetch(:fvg_bear_align, false)
+        @in_discount = attrs.fetch(:in_discount, false)
+        @in_premium = attrs.fetch(:in_premium, false)
       end
 
       def serialize
@@ -69,6 +77,8 @@ module CoindcxBot
           'in_bear_ob' => in_bear_ob,
           'bull_ob_valid' => bull_ob_valid,
           'bear_ob_valid' => bear_ob_valid,
+          'bull_ob_lo' => bull_ob_lo,
+          'bear_ob_hi' => bear_ob_hi,
           'recent_bull_sweep' => recent_bull_sweep,
           'recent_bear_sweep' => recent_bear_sweep,
           'liq_sweep_bull' => liq_sweep_bull,
@@ -96,7 +106,11 @@ module CoindcxBot
           'poc' => poc,
           'vah' => vah,
           'val' => val_line,
-          'atr14' => atr14
+          'atr14' => atr14,
+          'fvg_bull_align' => fvg_bull_align,
+          'fvg_bear_align' => fvg_bear_align,
+          'in_discount' => in_discount,
+          'in_premium' => in_premium
         }
       end
     end

@@ -3,12 +3,17 @@
 require 'tty-cursor'
 require 'stringio'
 require_relative '../term_width'
+require_relative '../theme'
+require_relative '../ansi_string'
 
 module CoindcxBot
   module Tui
     module Panels
       # SMC TradeSetup planner (Ollama) + active FSM rows — separate from REGIME strip (HMM / regime.ai).
       class SmcSetupStripPanel
+        include Theme
+        include AnsiString
+
         def initialize(engine:, origin_row:, origin_col: 0, output: $stdout)
           @engine = engine
           @row = origin_row
@@ -25,15 +30,15 @@ module CoindcxBot
           buf = StringIO.new
           buf << @cursor.save
           if !truthy?(s[:enabled])
-            buf << move(@row) << clear_line(line_off(term_width))
+            buf << move(@row) << clr(line_off(term_width))
             buf << @cursor.restore
             @output.print buf.string
             @output.flush
             return
           end
 
-          buf << move(@row) << clear_line(line_planner(s, term_width))
-          buf << move(@row + 1) << clear_line(line_setups(s, term_width))
+          buf << move(@row) << clr(line_planner(s, term_width))
+          buf << move(@row + 1) << clr(line_setups(s, term_width))
           buf << @cursor.restore
           @output.print buf.string
           @output.flush
@@ -56,7 +61,7 @@ module CoindcxBot
         end
 
         def line_off(w)
-          colored = "#{bold('SMC·SETUP')} #{dim('off')}  #{dim('·')}  #{dim('bot.yml smc_setup.enabled')}"
+          colored = "#{bold('SMC·SETUP')} #{muted('off')}  #{muted('·')}  #{muted('bot.yml smc_setup.enabled')}"
           p = strip_ansi(colored)
           return colored if p.length <= w
 
@@ -65,12 +70,12 @@ module CoindcxBot
 
         def line_planner(s, w)
           plan_on = truthy?(s[:planner_enabled])
-          plan_s = plan_on ? green('PLANNER·ON') : dim('PLANNER·OFF')
-          gk = truthy?(s[:gatekeeper_enabled]) ? yellow('GK·ON') : dim('GK·OFF')
-          ax = truthy?(s[:auto_execute]) ? cyan('AUTO·EXE') : dim('AUTO·OFF')
-          last = dim(format_last_run(s[:planner_last_at], s[:planner_interval_s]))
+          plan_s = plan_on ? profit('PLANNER·ON') : muted('PLANNER·OFF')
+          gk = truthy?(s[:gatekeeper_enabled]) ? warning('GK·ON') : muted('GK·OFF')
+          ax = truthy?(s[:auto_execute]) ? accent('AUTO·EXE') : muted('AUTO·OFF')
+          last = muted(format_last_run(s[:planner_last_at], s[:planner_interval_s]))
           err = s[:planner_error].to_s.strip
-          err_part = err.empty? ? nil : red("ERR: #{err[0, 56]}")
+          err_part = err.empty? ? nil : loss("ERR: #{err[0, 56]}")
           colored = [bold('SMC·SETUP'), plan_s, gk, ax, last, err_part].compact.join('  ')
           p = strip_ansi(colored)
           return colored if p.length <= w
@@ -83,7 +88,7 @@ module CoindcxBot
           if rows.empty?
             plain = '(no active TradeSetups — wait for planner or: bin/bot smc-setup plan-once)'
             t = plain.length > w ? "#{plain[0, w - 1]}…" : plain
-            return dim(t)
+            return muted(t)
           end
 
           parts = rows.first(5).map do |r|
@@ -96,7 +101,7 @@ module CoindcxBot
           end
           extra = s[:active_count].to_i > 5 ? " +#{s[:active_count].to_i - 5}" : ''
           plain = "ACTIVE: #{parts.join(' | ')}#{extra}"
-          colored = "#{bold('ACTIVE:')} #{parts.join(dim(' | '))}#{dim(extra)}"
+          colored = "#{bold('ACTIVE:')} #{parts.join(muted(' | '))}#{muted(extra)}"
           return colored if plain.length <= w
 
           "#{plain[0, w - 1]}…"
@@ -115,24 +120,13 @@ module CoindcxBot
           end
         end
 
-        def strip_ansi(s)
-          s.to_s.gsub(/\e\[[0-9;]*m/, '')
-        end
-
         def move(row)
           @cursor.move_to(@col, row)
         end
 
-        def clear_line(content)
+        def clr(content)
           "\e[0m#{content}\e[K"
         end
-
-        def bold(str) = "\e[1m#{str}\e[0m"
-        def dim(str) = "\e[2m#{str}\e[0m"
-        def green(str) = "\e[32m#{str}\e[0m"
-        def yellow(str) = "\e[33m#{str}\e[0m"
-        def cyan(str) = "\e[36m#{str}\e[0m"
-        def red(str) = "\e[31m#{str}\e[0m"
       end
     end
   end

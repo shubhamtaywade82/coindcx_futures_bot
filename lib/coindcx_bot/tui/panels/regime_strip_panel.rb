@@ -4,12 +4,17 @@ require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
 require_relative '../term_width'
+require_relative '../theme'
+require_relative '../ansi_string'
 
 module CoindcxBot
   module Tui
     module Panels
       # Two-line regime summary (layout.md-style) between header and futures grid.
       class RegimeStripPanel
+        include Theme
+        include AnsiString
+
         def initialize(engine:, origin_row:, origin_col: 0, output: $stdout)
           @engine = engine
           @row = origin_row
@@ -44,7 +49,7 @@ module CoindcxBot
           w = term_width
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row) << clear_line(compact_disabled_line(w))
+          buf << move(@row) << clr(compact_disabled_line(w))
           buf << @cursor.restore
           @output.print buf.string
           @output.flush
@@ -56,17 +61,17 @@ module CoindcxBot
           w = term_width
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row) << clear_line(top_rule(w))
-          buf << move(@row + 1) << clear_line(line_primary(r, w))
-          buf << move(@row + 2) << clear_line(line_secondary(r, w))
-          buf << move(@row + 3) << clear_line(bot_rule(w))
+          buf << move(@row) << clr(top_rule(w))
+          buf << move(@row + 1) << clr(line_primary(r, w))
+          buf << move(@row + 2) << clr(line_secondary(r, w))
+          buf << move(@row + 3) << clr(bot_rule(w))
           buf << @cursor.restore
           @output.print buf.string
           @output.flush
         end
 
         def compact_disabled_line(w)
-          core = "#{bold('REGIME')} #{dim('off')}"
+          core = "#{bold('REGIME')} #{muted('off')}"
           used = visible_len(core)
           max_tail = w - used
           return core if max_tail < 4
@@ -78,14 +83,8 @@ module CoindcxBot
             else
               "#{hint_plain[0, [max_tail - 1, 0].max]}…"
             end
-          "#{core}#{dim(tail_plain)}"
+          "#{core}#{muted(tail_plain)}"
         end
-
-        def visible_len(s)
-          s.gsub(/\e\[[0-9;]*m/, '').length
-        end
-
-        def bold(str) = "\e[1m#{str}\e[0m"
 
         def normalize_regime(raw)
           base = CoindcxBot::Regime::TuiState.disabled
@@ -141,7 +140,7 @@ module CoindcxBot
             "AI:#{ai}"
           ].join(' ')
           line = plain.length > text_w ? "#{plain[0, text_w - 1]}…" : plain.ljust(text_w)
-          "│ #{dim(line)} │"
+          "│ #{muted(line)} │"
         end
 
         def standby_waiting?(r)
@@ -198,11 +197,9 @@ module CoindcxBot
           @cursor.move_to(@col, row)
         end
 
-        def clear_line(content)
+        def clr(content)
           "\e[0m#{content}\e[K"
         end
-
-        def dim(str) = "\e[2m#{str}\e[0m"
       end
     end
   end
