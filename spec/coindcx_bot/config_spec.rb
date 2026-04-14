@@ -110,6 +110,64 @@ RSpec.describe CoindcxBot::Config do
     expect(cfg.paper_exchange_enabled?).to be(false)
   end
 
+  it 'defaults place_orders? to true when live and runtime.place_orders is omitted' do
+    cfg = described_class.new(minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3' }))
+    expect(cfg.place_orders?).to be(true)
+  end
+
+  it 'is false when live and runtime.place_orders is false' do
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3', place_orders: false })
+    )
+    expect(cfg.place_orders?).to be(false)
+  end
+
+  it 'treats place_orders? as true in paper mode regardless of runtime.place_orders' do
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: true, journal_path: '/tmp/x.sqlite3', place_orders: false })
+    )
+    expect(cfg.place_orders?).to be(true)
+  end
+
+  it 'enables tui_exchange_mirror when live and place_orders is false' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        runtime: {
+          dry_run: false,
+          journal_path: '/tmp/x.sqlite3',
+          place_orders: false,
+          tui_exchange_positions: true
+        }
+      )
+    )
+    expect(cfg.tui_exchange_mirror?).to be(true)
+  end
+
+  it 'disables tui_exchange_mirror when live with place_orders unless runtime.tui_exchange_mirror is set' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        runtime: {
+          dry_run: false,
+          journal_path: '/tmp/x.sqlite3',
+          place_orders: true,
+          tui_exchange_positions: true
+        }
+      )
+    )
+    expect(cfg.tui_exchange_mirror?).to be(false)
+  end
+
+  it 'lets PLACE_ORDER env override YAML when live' do
+    prev = ENV['PLACE_ORDER']
+    ENV['PLACE_ORDER'] = '0'
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3', place_orders: true })
+    )
+    expect(cfg.place_orders?).to be(false)
+  ensure
+    prev.nil? ? ENV.delete('PLACE_ORDER') : ENV['PLACE_ORDER'] = prev
+  end
+
   it 'fx_enabled? defaults true when fx section absent' do
     cfg = described_class.new(minimal_bot_config)
     expect(cfg.fx_enabled?).to be(true)

@@ -12,7 +12,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       execution: { order_defaults: { leverage: 5 } },
       trading_mode_label: 'SWING',
       scalper_mode?: false,
-      tui_exchange_positions_enabled?: false
+      tui_exchange_positions_enabled?: false,
+      tui_exchange_mirror?: false
     )
   end
 
@@ -44,7 +45,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
       exchange_positions: [],
       exchange_positions_error: nil,
-      exchange_positions_fetched_at: nil
+      exchange_positions_fetched_at: nil,
+      live_tui_metrics: {}
     )
   end
 
@@ -121,6 +123,98 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
     it 'surfaces journal stop price in the SL column' do
       expect(vm.execution_rows.first[:sl]).to eq('135.00')
     end
+
+    context 'when live and tui_exchange_mirror shows exchange positions' do
+      let(:config) do
+        instance_double(
+          CoindcxBot::Config,
+          risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
+          strategy: { name: 'smc_confluence' },
+          resolved_max_daily_loss_inr: BigDecimal('1500'),
+          execution: { order_defaults: { leverage: 5 } },
+          trading_mode_label: 'SCALP',
+          scalper_mode?: false,
+          tui_exchange_positions_enabled?: true,
+          tui_exchange_mirror?: true
+        )
+      end
+
+      let(:snapshot) do
+        CoindcxBot::Core::Engine::Snapshot.new(
+          pairs: %w[B-ETH_USDT],
+          ticks: { 'B-ETH_USDT' => { price: '3100.0', at: Time.now } },
+          positions: [],
+          paused: false,
+          kill_switch: false,
+          stale: false,
+          last_error: nil,
+          daily_pnl: BigDecimal('0'),
+          running: true,
+          dry_run: false,
+          stale_tick_seconds: 45,
+          paper_metrics: {},
+          capital_inr: BigDecimal('50_000'),
+          recent_events: [],
+          working_orders: [],
+          ws_last_tick_ms_ago: 5,
+          strategy_last_by_pair: {},
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+          exchange_positions: [
+            { pair: 'B-ETH_USDT', active_pos: '-0.5', average_entry_price: '3000', unrealized_pnl: '-12.5' }
+          ],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: Time.now,
+          live_tui_metrics: {
+            wallet_amount: BigDecimal('1000'),
+            wallet_currency: 'USDT',
+            unrealized_usdt: BigDecimal('-12.5'),
+            open_positions_count: 1
+          }
+        )
+      end
+
+      let(:tick_ticks) do
+        {
+          'B-ETH_USDT' => CoindcxBot::Tui::TickStore::Tick.new(
+            symbol: 'B-ETH_USDT',
+            ltp: 3100.0,
+            change_pct: 0.1,
+            updated_at: Time.now,
+            bid: 3099.0,
+            ask: 3101.0,
+            mark: 3100.5
+          )
+        }
+      end
+
+      let(:vm) do
+        described_class.new(
+          snapshot: snapshot,
+          tick_ticks: tick_ticks,
+          symbols: %w[B-ETH_USDT],
+          ws_stale_fn: ->(_) { false },
+          config: config
+        )
+      end
+
+      it 'fills execution row from the exchange snapshot instead of FLAT' do
+        row = vm.execution_rows.first
+        expect(row[:side]).to eq('SHORT')
+        expect(row[:qty]).to eq('0.5')
+        expect(row[:pnl_label]).to include('-12.50')
+      end
+
+      it 'shows uPnL % from exchange dollars over entry notional, not raw mark distance' do
+        row = vm.execution_rows.first
+        # -12.5 / (0.5 * 3000) * 100 ≈ -0.83% — not (3000 - 3100.5) / 3000 * 100 (mark-implied move)
+        expect(row[:pnl_label]).to include('(-0.83%)')
+      end
+
+      it 'counts open positions from the mirrored list' do
+        expect(vm.display_open_positions_count).to eq(1)
+      end
+    end
   end
 
   describe '#configured_leverage_label' do
@@ -136,7 +230,9 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         resolved_max_daily_loss_inr: BigDecimal('1500'),
         execution: { order_defaults: { margin_currency_short_name: 'USDT' } },
         trading_mode_label: 'SWING',
-        scalper_mode?: false
+        scalper_mode?: false,
+        tui_exchange_positions_enabled?: false,
+        tui_exchange_mirror?: false
       )
       vm2 = described_class.new(
         snapshot: snapshot,
@@ -190,6 +286,45 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       expect(lines.size).to eq(4)
       expect(lines.last).to include('EXCH')
       expect(lines.last).to include('SOLL60.9')
+    end
+
+    it 'appends WLT when live mirror is on and live_tui_metrics include wallet margin fields' do
+      cfg = instance_double(
+        CoindcxBot::Config,
+        risk: { max_daily_loss_inr: 1_500, max_leverage: 10 },
+        strategy: { name: 'supertrend_profit' },
+        resolved_max_daily_loss_inr: BigDecimal('1500'),
+        execution: { order_defaults: { leverage: 5 } },
+        trading_mode_label: 'SWING',
+        scalper_mode?: false,
+        tui_exchange_positions_enabled?: false,
+        tui_exchange_mirror?: true
+      )
+      snap_w = CoindcxBot::Core::Engine::Snapshot.new(
+        **snapshot.to_h.merge(
+          dry_run: false,
+          live_tui_metrics: {
+            wallet_amount: BigDecimal('1000'),
+            wallet_currency: 'INR',
+            wallet_locked: BigDecimal('50'),
+            wallet_cross_order_margin: BigDecimal('10'),
+            wallet_cross_user_margin: BigDecimal('20')
+          }
+        )
+      )
+      vm_w = described_class.new(
+        snapshot: snap_w,
+        tick_ticks: tick_ticks,
+        symbols: %w[B-SOL_USDT],
+        ws_stale_fn: ->(_) { false },
+        config: cfg
+      )
+      lines = vm_w.grid_sidebar_lines
+      expect(lines.size).to eq(4)
+      expect(lines.last).to start_with('WLT ')
+      expect(lines.last).to include('lck₹50')
+      expect(lines.last).to include('xo₹10')
+      expect(lines.last).to include('xu₹20')
     end
   end
 

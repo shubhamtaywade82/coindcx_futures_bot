@@ -377,6 +377,20 @@ module CoindcxBot
       truthy?(runtime[:dry_run])
     end
 
+    # Live (+dry_run: false+) only: when false, the engine uses live feeds and read-only account APIs but does not
+    # place or exit futures orders. Ignored in paper (+dry_run: true+). YAML +runtime.place_orders+; env +PLACE_ORDER+
+    # overrides when set (true/false/1/0).
+    def place_orders?
+      return true if dry_run?
+
+      raw_place = runtime[:place_orders]
+      env_place = ENV['PLACE_ORDER'].to_s.strip
+      v = env_place.empty? ? raw_place : env_place
+      return true if v.nil?
+
+      truthy?(v)
+    end
+
     def paper_config
       raw.fetch(:paper, {})
     end
@@ -409,6 +423,18 @@ module CoindcxBot
       f < 5.0 ? 5.0 : f
     rescue ArgumentError, TypeError
       25.0
+    end
+
+    # When true (live only): TUI execution grid + header balance/unrealized mirror CoinDCX account data
+    # (+futures wallet) instead of journal-only rows. Auto-on when +place_orders?+ is false (observe mode).
+    # Optional explicit +runtime.tui_exchange_mirror: true+ when placing live orders but showing exchange rows.
+    def tui_exchange_mirror?
+      return false if dry_run?
+      return false unless tui_exchange_positions_enabled?
+
+      return true unless place_orders?
+
+      truthy?(runtime[:tui_exchange_mirror])
     end
 
     # Body filter for POST /derivatives/futures/positions (CoinDCX often needs this to return rows).

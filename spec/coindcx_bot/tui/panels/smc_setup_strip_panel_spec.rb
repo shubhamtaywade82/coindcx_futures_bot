@@ -30,7 +30,8 @@ RSpec.describe CoindcxBot::Tui::Panels::SmcSetupStripPanel do
       smc_setup: smc,
       exchange_positions: [],
       exchange_positions_error: nil,
-      exchange_positions_fetched_at: nil
+      exchange_positions_fetched_at: nil,
+      live_tui_metrics: {}
     )
   end
 

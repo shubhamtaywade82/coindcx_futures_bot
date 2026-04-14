@@ -68,6 +68,7 @@ module CoindcxBot
 
         def line_mode_engine_kill_ws_lat_feed(snap, w)
           mode = snap.dry_run ? bold_magenta('PAPER') : bold_red('LIVE')
+          exec_off = (!snap.dry_run && !@engine.config.place_orders?) ? on_yellow(' EXE·OFF ') : nil
           profile = trading_profile_fragment
           eng =
             if @engine.engine_loop_crashed?
@@ -95,7 +96,7 @@ module CoindcxBot
           join_compact(
             w,
             [
-              "MODE: #{mode}", profile, regime_header_fragment(snap), eng, pause,
+              "MODE: #{mode}", exec_off, profile, regime_header_fragment(snap), eng, pause,
               kill, ws, feed, focus_fragment, leverage_fragment, lat
             ].compact
           )
@@ -115,6 +116,15 @@ module CoindcxBot
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
               ].compact.join(muted(' │ '))
+            elsif live_tui_metrics?(snap)
+              m = snap.live_tui_metrics
+              unreal = m[:unrealized_usdt] || BigDecimal('0')
+              [
+                muted('REAL USDT: —'),
+                "#{bold('UNREAL USDT: ')}#{colored_num(unreal)}",
+                "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
+                "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
+              ].join(muted(' │ '))
             else
               [
                 muted('REAL USDT: —'),
@@ -127,7 +137,8 @@ module CoindcxBot
         end
 
         # Paper: config capital (INR) + (realized + unrealized) USDT × inr_per_usdt (mark-to-market equity).
-        # Live: config capital only.
+        # Live: config capital only; with +live_tui_metrics+ (exchange mirror): futures wallet in margin currency
+        # (INR shown as-is; USDT converted via +inr_per_usdt+).
         def balance_line(snap)
           if paper_metrics?(snap)
             base = snap.capital_inr || BigDecimal('0')
@@ -136,6 +147,29 @@ module CoindcxBot
             fx = @engine.inr_per_usdt
             total = base + ((realized_usdt + unreal_usdt) * fx)
             bold('BAL: ') + fmt_inr(total)
+          elsif live_tui_metrics?(snap)
+            m = snap.live_tui_metrics
+            fx = @engine.inr_per_usdt
+            if m[:wallet_amount] && m[:wallet_currency]
+              amt = BigDecimal(m[:wallet_amount].to_s)
+              case m[:wallet_currency].to_s.upcase
+              when 'INR'
+                bold('BAL: ') + fmt_inr(amt) + muted(' ·futures wallet')
+              when 'USDT'
+                bold('BAL: ') + fmt_inr(amt * fx) + muted(' ·futures wallet')
+              else
+                muted('BAL: —')
+              end
+            elsif m[:balance_usdt]
+              wallet_inr = BigDecimal(m[:balance_usdt].to_s) * fx
+              bold('BAL: ') + fmt_inr(wallet_inr) + muted(' ·futures wallet')
+            elsif snap.capital_inr
+              unreal = BigDecimal((m[:unrealized_usdt] || 0).to_s)
+              base = snap.capital_inr
+              bold('BAL: ') + fmt_inr(base + (unreal * fx)) + muted(' ·cap+unreal')
+            else
+              muted('BAL: —')
+            end
           elsif snap.capital_inr
             bold('BAL: ') + fmt_inr(snap.capital_inr)
           else
@@ -146,7 +180,7 @@ module CoindcxBot
         end
 
         def line_pos_ord_err_last(snap, vm, w)
-          pos_n = Array(snap.positions).size
+          pos_n = vm.display_open_positions_count
           ord_n = Array(snap.working_orders).size
           err = snap.last_error ? loss('1') : muted('0')
           last = accent(vm.last_event_type.to_s)
@@ -193,6 +227,20 @@ module CoindcxBot
 
         def paper_metrics?(snap)
           snap.paper_metrics.is_a?(Hash) && snap.paper_metrics.any?
+        end
+
+        def live_tui_metrics?(snap)
+          m = snap.live_tui_metrics
+          return false unless m.is_a?(Hash) && m.any?
+
+          m.key?(:wallet_amount) ||
+            m.key?(:wallet_available) ||
+            m.key?(:wallet_locked) ||
+            m.key?(:wallet_cross_order_margin) ||
+            m.key?(:wallet_cross_user_margin) ||
+            m.key?(:balance_usdt) ||
+            m.key?(:unrealized_usdt) ||
+            m.key?(:open_positions_count)
         end
 
         def fmt_inr(v)

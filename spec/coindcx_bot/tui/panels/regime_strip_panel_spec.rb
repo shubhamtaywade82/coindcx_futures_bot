@@ -29,7 +29,8 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
       smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
       exchange_positions: [],
       exchange_positions_error: nil,
-      exchange_positions_fetched_at: nil
+      exchange_positions_fetched_at: nil,
+      live_tui_metrics: {}
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }

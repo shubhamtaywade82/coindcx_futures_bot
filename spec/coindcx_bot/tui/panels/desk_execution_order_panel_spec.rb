@@ -34,7 +34,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
       smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
       exchange_positions: [],
       exchange_positions_error: nil,
-      exchange_positions_fetched_at: nil
+      exchange_positions_fetched_at: nil,
+      live_tui_metrics: {}
     )
   end
   let(:config) do
@@ -106,7 +107,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
           smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
           exchange_positions: [],
           exchange_positions_error: nil,
-          exchange_positions_fetched_at: nil
+          exchange_positions_fetched_at: nil,
+          live_tui_metrics: {}
         )
       end
 

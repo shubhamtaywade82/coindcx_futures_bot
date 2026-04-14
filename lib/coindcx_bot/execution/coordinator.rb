@@ -103,6 +103,11 @@ module CoindcxBot
 
         if @broker.paper?
           paper_flatten_pair(pair_s, ltp)
+        elsif live_orders_disabled?
+          @logger&.warn(
+            "[live] flatten skipped for #{pair_s}: order placement disabled (runtime.place_orders / PLACE_ORDER)"
+          )
+          return :ok
         else
           @broker.close_position(pair: pair_s, side: nil, quantity: 0, ltp: 0)
         end
@@ -183,6 +188,21 @@ module CoindcxBot
       end
 
       def open_via_live_broker(signal, quantity, entry_price, leverage)
+        if live_orders_disabled?
+          @journal.log_event(
+            'open_failed',
+            pair: signal.pair,
+            action: signal.action.to_s,
+            reason: signal.reason.to_s,
+            leverage: leverage,
+            detail: 'live_orders_disabled'
+          )
+          @logger&.warn(
+            "[live] order placement disabled (runtime.place_orders / PLACE_ORDER) — skipping open for #{signal.pair}"
+          )
+          return :failed
+        end
+
         result = @broker.place_order(rest_futures_open_order(signal, quantity, leverage))
         if result == :failed
           @journal.log_event(
@@ -299,6 +319,21 @@ module CoindcxBot
       end
 
       def close_via_live_broker(signal, close_id, exit_price)
+        if live_orders_disabled?
+          @journal.log_event(
+            'signal_close',
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            position_id: close_id,
+            outcome: 'live_orders_disabled',
+            pnl_booked: false
+          )
+          @logger&.warn(
+            "[live] exit disabled (runtime.place_orders / PLACE_ORDER) — skipping close for #{signal.pair} id=#{close_id}"
+          )
+          return :failed
+        end
+
         result = @broker.close_position(
           pair: signal.pair.to_s,
           side: nil,
@@ -363,6 +398,10 @@ module CoindcxBot
           order_type: 'market_order',
           client_order_id: "coindcx-bot-#{SecureRandom.uuid}"
         }
+      end
+
+      def live_orders_disabled?
+        !@broker.paper? && !@config.place_orders?
       end
 
       def metadata_symbols(signal)

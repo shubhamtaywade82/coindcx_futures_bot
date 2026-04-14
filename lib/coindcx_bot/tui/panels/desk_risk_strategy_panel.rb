@@ -69,7 +69,7 @@ module CoindcxBot
         end
 
         def risk_line_two(vm, snap)
-          open_n = Array(snap.positions).size
+          open_n = vm.display_open_positions_count
           ord_n = Array(snap.working_orders).size
           slip = vm.paper_slippage_total
           slip_part =

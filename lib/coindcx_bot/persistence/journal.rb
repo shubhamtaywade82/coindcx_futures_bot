@@ -190,6 +190,39 @@ module CoindcxBot
         row ? row['c'].to_i : 0
       end
 
+      # Oldest non-terminal rows first (`created_at`, then `setup_id`). Skips setups linked to an
+      # open position so live risk state is never dropped to make room for a new planner row.
+      def smc_setup_invalidate_oldest_active_for_pair!(pair, slots_needed:)
+        need = slots_needed.to_i
+        return 0 if need <= 0
+
+        placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
+        sql = <<~SQL
+          SELECT setup_id FROM smc_trade_setups
+          WHERE pair = ? AND state NOT IN (#{placeholders})
+          ORDER BY created_at ASC, setup_id ASC
+        SQL
+        rows = @db.execute(sql, [pair.to_s, *TERMINAL_SMC_SETUP_STATES])
+        freed = 0
+        rows.each do |row|
+          break if freed >= need
+
+          sid = (row['setup_id'] || row[:setup_id]).to_s
+          next if sid.empty?
+          next if open_position_with_smc_setup?(sid)
+
+          smc_setup_update_state_and_eval(setup_id: sid, state: 'invalidated')
+          log_event(
+            'smc_setup_invalidated',
+            reason: 'capacity_eviction',
+            pair: pair.to_s,
+            setup_id: sid
+          )
+          freed += 1
+        end
+        freed
+      end
+
       def smc_setup_insert_or_update(setup_id:, pair:, state:, payload:, eval_state: {})
         now = Time.now.to_i
         payload_s = payload.is_a?(String) ? payload : JSON.generate(payload)

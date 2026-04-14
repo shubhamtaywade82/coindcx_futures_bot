@@ -66,7 +66,12 @@ module CoindcxBot
           unless existing
             count = @journal.smc_setup_count_for_pair(ts.pair)
             if count >= @max_per_pair
-              raise Validator::ValidationError, "max_active_setups_per_pair reached for #{ts.pair}"
+              slots = count - @max_per_pair + 1
+              freed = @journal.smc_setup_invalidate_oldest_active_for_pair!(ts.pair, slots_needed: slots)
+              if freed < slots
+                raise Validator::ValidationError,
+                      "max_active_setups_per_pair reached for #{ts.pair} (#{freed}/#{slots} slots remain blocked by open positions)"
+              end
             end
           end
 

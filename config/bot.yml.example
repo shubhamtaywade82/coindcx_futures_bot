@@ -160,6 +160,11 @@ runtime:
   ws_shutdown_join_seconds: 45
   # Paper trading: no futures orders / account exits (set false only for live after risk checks).
   dry_run: true
+  # Live only (dry_run: false): false = live feeds + read-only APIs, no order/exit REST. Default true. Override: PLACE_ORDER=0
+  # place_orders: true
+  # With place_orders false (or PLACE_ORDER=0), TUI mirrors CoinDCX futures positions + wallet into the desk (needs tui_exchange_positions: true).
+  # Live + place_orders true: set true to mirror exchange rows anyway (optional).
+  # tui_exchange_mirror: true
   # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.
   # log_strategy_signals: true
   # Paper only: when true (default), mirroring REST candles into LTP also refreshes the WS staleness clock so STALE/AGE match the UI. Live ignores this.

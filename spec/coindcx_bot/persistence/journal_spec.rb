@@ -163,4 +163,36 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(recent.first[:setup_id]).to eq('z1')
     expect(recent.first[:state]).to eq('completed')
   end
+
+  it 'invalidates oldest active smc_trade_setups for a pair, skipping setups with open positions' do
+    journal = described_class.new(path)
+    base_payload = lambda do |id|
+      { schema_version: 1, setup_id: id, pair: 'B-SOL_USDT', direction: 'long',
+        conditions: { sweep_zone: { min: 1, max: 2 }, entry_zone: { min: 1, max: 2 } },
+        execution: { sl: 1 } }
+    end
+    %w[e1 e2 e3].each do |sid|
+      journal.smc_setup_insert_or_update(
+        setup_id: sid,
+        pair: 'B-SOL_USDT',
+        state: 'pending_sweep',
+        payload: base_payload.call(sid),
+        eval_state: {}
+      )
+    end
+    journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('90'),
+      trail_price: nil,
+      smc_setup_id: 'e1'
+    )
+    freed = journal.smc_setup_invalidate_oldest_active_for_pair!('B-SOL_USDT', slots_needed: 2)
+    expect(freed).to eq(2)
+    expect(journal.smc_setup_get_row('e1')[:state]).to eq('pending_sweep')
+    expect(journal.smc_setup_get_row('e2')[:state]).to eq('invalidated')
+    expect(journal.smc_setup_get_row('e3')[:state]).to eq('invalidated')
+  end
 end
