@@ -114,6 +114,73 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(rows.first[:state]).to eq('open')
     end
 
+    it 'persists entry_lane from signal metadata.meta_lane' do
+      signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-ETH_USDT',
+        side: :long,
+        stop_price: BigDecimal('1800'),
+        reason: 'meta',
+        metadata: { meta_lane: 'supertrend_profit', meta_priority: 1 }
+      )
+
+      coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('2000'))
+      row = journal.open_positions.first
+      expect(row[:entry_lane]).to eq('supertrend_profit')
+    end
+
+    it 'records meta_first_win cooldown meta after a paper close when strategy is meta_first_win' do
+      meta_config = CoindcxBot::Config.new(
+        minimal_bot_config(
+          runtime: { dry_run: true, journal_path: journal_path },
+          risk: { max_leverage: 3, per_trade_inr_min: 250, per_trade_inr_max: 500 },
+          strategy: {
+            name: 'meta_first_win',
+            execution_resolution: '15m',
+            higher_timeframe_resolution: '1h',
+            meta_first_win: {
+              cooldown_seconds_after_close: 45,
+              children: [{ name: 'trend_continuation' }, { name: 'supertrend_profit' }]
+            }
+          },
+          execution: { order_defaults: { leverage: 50, margin_currency_short_name: 'USDT', order_type: 'market_order' } }
+        )
+      )
+      coord = described_class.new(
+        broker: broker,
+        journal: journal,
+        config: meta_config,
+        exposure_guard: CoindcxBot::Risk::ExposureGuard.new(config: meta_config),
+        logger: nil,
+        fx: fx
+      )
+
+      open_sig = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: { meta_lane: 'trend_continuation' }
+      )
+      coord.apply(open_sig, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))
+      jid = journal.open_positions.first[:id]
+
+      close_sig = CoindcxBot::Strategy::Signal.new(
+        action: :close,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: nil,
+        reason: 'tp',
+        metadata: { position_id: jid }
+      )
+      coord.apply(close_sig, exit_price: BigDecimal('105'))
+
+      raw = journal.meta_get("#{CoindcxBot::Strategy::MetaFirstWin::COOLDOWN_META_PREFIX}B-SOL_USDT")
+      expect(raw).not_to be_nil
+      expect(Float(raw)).to be > Time.now.to_f
+    end
+
     it 'persists smc_setup_id on the journal row when signal metadata includes it' do
       signal = CoindcxBot::Strategy::Signal.new(
         action: :open_long,

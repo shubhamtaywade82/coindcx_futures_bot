@@ -257,4 +257,54 @@ RSpec.describe CoindcxBot::Config do
       expect(cfg.runtime[:refresh_candles_seconds]).to eq(60)
     end
   end
+
+  describe 'meta_first_win strategy' do
+    it 'accepts a valid meta_first_win block' do
+      cfg = described_class.new(
+        minimal_bot_config(
+          strategy: {
+            name: 'meta_first_win',
+            execution_resolution: '15m',
+            higher_timeframe_resolution: '1h',
+            meta_first_win: {
+              cooldown_seconds_after_close: 3,
+              children: [
+                { name: 'trend_continuation', trend_strength_min: 0.2 },
+                { name: 'supertrend_profit' }
+              ]
+            }
+          }
+        )
+      )
+      expect(cfg.strategy_name).to eq('meta_first_win')
+      expect(cfg.meta_first_win_strategy?).to be(true)
+      expect(cfg.meta_first_win_cooldown_seconds_after_close).to eq(3.0)
+    end
+
+    it 'defaults strategy_name to trend_continuation when name is omitted' do
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.strategy_name).to eq('trend_continuation')
+      expect(cfg.meta_first_win_cooldown_seconds_after_close).to eq(0)
+    end
+
+    it 'rejects meta_first_win without children' do
+      bad = minimal_bot_config(
+        strategy: {
+          name: 'meta_first_win',
+          meta_first_win: { children: [] }
+        }
+      )
+      expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /children/)
+    end
+
+    it 'rejects an unsupported child name' do
+      bad = minimal_bot_config(
+        strategy: {
+          name: 'meta_first_win',
+          meta_first_win: { children: [{ name: 'regime_vol_tier' }] }
+        }
+      )
+      expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /unsupported/)
+    end
+  end
 end

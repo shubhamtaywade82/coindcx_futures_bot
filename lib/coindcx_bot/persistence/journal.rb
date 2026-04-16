@@ -79,18 +79,20 @@ module CoindcxBot
       end
 
       def insert_position(pair:, side:, entry_price:, quantity:, stop_price:, trail_price: nil,
-                          initial_stop_price: nil, smc_setup_id: nil)
+                          initial_stop_price: nil, smc_setup_id: nil, entry_lane: nil)
         now = Time.now.to_i
         initial = (initial_stop_price || stop_price)&.to_s('F')
         sid = smc_setup_id&.to_s
         sid = nil if sid&.strip&.empty?
+        lane = entry_lane&.to_s&.strip
+        lane = nil if lane&.empty?
         @db.execute(
           <<~SQL,
-            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id)
-            VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?)
+            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id, entry_lane)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?)
           SQL
           [pair, side.to_s, entry_price.to_s('F'), quantity.to_s('F'),
-           stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid]
+           stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid, lane]
         )
         @db.last_insert_row_id
       end
@@ -354,9 +356,13 @@ module CoindcxBot
           @db.execute('ALTER TABLE positions ADD COLUMN peak_unrealized_usdt TEXT')
           cols = @db.table_info('positions').map { |r| r['name'] }
         end
-        return if cols.include?('smc_setup_id')
+        unless cols.include?('smc_setup_id')
+          @db.execute('ALTER TABLE positions ADD COLUMN smc_setup_id TEXT')
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        return if cols.include?('entry_lane')
 
-        @db.execute('ALTER TABLE positions ADD COLUMN smc_setup_id TEXT')
+        @db.execute('ALTER TABLE positions ADD COLUMN entry_lane TEXT')
       end
 
       def migrate_smc_trade_setups_table

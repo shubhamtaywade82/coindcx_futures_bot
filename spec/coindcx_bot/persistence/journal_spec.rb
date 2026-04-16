@@ -58,6 +58,21 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(journal.open_positions).to be_empty
   end
 
+  it 'persists entry_lane on open positions for meta-strategy exit routing' do
+    journal = described_class.new(path)
+    journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil,
+      entry_lane: 'supertrend_profit'
+    )
+    row = journal.open_positions.first
+    expect(row[:entry_lane]).to eq('supertrend_profit')
+  end
+
   it 'sums pnl_usdt from paper_realized events' do
     journal = described_class.new(path)
     journal.log_event('paper_realized', pnl_usdt: '2.5', pair: 'B-SOL_USDT')

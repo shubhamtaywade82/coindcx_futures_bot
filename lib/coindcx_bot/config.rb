@@ -38,6 +38,7 @@ module CoindcxBot
       validate_risk_band!
       validate_risk_capital_pct!
       validate_runtime_no_legacy_paper_flag!
+      validate_meta_first_win!
     end
 
     def scalper_mode?
@@ -151,6 +152,29 @@ module CoindcxBot
 
     def strategy
       raw.fetch(:strategy, {})
+    end
+
+    def strategy_name
+      s = strategy[:name]
+      (s || 'trend_continuation').to_s
+    end
+
+    def meta_first_win_strategy?
+      strategy_name == 'meta_first_win'
+    end
+
+    def meta_first_win_cooldown_seconds_after_close
+      return 0 unless meta_first_win_strategy?
+
+      mf = strategy[:meta_first_win]
+      return 0 unless mf.is_a?(Hash)
+
+      v = mf[:cooldown_seconds_after_close]
+      return 0 if v.nil?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      0
     end
 
     def execution
@@ -531,6 +555,41 @@ module CoindcxBot
 
       raise ConfigurationError,
             'Remove runtime.paper from bot.yml; use runtime.dry_run only (true = paper trading, false = live).'
+    end
+
+    ALLOWED_META_FIRST_WIN_CHILDREN = %w[trend_continuation supertrend_profit smc_confluence].freeze
+
+    def validate_meta_first_win!
+      return unless meta_first_win_strategy?
+
+      mf = strategy[:meta_first_win]
+      unless mf.is_a?(Hash)
+        raise ConfigurationError,
+              'strategy.name meta_first_win requires strategy.meta_first_win (hash with children:)'
+      end
+
+      kids = mf[:children]
+      unless kids.is_a?(Array) && kids.any?
+        raise ConfigurationError, 'meta_first_win requires non-empty strategy.meta_first_win.children'
+      end
+
+      kids.each_with_index do |ch, i|
+        unless ch.is_a?(Hash)
+          raise ConfigurationError, "meta_first_win.children[#{i}] must be a Hash"
+        end
+
+        chs = ch.transform_keys(&:to_sym)
+        n = (chs[:name] || chs[:lane]).to_s.strip
+        if n.empty?
+          raise ConfigurationError, "meta_first_win.children[#{i}] needs name: (strategy lane for exits)"
+        end
+
+        next if ALLOWED_META_FIRST_WIN_CHILDREN.include?(n)
+
+        raise ConfigurationError,
+              "meta_first_win.children[#{i}] unsupported name #{n.inspect} " \
+              "(allowed: #{ALLOWED_META_FIRST_WIN_CHILDREN.join(', ')})"
+      end
     end
 
     def deep_symbolize(obj)

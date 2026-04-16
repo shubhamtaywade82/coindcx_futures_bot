@@ -56,7 +56,25 @@ risk:
   # max_daily_loss_inr: 1500
 
 strategy:
-  # Engine strategy: trend_continuation (default), supertrend_profit, smc_confluence, or regime_vol_tier (wraps inner_strategy).
+  # Engine strategy: trend_continuation (default), supertrend_profit, smc_confluence, regime_vol_tier (wraps inner_strategy),
+  # or meta_first_win (priority scan of leaf children — MVP: all children share this block's execution_resolution / HTF).
+  #
+  # meta_first_win (multi-strategy, same timeframe MVP):
+  #   - Children must be leaf strategies only: trend_continuation, supertrend_profit, smc_confluence (no regime_vol_tier child yet).
+  #   - First child in `children:` order that emits open_long/open_short wins; `metadata.meta_lane` is persisted on the journal
+  #     row as entry_lane so exits delegate to the opener after restart.
+  #   - cooldown_seconds_after_close: optional; uses journal meta (Coordinator) — do not sleep inside the engine loop.
+  # Slice B (future): different per-child execution_resolution (e.g. 5m supertrend + 15m trend) needs Engine candle loading
+  #   extended to fetch a union of resolutions and pass per-child series into evaluate — not implemented in this MVP.
+  # name: meta_first_win
+  # meta_first_win:
+  #   cooldown_seconds_after_close: 5
+  #   children:
+  #     - name: trend_continuation
+  #       trend_strength_min: 0.15
+  #     - name: supertrend_profit
+  #       take_profit_pct: 0.08
+  #       stop_distance_pct_for_sizing: 0.02
   # name: trend_continuation
   execution_resolution: 15m
   higher_timeframe_resolution: 1h

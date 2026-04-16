@@ -660,6 +660,8 @@ module CoindcxBot
       def build_strategy(strategy_cfg)
         name = (strategy_cfg[:name] || 'trend_continuation').to_s
         case name
+        when 'meta_first_win'
+          Strategy::MetaFirstWin.new(strategy_cfg.transform_keys(&:to_sym), journal: @journal)
         when 'regime_vol_tier'
           merged = @config.regime_strategy_section.merge(strategy_cfg.transform_keys(&:to_sym))
           inner = build_inner_strategy_for_regime_wrapper(strategy_cfg)

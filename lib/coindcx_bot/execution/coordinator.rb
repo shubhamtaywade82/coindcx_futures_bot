@@ -46,6 +46,7 @@ module CoindcxBot
           next if paper_pos.key?(pair)
           @logger&.warn("[reconcile] Journal position found for #{pair} without Paper entry. Closing to sync.")
           @journal.close_position(j_row[:id])
+          record_meta_first_win_entry_cooldown(pair)
           @journal.log_event(
             'signal_close',
             pair: pair,
@@ -89,6 +90,7 @@ module CoindcxBot
             source: :"broker_#{trigger}"
           )
           @journal.close_position(close_id)
+          record_meta_first_win_entry_cooldown(pair)
           @logger&.info("[paper] broker exit synced: #{pair} id=#{close_id} trigger=#{trigger} pnl=#{realized_pnl_usdt&.to_s('F')}")
         else
           @logger&.warn("[paper] broker exit for #{pair} but no matching journal row")
@@ -115,6 +117,7 @@ module CoindcxBot
         @journal.open_positions.select { |row| row[:pair] == pair_s }.each do |row|
           @journal.close_position(row[:id])
         end
+        record_meta_first_win_entry_cooldown(pair_s)
         :ok
       end
 
@@ -239,7 +242,23 @@ module CoindcxBot
           stop_price: signal.stop_price,
           trail_price: nil,
           initial_stop_price: signal.stop_price,
-          smc_setup_id: smc_id
+          smc_setup_id: smc_id,
+          entry_lane: entry_lane_from_signal(signal)
+        )
+      end
+
+      def entry_lane_from_signal(signal)
+        m = metadata_symbols(signal)
+        v = m[:meta_lane] || m['meta_lane']
+        s = v.to_s.strip
+        s.empty? ? nil : s
+      end
+
+      def record_meta_first_win_entry_cooldown(pair)
+        CoindcxBot::Strategy::MetaFirstWin.record_entry_cooldown(
+          journal: @journal,
+          config: @config,
+          pair: pair.to_s
         )
       end
 
@@ -304,6 +323,7 @@ module CoindcxBot
         end
 
         @journal.close_position(close_id)
+        record_meta_first_win_entry_cooldown(signal.pair)
         @logger&.info("[paper] closed #{signal.pair} id=#{close_id}")
 
         outcome, pnl_flag = summarize_paper_close_outcome(broker_res, exchange_attempted, skipped_no_ltp)
@@ -351,6 +371,7 @@ module CoindcxBot
           )
         end
         @journal.close_position(close_id)
+        record_meta_first_win_entry_cooldown(signal.pair)
         @journal.log_event(
           'signal_close',
           pair: signal.pair,
