@@ -118,6 +118,20 @@ module CoindcxBot
         base
       end
 
+      # Copies margin fields from the exchange row onto the pseudo-journal hash so the TUI can show ROE% vs margin.
+      def passthrough_margin_keys(row, target)
+        keys = %i[
+          isolated_margin initial_margin margin used_margin order_margin position_margin
+          locked_margin maintenance_margin im mm
+        ]
+        keys.each do |k|
+          next unless row.key?(k) || row.key?(k.to_s)
+
+          v = row[k] || row[k.to_s]
+          target[k] = v unless v.nil?
+        end
+      end
+
       def open_on_configured_pairs(rows, configured_pairs)
         want = configured_pairs.map { |p| futures_pair_key(p) }.to_set
         Array(rows).count do |r|
@@ -164,6 +178,7 @@ module CoindcxBot
           trail_price: nil,
           exchange_mirror: true
         }
+        passthrough_margin_keys(row, h)
         u = unrealized_usdt_from_row(row)
         h[:exchange_unrealized_usdt] = u.to_s('F') unless u.nil?
         h
