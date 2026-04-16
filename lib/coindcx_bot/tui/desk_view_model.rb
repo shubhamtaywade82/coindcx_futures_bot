@@ -506,9 +506,9 @@ module CoindcxBot
         CoindcxBot::Strategy::UnrealizedPnl.position_usdt(p, ltp)
       end
 
-      # Parenthetical next to uPnL: **return on entry notional** (+u / (|qty| × entry)+) when +u+ is known,
-      # so exchange-reported PnL stays consistent with the %. Otherwise falls back to signed **price move
-      # from entry** (+(mark−entry)/entry+ for long, +(entry−mark)/entry+ for short).
+      # Parenthetical next to uPnL: for **exchange-mirrored** rows, **ROE vs margin** (+u / margin_usdt+) when we can
+      # infer margin (API field or +notional / effective_leverage+). Otherwise **return on entry notional**
+      # (+u / (|qty| × entry)+). Falls back to signed **price move from entry** when qty/entry missing.
       def unrealized_pnl_pct_str(u, p, ltp_bd, entry_override = nil)
         e = entry_override || optional_bd(p[:entry_price] || p['entry_price'])
         q = optional_bd(p[:quantity] || p['quantity'])
@@ -516,13 +516,54 @@ module CoindcxBot
           notional = q.abs * e
           return '0%' if notional.zero?
 
-          pct = (BigDecimal(u.to_s) / notional) * 100
+          denom = denominator_usdt_for_pnl_pct(p, notional)
+          return '0%' if denom.nil? || denom.zero?
+
+          pct = (BigDecimal(u.to_s) / denom) * 100
           return format('%+.2f%%', pct)
         end
 
         unrealized_pct_str(p, ltp_bd, entry_override)
       rescue ArgumentError, TypeError
         unrealized_pct_str(p, ltp_bd, entry_override)
+      end
+
+      def mirror_execution_row?(p)
+        v = p[:exchange_mirror]
+        return true if v == true
+        return true if v.to_s.strip.casecmp('true').zero?
+
+        false
+      end
+
+      def margin_usdt_from_position_row(p)
+        raw = p[:isolated_margin] || p[:initial_margin] || p[:margin] || p[:used_margin] || p[:order_margin] ||
+              p[:position_margin] || p[:locked_margin] || p[:maintenance_margin] || p[:im] || p[:mm] ||
+              p['isolated_margin'] || p['initial_margin'] || p['margin'] || p['used_margin'] || p['order_margin'] ||
+              p['position_margin'] || p['locked_margin'] || p['maintenance_margin'] || p['im'] || p['mm']
+        optional_bd(raw)
+      end
+
+      def effective_execution_leverage_int
+        od = @config.execution[:order_defaults] || {}
+        a = optional_positive_int(od[:leverage] || od['leverage'])
+        b = optional_positive_int(@config.risk[:max_leverage])
+        v = [a, b].compact.min
+        return nil if v.nil? || v <= 0
+
+        v
+      end
+
+      def denominator_usdt_for_pnl_pct(p, notional_bd)
+        return notional_bd unless mirror_execution_row?(p)
+
+        m = margin_usdt_from_position_row(p)
+        return m if m&.positive?
+
+        lev = effective_execution_leverage_int
+        return notional_bd if lev.nil?
+
+        notional_bd / BigDecimal(lev.to_s)
       end
 
       def unrealized_pct_str(p, ltp, entry_override = nil)

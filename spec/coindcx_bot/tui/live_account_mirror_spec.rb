@@ -27,6 +27,12 @@ RSpec.describe CoindcxBot::Tui::LiveAccountMirror do
       h = described_class.pseudo_journal_from_exchange(row.transform_keys(&:to_sym))
       expect(h[:entry_price]).to eq('150.25')
     end
+
+    it 'passes through isolated_margin onto the pseudo row for TUI ROE%' do
+      row = { pair: 'B-ETH_USDT', active_pos: '-1', avg_price: '3000', isolated_margin: '627.9' }
+      h = described_class.pseudo_journal_from_exchange(row.transform_keys(&:to_sym))
+      expect(h[:isolated_margin]).to eq('627.9')
+    end
   end
 
   describe '.extract_wallet_usdt_balance' do

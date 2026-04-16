@@ -65,5 +65,33 @@ RSpec.describe CoindcxBot::Tui::Panels::SmcSetupStripPanel do
     expect(s).to include('PLANNER')
     expect(s).to include('ACTIVE')
     expect(s).to include('p1')
+    expect(s).to include('SOL_USDT')
+    expect(s).to include('P_SW')
+  end
+
+  it 'abbreviates awaiting_confirmations and shortens UUID setup ids on the ACTIVE line' do
+    uuid = 'e3f9b2c4-7a1b-4c2d-9e8f-1234567890ab'
+    smc = {
+      enabled: true,
+      planner_enabled: false,
+      gatekeeper_enabled: false,
+      auto_execute: false,
+      planner_last_at: nil,
+      planner_error: '',
+      planner_interval_s: 120,
+      active_count: 2,
+      active_setups: [
+        { setup_id: 'sol_202604_slice_flow', pair: 'B-SOL_USDT', state: 'awaiting_confirmations', direction: 'long',
+          gatekeeper: false },
+        { setup_id: uuid, pair: 'B-ETH_USDT', state: 'awaiting_confirmations', direction: 'long', gatekeeper: false }
+      ]
+    }
+    engine = double('engine', snapshot: snap(smc), config: config, broker: broker_double)
+    described_class.new(engine: engine, origin_row: 0, output: output).render
+    s = output.string
+    expect(s).to include('AW_CF')
+    expect(s).to include('e3f9b2c4')
+    expect(s).not_to include('awaiting_confirmations')
+    expect(s).to include('sol_202604_slice_flow')
   end
 end

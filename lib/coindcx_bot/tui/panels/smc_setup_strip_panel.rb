@@ -14,6 +14,18 @@ module CoindcxBot
         include Theme
         include AnsiString
 
+        TRADE_SETUP_STATE_ABBREV = {
+          'pending_sweep' => 'P_SW',
+          'sweep_seen' => 'SW_S',
+          'awaiting_confirmations' => 'AW_CF',
+          'armed_entry' => 'ARMED',
+          'active' => 'LIVE',
+          'completed' => 'DONE',
+          'invalidated' => 'INV'
+        }.freeze
+
+        SETUP_UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i.freeze
+
         def initialize(engine:, origin_row:, origin_col: 0, output: $stdout)
           @engine = engine
           @row = origin_row
@@ -91,20 +103,81 @@ module CoindcxBot
             return muted(t)
           end
 
-          parts = rows.first(5).map do |r|
-            gid = (r[:setup_id] || r['setup_id']).to_s
-            gid = "#{gid[0, 10]}…" if gid.length > 12
-            pair = (r[:pair] || r['pair']).to_s.sub(/\AB-/, '')
-            st = (r[:state] || r['state']).to_s
-            dir = (r[:direction] || r['direction']).to_s[0, 1].upcase
-            "#{gid}/#{pair}/#{st}/#{dir}"
-          end
-          extra = s[:active_count].to_i > 5 ? " +#{s[:active_count].to_i - 5}" : ''
-          plain = "ACTIVE: #{parts.join(' | ')}#{extra}"
-          colored = "#{bold('ACTIVE:')} #{parts.join(muted(' | '))}#{muted(extra)}"
-          return colored if plain.length <= w
+          total = s[:active_count].to_i
+          total = rows.size if total < rows.size
 
-          "#{plain[0, w - 1]}…"
+          colored = fit_active_setups_line(rows, total, w)
+          return colored if visible_len(colored) <= w
+
+          pad_visible(colored, w)
+        end
+
+        def fit_active_setups_line(rows, total_count, w)
+          cap = [rows.size, 5].min
+          cap.downto(1) do |n|
+            slice = rows.first(n)
+            extra = active_overflow_suffix(total_count, n)
+            [24, 20, 16, 14, 12, 10, 8, 6].each do |id_max|
+              plain = plain_active_line(slice, extra, id_max)
+              next if plain.length > w
+
+              return colored_active_line(slice, extra, id_max)
+            end
+          end
+
+          slice = rows.first(1)
+          extra = active_overflow_suffix(total_count, 1)
+          colored_active_line(slice, extra, 6)
+        end
+
+        def active_overflow_suffix(total_count, shown)
+          return '' if total_count <= shown
+
+          " +#{total_count - shown}"
+        end
+
+        def plain_active_line(slice, extra, id_max)
+          parts = slice.map { |r| format_active_setup_segment_plain(r, id_max) }
+          "ACTIVE: #{parts.join(' | ')}#{extra}"
+        end
+
+        def colored_active_line(slice, extra, id_max)
+          parts = slice.map { |r| format_active_setup_segment_plain(r, id_max) }
+          "#{bold('ACTIVE:')} #{parts.join(muted(' | '))}#{muted(extra)}"
+        end
+
+        def format_active_setup_segment_plain(row, id_max)
+          gid = format_trade_setup_id((row[:setup_id] || row['setup_id']).to_s, max_chars: id_max)
+          pair = (row[:pair] || row['pair']).to_s.sub(/\AB-/, '')
+          st = abbreviate_trade_setup_state((row[:state] || row['state']).to_s)
+          dir = (row[:direction] || row['direction']).to_s[0, 1].upcase
+          "#{pair}·#{gid}·#{st}·#{dir}"
+        end
+
+        def abbreviate_trade_setup_state(state)
+          key = state.strip
+          return '—' if key.empty?
+
+          TRADE_SETUP_STATE_ABBREV.fetch(key.downcase) do
+            k = key
+            return k.upcase if k.length <= 6
+
+            "#{k[0, 5]}~"
+          end
+        end
+
+        def format_trade_setup_id(raw, max_chars:)
+          s = raw.to_s.strip
+          return '—' if s.empty?
+          return s[0, 8] if s.match?(SETUP_UUID_RE)
+
+          return s if s.length <= max_chars
+
+          tail = 4
+          head = max_chars - 1 - tail
+          return "#{s[0, max_chars - 1]}…" if head < 1
+
+          "#{s[0, head]}…#{s[-tail, tail]}"
         end
 
         def format_last_run(at, interval_s)

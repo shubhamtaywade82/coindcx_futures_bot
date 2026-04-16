@@ -115,6 +115,9 @@ runtime:
   ws_shutdown_join_seconds: 45
   # Paper: no exchange orders. Flip to false only when going live with credentials + risk checks.
   dry_run: true
+  # Live only (dry_run: false): set false to block futures order/exit REST while keeping live WS + TUI read-only positions.
+  # Override: PLACE_ORDER=0 or PLACE_ORDER=false
+  place_orders: false
   # Verbose strategy line per cycle — COINDCX_STRATEGY_SIGNALS=1 or:
   # log_strategy_signals: true
   # paper_rest_advances_ws_stale_clock: true

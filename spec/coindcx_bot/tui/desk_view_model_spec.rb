@@ -208,10 +208,35 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         expect(row[:pnl_label]).to include('-12.50')
       end
 
-      it 'shows uPnL % from exchange dollars over entry notional, not raw mark distance' do
+      it 'shows uPnL % as ROE on estimated margin (notional / leverage) for mirrored rows' do
         row = vm.execution_rows.first
-        # -12.5 / (0.5 * 3000) * 100 ≈ -0.83% — not (3000 - 3100.5) / 3000 * 100 (mark-implied move)
-        expect(row[:pnl_label]).to include('(-0.83%)')
+        # notional 0.5 * 3000 = 1500; leverage min(5,10)=5 → margin 300; -12.5/300*100 ≈ -4.17%
+        expect(row[:pnl_label]).to include('(-4.17%)')
+      end
+
+      it 'prefers exchange isolated_margin as ROE denominator when present' do
+        snap2 = CoindcxBot::Core::Engine::Snapshot.new(
+          **snapshot.to_h.merge(
+            exchange_positions: [
+              {
+                pair: 'B-ETH_USDT',
+                active_pos: '-0.5',
+                average_entry_price: '3000',
+                unrealized_pnl: '-12.5',
+                isolated_margin: '600'
+              }
+            ]
+          )
+        )
+        vm2 = described_class.new(
+          snapshot: snap2,
+          tick_ticks: tick_ticks,
+          symbols: %w[B-ETH_USDT],
+          ws_stale_fn: ->(_) { false },
+          config: config
+        )
+        row = vm2.execution_rows.first
+        expect(row[:pnl_label]).to include('(-2.08%)') # -12.5 / 600 * 100
       end
 
       it 'counts open positions from the mirrored list' do
