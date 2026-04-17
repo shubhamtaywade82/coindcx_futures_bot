@@ -474,23 +474,12 @@ module CoindcxBot
       %w[USDT INR]
     end
 
-    # Optional Telegram mirror of +Journal#log_event+ rows (see +Notifications::TelegramJournalSink+).
-    # Secrets stay in ENV: +COINDCX_TELEGRAM_BOT_TOKEN+, +COINDCX_TELEGRAM_CHAT_ID+.
-    def notifications_section
-      n = raw[:notifications]
-      n.is_a?(Hash) ? n : {}
-    end
-
-    def notifications_telegram_section
-      t = notifications_section[:telegram]
-      t.is_a?(Hash) ? t : {}
-    end
-
+    # Optional Telegram mirror of +Journal#log_event+ rows (+Notifications::TelegramJournalSink+).
+    # All switches and IDs are ENV-only (no bot.yml +notifications+ block):
+    #   COINDCX_TELEGRAM_BOT_TOKEN, COINDCX_TELEGRAM_CHAT_ID — required to enable
+    #   COINDCX_TELEGRAM_OPS_CHAT_ID, COINDCX_TELEGRAM_OPS_BOT_TOKEN — optional second destination
+    #   COINDCX_TELEGRAM_OPS_TYPES — comma-separated +event_log+ +type+ names for ops duplicate (default below)
     def telegram_journal_notifications_ready?
-      tg = notifications_telegram_section
-      enabled = truthy?(tg[:enabled]) || truthy?(ENV['COINDCX_TELEGRAM_NOTIFY'])
-      return false unless enabled
-
       !telegram_journal_bot_token.empty? && !telegram_journal_chat_id.empty?
     end
 
@@ -499,10 +488,7 @@ module CoindcxBot
     end
 
     def telegram_journal_chat_id
-      v = ENV['COINDCX_TELEGRAM_CHAT_ID']
-      return v.to_s.strip if v && !v.to_s.strip.empty?
-
-      notifications_telegram_section[:chat_id].to_s.strip
+      ENV['COINDCX_TELEGRAM_CHAT_ID'].to_s.strip
     end
 
     def telegram_journal_ops_bot_token
@@ -511,19 +497,16 @@ module CoindcxBot
     end
 
     def telegram_journal_ops_chat_id
-      v = ENV['COINDCX_TELEGRAM_OPS_CHAT_ID']
-      return v.to_s.strip if v && !v.to_s.strip.empty?
-
-      notifications_telegram_section[:ops_chat_id].to_s.strip
+      ENV['COINDCX_TELEGRAM_OPS_CHAT_ID'].to_s.strip
     end
 
-    # When +ops_chat_id+ is set, these +event_log+ +type+ values are also sent to the ops chat.
-    # YAML key +notify_ops_types+ overrides; empty array disables ops duplicates.
+    # When +COINDCX_TELEGRAM_OPS_CHAT_ID+ is set, these +event_log+ +type+ values are also sent there.
+    # +COINDCX_TELEGRAM_OPS_TYPES+ comma list; unset → defaults; set to empty string → no ops duplicates.
     def telegram_journal_ops_duplicate_types
-      tg = notifications_telegram_section
-      return Array(tg[:notify_ops_types]).map(&:to_s).reject(&:empty?) if tg.key?(:notify_ops_types)
+      raw = ENV['COINDCX_TELEGRAM_OPS_TYPES']
+      return %w[open_failed smc_setup_invalidated] if raw.nil?
 
-      %w[open_failed smc_setup_invalidated]
+      raw.to_s.split(',').map(&:strip).reject(&:empty?)
     end
 
     class ConfigurationError < StandardError; end

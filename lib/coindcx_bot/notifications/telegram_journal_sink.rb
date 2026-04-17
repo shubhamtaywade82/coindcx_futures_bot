@@ -9,8 +9,9 @@ require 'thread'
 
 module CoindcxBot
   module Notifications
-    # Optional mirror of +Journal#event_log+ rows to Telegram. Off unless config + credentials
-    # are present. Delivery is async (bounded queue); failures never propagate to callers.
+    # Optional mirror of +Journal#log_event+ rows to Telegram. Off unless
+    # +Config#telegram_journal_notifications_ready?+ (ENV token + chat id). Delivery is async
+    # (bounded queue); failures never propagate to callers.
     class TelegramJournalSink
       MAX_QUEUE = 500
       MAX_BODY_CHARS = 3_500

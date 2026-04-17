@@ -211,12 +211,7 @@ paper:
 paper_exchange:
   enabled: false
 
-# Optional: mirror every +event_log+ journal row to Telegram (non-blocking). Default off.
-# Set +notifications.telegram.enabled: true+ and ENV +COINDCX_TELEGRAM_BOT_TOKEN+ / +COINDCX_TELEGRAM_CHAT_ID+.
-# Optional ops duplicate chat: +COINDCX_TELEGRAM_OPS_CHAT_ID+ (+COINDCX_TELEGRAM_OPS_BOT_TOKEN+ if different bot).
-# notifications:
-#   telegram:
-#     enabled: false
-#     chat_id: ''          # optional if chat id is only in ENV
-#     ops_chat_id: ''
-#     notify_ops_types: [open_failed, smc_setup_invalidated]
+# Optional Telegram: mirror +event_log+ rows (ENV only — no bot.yml). Off unless both are set:
+#   COINDCX_TELEGRAM_BOT_TOKEN  COINDCX_TELEGRAM_CHAT_ID
+# Optional second chat: COINDCX_TELEGRAM_OPS_CHAT_ID, COINDCX_TELEGRAM_OPS_BOT_TOKEN (if another bot),
+#   COINDCX_TELEGRAM_OPS_TYPES=comma,separated,event_types (default: open_failed,smc_setup_invalidated)
