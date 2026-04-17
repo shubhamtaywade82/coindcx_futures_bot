@@ -56,6 +56,13 @@ RSpec.describe CoindcxBot::Notifications::TelegramJournalSink do
     expect(fake_http.calls.size).to eq(1)
   end
 
+  describe '.build_if_configured' do
+    it 'returns nil when telegram is not configured' do
+      cfg = CoindcxBot::Config.new(minimal_bot_config)
+      expect(described_class.build_if_configured(config: cfg, logger: nil)).to be_nil
+    end
+  end
+
   it 'swallows HTTP errors from the worker thread' do
     boom = Class.new do
       def post_message(*)

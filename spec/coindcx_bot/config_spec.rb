@@ -307,4 +307,56 @@ RSpec.describe CoindcxBot::Config do
       expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /unsupported/)
     end
   end
+
+  describe 'telegram journal notifications' do
+    around do |example|
+      keys = %w[
+        COINDCX_TELEGRAM_NOTIFY
+        COINDCX_TELEGRAM_BOT_TOKEN
+        COINDCX_TELEGRAM_CHAT_ID
+        COINDCX_TELEGRAM_OPS_CHAT_ID
+        COINDCX_TELEGRAM_OPS_BOT_TOKEN
+      ]
+      saved = keys.to_h { |k| [k, ENV[k]] }
+      keys.each { |k| ENV.delete(k) }
+      example.run
+    ensure
+      saved.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
+    end
+
+    it 'is not ready when disabled and env unset' do
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.telegram_journal_notifications_ready?).to be(false)
+    end
+
+    it 'is ready when telegram is enabled in yaml and credentials are in ENV' do
+      ENV['COINDCX_TELEGRAM_BOT_TOKEN'] = 'secret'
+      ENV['COINDCX_TELEGRAM_CHAT_ID'] = '99'
+      cfg = described_class.new(minimal_bot_config(notifications: { telegram: { enabled: true } }))
+      expect(cfg.telegram_journal_notifications_ready?).to be(true)
+    end
+
+    it 'is ready when COINDCX_TELEGRAM_NOTIFY is set with credentials' do
+      ENV['COINDCX_TELEGRAM_NOTIFY'] = '1'
+      ENV['COINDCX_TELEGRAM_BOT_TOKEN'] = 't'
+      ENV['COINDCX_TELEGRAM_CHAT_ID'] = '1'
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.telegram_journal_notifications_ready?).to be(true)
+    end
+
+    it 'defaults ops duplicate types' do
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.telegram_journal_ops_duplicate_types).to eq(%w[open_failed smc_setup_invalidated])
+    end
+
+    it 'honors notify_ops_types yaml when present' do
+      cfg = described_class.new(minimal_bot_config(notifications: { telegram: { notify_ops_types: %w[a] } }))
+      expect(cfg.telegram_journal_ops_duplicate_types).to eq(%w[a])
+    end
+
+    it 'treats empty notify_ops_types as an explicit empty list' do
+      cfg = described_class.new(minimal_bot_config(notifications: { telegram: { notify_ops_types: [] } }))
+      expect(cfg.telegram_journal_ops_duplicate_types).to eq([])
+    end
+  end
 end

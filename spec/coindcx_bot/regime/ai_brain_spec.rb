@@ -49,5 +49,26 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
       expect(h[:regime_label]).to eq('X')
       expect(h[:probability_pct]).to eq(50)
     end
+
+    context 'when the model emits trailing commas (invalid strict JSON)' do
+      it 'parses a multi-line object with a trailing comma before the closing brace' do
+        raw = <<~JSON
+          {
+            "regime_label": "LOW_VOL",
+            "probability_pct": 100,
+            "stability_bars": 3,
+            "flicker_hint": "low",
+            "confirmed": true,
+            "vol_rank": 2,
+            "vol_rank_total": 4,
+            "transition_summary": "quiet",
+            "notes": "ok",
+          }
+        JSON
+        h = CoindcxBot::SmcSetup::JsonSlice.parse_object(raw)
+        expect(h[:regime_label]).to eq('LOW_VOL')
+        expect(h[:probability_pct]).to eq(100)
+      end
+    end
   end
 end

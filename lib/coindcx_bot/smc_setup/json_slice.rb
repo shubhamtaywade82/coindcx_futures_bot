@@ -18,19 +18,17 @@ module CoindcxBot
         j = s.rindex('}')
         raise 'no JSON object in model output' if i.nil? || j.nil? || j < i
 
-        body = s[i..j]
-        parse_json_object(body)
+        parse_json_object(s[i..j])
       end
 
-      def parse_json_object(body)
+      def self.parse_json_object(body)
         JSON.parse(body, symbolize_names: true)
       rescue JSON::ParserError
-        relaxed = strip_llm_trailing_commas(body)
-        JSON.parse(relaxed, symbolize_names: true)
+        JSON.parse(strip_llm_trailing_commas(body), symbolize_names: true)
       end
       private_class_method :parse_json_object
 
-      def strip_llm_trailing_commas(json)
+      def self.strip_llm_trailing_commas(json)
         out = json
         loop do
           next_out = out.gsub(TRAILING_COMMA_BEFORE_CLOSE, '\1')
