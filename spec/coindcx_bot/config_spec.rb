@@ -229,6 +229,10 @@ RSpec.describe CoindcxBot::Config do
       expect(cfg.strategy[:higher_timeframe_resolution]).to eq('15m')
       expect(cfg.flatten_on_daily_loss_breach?).to be(true)
       expect(cfg.pause_after_daily_loss_flatten?).to be(true)
+      hwm = cfg.strategy[:hwm_giveback]
+      expect(hwm[:enabled]).to be(true)
+      expect(hwm[:min_peak_usdt]).to eq(25)
+      expect(hwm[:giveback_pct]).to eq(0.5)
     end
 
     it 'does not override explicit runtime or strategy keys when scalper' do

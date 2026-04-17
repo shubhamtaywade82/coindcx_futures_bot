@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 require 'cgi'
-require 'json'
 require 'net/http'
+require_relative 'human_journal_event_message'
 require 'set'
 require 'uri'
 require 'thread'
@@ -95,9 +95,10 @@ module CoindcxBot
       end
 
       def format_message(type, payload)
-        body = JSON.generate({ type: type, payload: payload })
-        body = "#{body[0, MAX_BODY_CHARS]}…" if body.length > MAX_BODY_CHARS
-        "coindcx-bot | #{type}\n#{body}"
+        text = HumanJournalEventMessage.format(type, payload)
+        return text if text.length <= MAX_BODY_CHARS
+
+        "#{text[0, MAX_BODY_CHARS]}…"
       end
 
       def post_safe(token, chat_id, text)

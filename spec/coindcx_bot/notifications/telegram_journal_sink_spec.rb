@@ -30,14 +30,20 @@ RSpec.describe CoindcxBot::Notifications::TelegramJournalSink do
     )
   end
 
-  it 'posts once to the main chat' do
+  it 'posts once to the main chat with human-readable body' do
     sink = build_sink(ops_chat: '')
-    sink.deliver('signal_open', { 'pair' => 'B-SOL_USDT' })
+    sink.deliver(
+      'signal_open',
+      { 'pair' => 'B-SOL_USDT', 'action' => 'open_long', 'reason' => 'r', 'leverage' => 5 }
+    )
     sleep 0.05
     expect(fake_http.calls.size).to eq(1)
     expect(fake_http.calls.first[0]).to eq('main-token')
     expect(fake_http.calls.first[1]).to eq('111')
-    expect(fake_http.calls.first[2]).to include('signal_open')
+    body = fake_http.calls.first[2]
+    expect(body).to include('signal_open')
+    expect(body).to include('Open LONG · B-SOL_USDT')
+    expect(body).not_to include('{"type"')
   end
 
   it 'duplicates configured types to the ops chat when distinct' do

@@ -96,11 +96,12 @@ strategy:
   adx_min: 0
 
   # Optional: exit when unrealized USDT falls from the session peak (see engine bump + Strategy::HwmGiveback).
-  # Default off unless you set enabled: true (scalper preset may merge defaults for omitted keys).
+  # Default off unless you set enabled: true. Scalper mode merges defaults for omitted keys:
+  # min_peak_usdt 25, giveback_pct 0.5 (override here to tighten or disable).
   # hwm_giveback:
   #   enabled: false
-  #   min_peak_usdt: 10
-  #   giveback_pct: 0.35
+  #   min_peak_usdt: 25
+  #   giveback_pct: 0.5
   #   # giveback_usdt: 5
 
   # Dynamic trailing (TrendContinuation + in-process PaperBroker when exec candles are passed).
@@ -278,9 +279,9 @@ paper:
   # Bracket take-profit distance as multiple of entry-vs-stop risk (coordinator / paper bracket orders).
   # take_profit_r_multiple: 3
 
-# CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). When enabled with
-# With `runtime.dry_run: true`, the bot uses `OrderGateway` / `AccountGateway` against this
-# base URL instead of the in-process `PaperBroker`. Set `COINDCX_API_*` to match the seeded keys.
+# CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). With
+# `runtime.dry_run: true`, orders/positions REST use this base URL; candles, WS, and FX still use CoinDCX production.
+# Without this block, the in-process `PaperBroker` is used. Set `COINDCX_API_*` to match the seeded keys.
 # paper_exchange:
 #   enabled: true
 #   api_base_url: http://127.0.0.1:9292

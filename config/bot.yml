@@ -28,8 +28,8 @@ risk:
 
   # Per-trade risk: 1.5% of capital = ₹3000. Clamped to [floor, cap] below.
   per_trade_capital_pct: 1.5
-  per_trade_inr_min_pct_of_capital: 0.5    # floor ₹1000
-  per_trade_inr_max_pct_of_capital: 2.5    # cap  ₹5000
+  per_trade_inr_min_pct_of_capital: 0.5 # floor ₹1000
+  per_trade_inr_max_pct_of_capital: 2.5 # cap  ₹5000
 
   # Daily loss halt at 3% = ₹6000. Bot flattens all positions and pauses.
   max_daily_loss_pct_of_capital: 3.0
@@ -48,6 +48,14 @@ strategy:
   # Used for position sizing when child does not supply its own stop_distance_pct.
   stop_distance_pct_for_sizing: 0.015
 
+  # HWM giveback: default off for swing (omit this block). Scalper merges min_peak 25 / giveback 0.5 when
+  # runtime.mode: scalper (or COINDCX_BOT_MODE=scalper). To enable on swing, add: hwm_giveback: { enabled: true, ... }
+  #
+  hwm_giveback:
+    enabled: true
+    min_peak_usdt: 25
+    giveback_pct: 0.5
+
   meta_first_win:
     # After any close on a pair, block new entries for 5 minutes (prevents oscillation).
     cooldown_seconds_after_close: 300
@@ -62,15 +70,15 @@ strategy:
         ema_fast: 12
         ema_slow: 26
         atr_period: 14
-        trend_strength_min: 0.15     # slightly above default 0.12 to filter crypto chop
+        trend_strength_min: 0.15 # slightly above default 0.12 to filter crypto chop
         compression_lookback: 8
         compression_ratio: 0.65
         breakout_lookback: 4
         pullback_ema_tolerance_pct: 0.0025
-        structure_bars: 3            # require 3-bar directional structure before entry
+        structure_bars: 3 # require 3-bar directional structure before entry
         adx_period: 14
-        adx_min: 20                  # skip entries when ADX < 20 (ranging market)
-        volume_filter: false         # enable if getting too many false breakouts
+        adx_min: 20 # skip entries when ADX < 20 (ranging market)
+        volume_filter: false # enable if getting too many false breakouts
 
       # --- Child 2: SupertrendProfit ---
       # Entry: Supertrend band flip (bearish->bullish or bullish->bearish).
@@ -79,7 +87,7 @@ strategy:
       - name: supertrend_profit
         supertrend_atr_period: 10
         supertrend_multiplier: 3
-        take_profit_pct: 0.02        # 2% TP for 15m swing timeframe
+        take_profit_pct: 0.02 # 2% TP for 15m swing timeframe
         stop_distance_pct_for_sizing: 0.015
 
       # --- Child 3: SmcConfluence ---
@@ -88,30 +96,30 @@ strategy:
       # Lowest priority — fires only when both momentum children hold.
       # Inherits top-level smc_confluence: config block below.
       - name: smc_confluence
-        take_profit_pct: 0         # rely on DynamicTrail / opposite-SMC close, not fixed TP
-        htf_alignment: true        # require HTF EMA alignment before entry
+        take_profit_pct: 0 # rely on DynamicTrail / opposite-SMC close, not fixed TP
+        htf_alignment: true # require HTF EMA alignment before entry
 
   # --- SmcConfluence shared params ---
   # Inherited by the smc_confluence child via merged_child_config.
   smc_confluence:
-    min_score: 3                    # minimum confluence conditions met before entry
-    sig_cooldown: 5                 # bars between repeat signals on same pair
-    smc_swing: 6                    # swing lookback for CHoCH / BOS detection
-    ms_swing: 6                     # market structure swing length
-    tl_pivot_len: 6                 # trendline pivot length
-    ob_body_pct: 0.15               # order block: min body / range ratio
-    ob_expire: 90                   # bars before unmitigated OB expires
-    liq_lookback: 18                # liquidity sweep lookback
-    liq_wick_pct: 0.25              # min wick / body ratio to qualify as sweep
-    poc_zone_pct: 0.35              # volume POC zone half-width %
-    sess_liq_pct: 0.18              # session liquidity proximity %
-    tl_retest_pct: 0.22             # trendline retest proximity %
-    vp_bars: 60                     # volume profile lookback bars
-    fvg_confluence: true            # require FVG overlap for higher-quality OB entries
-    premium_discount_lookback: 20   # bars for premium/discount range calculation
-    signal_mode: choch_strict       # choch_strict | choch_any | bos
-    close_on_opposite_smc: true     # close long on bearish SMC signal (and vice versa)
-    opposite_smc_min_gain_pct: 0    # close on opposite signal regardless of current gain
+    min_score: 3 # minimum confluence conditions met before entry
+    sig_cooldown: 5 # bars between repeat signals on same pair
+    smc_swing: 6 # swing lookback for CHoCH / BOS detection
+    ms_swing: 6 # market structure swing length
+    tl_pivot_len: 6 # trendline pivot length
+    ob_body_pct: 0.15 # order block: min body / range ratio
+    ob_expire: 90 # bars before unmitigated OB expires
+    liq_lookback: 18 # liquidity sweep lookback
+    liq_wick_pct: 0.25 # min wick / body ratio to qualify as sweep
+    poc_zone_pct: 0.35 # volume POC zone half-width %
+    sess_liq_pct: 0.18 # session liquidity proximity %
+    tl_retest_pct: 0.22 # trendline retest proximity %
+    vp_bars: 60 # volume profile lookback bars
+    fvg_confluence: true # require FVG overlap for higher-quality OB entries
+    premium_discount_lookback: 20 # bars for premium/discount range calculation
+    signal_mode: choch_strict # choch_strict | choch_any | bos
+    close_on_opposite_smc: true # close long on bearish SMC signal (and vice versa)
+    opposite_smc_min_gain_pct: 0 # close on opposite signal regardless of current gain
 
 execution:
   order_defaults:
@@ -121,6 +129,10 @@ execution:
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 200
+
+  # swing (default) | scalper — scalper merges faster candles + risk/HWM presets (see lib/coindcx_bot/scalper_profile.rb).
+  # Env COINDCX_BOT_MODE=swing forces swing even if this key says scalper.
+  mode: swing
 
   # 30s refresh suits 15m candles; reduces REST load vs scalper preset (12s).
   refresh_candles_seconds: 30
@@ -166,25 +178,25 @@ regime:
   hmm:
     enabled: true
     persistence_path: ./data/regime_hmm.json
-    scope: per_pair              # independent model per pair
-    n_candidates: [3, 4, 5]     # HMM state counts to try; best BIC wins
-    n_init: 3                   # random restarts per candidate
-    em_iterations: 35           # Baum-Welch max iterations
-    min_train_bars: 80          # skip fit if fewer bars available
-    zscore_lookback: 60         # volatility zscore rolling window
-    retrain_every_bars: 0       # 0 = retrain every candle refresh cycle
+    scope: per_pair # independent model per pair
+    n_candidates: [3, 4, 5] # HMM state counts to try; best BIC wins
+    n_init: 3 # random restarts per candidate
+    em_iterations: 35 # Baum-Welch max iterations
+    min_train_bars: 80 # skip fit if fewer bars available
+    zscore_lookback: 60 # volatility zscore rolling window
+    retrain_every_bars: 0 # 0 = retrain every candle refresh cycle
 
   ai:
     enabled: true
-    include_hmm_context: true   # inject current HMM tier into Ollama prompt
-    mode: tui_narrative         # output: TUI narrative strip (not trade gating)
+    include_hmm_context: true # inject current HMM tier into Ollama prompt
+    mode: tui_narrative # output: TUI narrative strip (not trade gating)
     model: llama3.2:3b
     ollama_base_url: http://127.0.0.1:11434
     timeout_seconds: 90
-    min_interval_seconds: 180   # minimum seconds between Ollama calls per pair
-    bars_per_pair: 24           # recent bars sent in prompt context
-    max_pairs: 8                # cap on concurrent pairs in a single narrative batch
-    temperature: 0.15           # low temperature for consistent regime labels
+    min_interval_seconds: 180 # minimum seconds between Ollama calls per pair
+    bars_per_pair: 24 # recent bars sent in prompt context
+    max_pairs: 8 # cap on concurrent pairs in a single narrative batch
+    temperature: 0.15 # low temperature for consistent regime labels
     use_retry_middleware: true
     retry_attempts: 3
 
@@ -193,7 +205,7 @@ regime:
     # Above 1.5% daily drawdown → half size. Above 3% → zero (halt enforced by risk manager).
     daily_dd_reduce_pct_of_capital: 1.5
     daily_dd_halt_pct_of_capital: 3.0
-    size_reduce_factor: 0.5     # multiplier applied when daily DD exceeds reduce threshold
+    size_reduce_factor: 0.5 # multiplier applied when daily DD exceeds reduce threshold
 
 # FX: CoinDCX conversions API, 60s cache. Set enabled: false to always use inr_per_usdt.
 fx:
@@ -202,12 +214,12 @@ fx:
 
 # Paper broker simulation settings (only active when runtime.dry_run: true).
 paper:
-  slippage_bps: 5    # 5 bps market-order slippage per side
-  fee_bps: 4         # 4 bps taker fee (CoinDCX futures taker)
+  slippage_bps: 5 # 5 bps market-order slippage per side
+  fee_bps: 4 # 4 bps taker fee (CoinDCX futures taker)
   db_path: ./data/paper_trading.sqlite3
 
-# In-process PaperBroker used when paper_exchange.enabled: false (default).
-# Set enabled: true + run `bin/paper-exchange` only for HTTP-level order testing.
+# In-process PaperBroker when paper_exchange.enabled: false (default).
+# When true: run `bin/paper-exchange`; orders/positions REST use api_base_url, while candles/WS/FX stay on CoinDCX production.
 paper_exchange:
   enabled: false
 

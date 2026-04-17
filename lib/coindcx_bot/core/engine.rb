@@ -21,6 +21,15 @@ module CoindcxBot
         keyword_init: true
       )
 
+      COIN_DCX_HTTP_ATTRS_TO_MIRROR = %i[
+        api_key api_secret logger public_base_url socket_base_url socket_io_connect_options
+        open_timeout read_timeout max_retries retry_base_interval user_agent
+        socket_io_backend_factory socket_reconnect_attempts socket_reconnect_interval
+        socket_heartbeat_interval socket_liveness_timeout market_data_retry_budget
+        private_read_retry_budget idempotent_order_retry_budget
+        circuit_breaker_threshold circuit_breaker_cooldown
+      ].freeze
+
       def initialize(config:, logger: nil, tick_store: nil, on_tick: nil, order_book_store: nil,
                      on_market_data: nil)
         @config = config
@@ -44,6 +53,7 @@ module CoindcxBot
 
         configure_coin_dcx
         @client = CoinDCX.client
+        @order_account_client = order_account_rest_client(config)
         @fx = Fx::UsdtInrRate.new(client: @client, config: config, logger: @logger)
         @risk = Risk::Manager.new(config: config, journal: @journal, exposure_guard: @exposure, fx: @fx)
         @strategy = build_strategy(config.strategy)
@@ -53,10 +63,10 @@ module CoindcxBot
           margin_currency_short_name: config.margin_currency_short_name
         )
         @orders = Gateways::OrderGateway.new(
-          client: @client,
+          client: @order_account_client,
           order_defaults: config.execution.fetch(:order_defaults, {})
         )
-        @account = Gateways::AccountGateway.new(client: @client)
+        @account = Gateways::AccountGateway.new(client: @order_account_client)
         @ws = Gateways::WsGateway.new(client: @client, logger: @logger)
         @broker = build_broker(config)
         @coord = Execution::Coordinator.new(
@@ -767,14 +777,13 @@ module CoindcxBot
 
       def configure_coin_dcx
         CoinDCX.configure do |c|
-          c.api_key = ENV.fetch('COINDCX_API_KEY').to_s.strip
-          c.api_secret = ENV.fetch('COINDCX_API_SECRET').to_s.strip
+          c.api_key = ENV['COINDCX_API_KEY'].to_s.strip
+          c.api_secret = ENV['COINDCX_API_SECRET'].to_s.strip
           c.logger = @logger
 
-          if @config.paper_exchange_enabled?
-            base = @config.paper_exchange_api_base
-            c.api_base_url = base unless base.empty?
-          end
+          # Gateway paper mode must NOT point the global REST client at the local paper exchange:
+          # market data (candles, RT quotes) and FX still need production (or public) CoinDCX hosts.
+          # Orders/positions use +order_account_rest_client+ (separate client) instead.
 
           url = ENV['COINDCX_SOCKET_BASE_URL'].to_s.strip
           c.socket_base_url = url unless url.empty?
@@ -786,6 +795,35 @@ module CoindcxBot
             c.socket_io_connect_options = { EIO: Integer(eio) } unless eio.empty?
           end
         end
+      end
+
+      # Futures REST for signed order + position calls. Stays on production +api.coindcx.com+ unless
+      # +paper_exchange.enabled+, in which case a dedicated client targets +paper_exchange.api_base_url+.
+      def order_account_rest_client(config)
+        return @client unless config.dry_run? && config.paper_exchange_enabled?
+
+        paper_rest_client_for_exchange(config.paper_exchange_api_base)
+      end
+
+      def paper_rest_client_for_exchange(base_url)
+        base = base_url.to_s.strip
+        if base.empty?
+          raise CoindcxBot::Config::ConfigurationError,
+                'paper_exchange.api_base_url is required when paper_exchange.enabled'
+        end
+
+        main = CoinDCX.configuration
+        paper_cfg = CoinDCX::Configuration.new
+        copy_shared_coin_dcx_http_settings!(from: main, to: paper_cfg)
+        paper_cfg.api_base_url = base.chomp('/')
+        CoinDCX::Client.new(configuration: paper_cfg)
+      end
+
+      def copy_shared_coin_dcx_http_settings!(from:, to:)
+        COIN_DCX_HTTP_ATTRS_TO_MIRROR.each do |attr|
+          to.send("#{attr}=", from.send(attr))
+        end
+        to.endpoint_rate_limits = from.endpoint_rate_limits.transform_values(&:dup)
       end
 
       def order_book_ltp_hint(pair)
