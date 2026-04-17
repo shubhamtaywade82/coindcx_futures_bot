@@ -80,6 +80,25 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(journal.sum_paper_realized_pnl_usdt).to eq(BigDecimal('3.5'))
   end
 
+  it 'notifies event_sink after persisting' do
+    seen = []
+    sink = Object.new
+    sink.define_singleton_method(:deliver) { |t, p| seen << [t, p] }
+    journal = described_class.new(path, event_sink: sink)
+    journal.log_event('flatten', pair: 'B-SOL_USDT')
+    expect(seen.size).to eq(1)
+    expect(seen.first.first).to eq('flatten')
+    expect(seen.first.last).to eq({ pair: 'B-SOL_USDT' })
+  end
+
+  it 'still persists when event_sink raises' do
+    boom = Object.new
+    boom.define_singleton_method(:deliver) { |_| raise 'sink boom' }
+    journal = described_class.new(path, event_sink: boom)
+    expect { journal.log_event('trail', stop: '1') }.not_to raise_error
+    expect(journal.recent_events(1).first['type']).to eq('trail')
+  end
+
   it 'updates entry_price for an open position' do
     journal = described_class.new(path)
     id = journal.insert_position(

@@ -25,7 +25,10 @@ module CoindcxBot
                      on_market_data: nil)
         @config = config
         @logger = logger || Logger.new($stdout)
-        @journal = Persistence::Journal.new(config.journal_path)
+        @journal = Persistence::Journal.new(
+          config.journal_path,
+          event_sink: CoindcxBot::Notifications::TelegramJournalSink.build_if_configured(config: config, logger: @logger)
+        )
         @bus = EventBus.new
         @tick_store = tick_store
         @on_tick = on_tick

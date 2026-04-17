@@ -7,8 +7,9 @@ require 'fileutils'
 module CoindcxBot
   module Persistence
     class Journal
-      def initialize(path)
+      def initialize(path, event_sink: nil)
         @path = path
+        @event_sink = event_sink
         FileUtils.mkdir_p(File.dirname(path))
         @db = SQLite3::Database.new(path)
         @db.results_as_hash = true
@@ -158,6 +159,7 @@ module CoindcxBot
           'INSERT INTO event_log(ts, type, payload) VALUES(?, ?, ?)',
           [Time.now.to_i, type.to_s, JSON.generate(payload)]
         )
+        notify_event_sink(type, payload)
       end
 
       # Wraps a block in an exclusive SQLite transaction so multi-step writes are atomic.
@@ -312,6 +314,15 @@ module CoindcxBot
       end
 
       private
+
+      def notify_event_sink(type, payload)
+        s = @event_sink
+        return unless s&.respond_to?(:deliver)
+
+        s.deliver(type, payload)
+      rescue StandardError
+        nil
+      end
 
       def blank?(v)
         v.nil? || v.to_s.strip.empty?

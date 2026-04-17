@@ -135,7 +135,7 @@ runtime:
   ws_shutdown_join_seconds: 45
 
   # Paper mode: in-process PaperBroker, no exchange order/account REST calls.
-  dry_run: false
+  dry_run: true
 
   # Live only (dry_run: false): false = read-only account APIs, NO order placement.
   # Override via env: PLACE_ORDER=0 or PLACE_ORDER=false
@@ -210,3 +210,13 @@ paper:
 # Set enabled: true + run `bin/paper-exchange` only for HTTP-level order testing.
 paper_exchange:
   enabled: false
+
+# Optional: mirror every +event_log+ journal row to Telegram (non-blocking). Default off.
+# Set +notifications.telegram.enabled: true+ and ENV +COINDCX_TELEGRAM_BOT_TOKEN+ / +COINDCX_TELEGRAM_CHAT_ID+.
+# Optional ops duplicate chat: +COINDCX_TELEGRAM_OPS_CHAT_ID+ (+COINDCX_TELEGRAM_OPS_BOT_TOKEN+ if different bot).
+# notifications:
+#   telegram:
+#     enabled: false
+#     chat_id: ''          # optional if chat id is only in ENV
+#     ops_chat_id: ''
+#     notify_ops_types: [open_failed, smc_setup_invalidated]
