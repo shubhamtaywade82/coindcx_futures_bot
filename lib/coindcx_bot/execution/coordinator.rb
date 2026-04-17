@@ -177,15 +177,18 @@ module CoindcxBot
           return :failed
         end
 
-        journal_id = journal_open(signal, quantity, entry_price)
+        journal_id = nil
+        @journal.within_transaction do
+          journal_id = journal_open(signal, quantity, entry_price)
+          @journal.log_event(
+            'signal_open',
+            action: signal.action.to_s,
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            leverage: leverage
+          )
+        end
         sync_journal_entry_from_paper_fill(signal.pair.to_s, journal_id)
-        @journal.log_event(
-          'signal_open',
-          action: signal.action.to_s,
-          pair: signal.pair,
-          reason: signal.reason.to_s,
-          leverage: leverage
-        )
         @logger&.info("[paper] opened #{signal.side} #{signal.pair} qty=#{quantity}")
         :paper
       end
@@ -220,14 +223,16 @@ module CoindcxBot
           return :failed
         end
 
-        journal_open(signal, quantity, entry_price)
-        @journal.log_event(
-          'signal_open',
-          action: signal.action.to_s,
-          pair: signal.pair,
-          reason: signal.reason.to_s,
-          leverage: leverage
-        )
+        @journal.within_transaction do
+          journal_open(signal, quantity, entry_price)
+          @journal.log_event(
+            'signal_open',
+            action: signal.action.to_s,
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            leverage: leverage
+          )
+        end
         @logger&.info("Opened #{signal.side} #{signal.pair} qty=#{quantity}")
         :ok
       end
@@ -322,19 +327,20 @@ module CoindcxBot
           )
         end
 
-        @journal.close_position(close_id)
+        outcome, pnl_flag = summarize_paper_close_outcome(broker_res, exchange_attempted, skipped_no_ltp)
+        @journal.within_transaction do
+          @journal.close_position(close_id)
+          @journal.log_event(
+            'signal_close',
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            position_id: close_id,
+            outcome: outcome,
+            pnl_booked: pnl_flag
+          )
+        end
         record_meta_first_win_entry_cooldown(signal.pair)
         @logger&.info("[paper] closed #{signal.pair} id=#{close_id}")
-
-        outcome, pnl_flag = summarize_paper_close_outcome(broker_res, exchange_attempted, skipped_no_ltp)
-        @journal.log_event(
-          'signal_close',
-          pair: signal.pair,
-          reason: signal.reason.to_s,
-          position_id: close_id,
-          outcome: outcome,
-          pnl_booked: pnl_flag
-        )
         :paper
       end
 
@@ -370,16 +376,18 @@ module CoindcxBot
             source: :strategy_close
           )
         end
-        @journal.close_position(close_id)
+        @journal.within_transaction do
+          @journal.close_position(close_id)
+          @journal.log_event(
+            'signal_close',
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            position_id: close_id,
+            outcome: 'live_closed',
+            pnl_booked: pnl_path
+          )
+        end
         record_meta_first_win_entry_cooldown(signal.pair)
-        @journal.log_event(
-          'signal_close',
-          pair: signal.pair,
-          reason: signal.reason.to_s,
-          position_id: close_id,
-          outcome: 'live_closed',
-          pnl_booked: pnl_path
-        )
         :ok
       end
 

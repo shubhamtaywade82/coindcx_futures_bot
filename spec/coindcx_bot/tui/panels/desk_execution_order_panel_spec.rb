@@ -48,7 +48,8 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskExecutionOrderPanel do
       execution: { order_defaults: {} },
       trading_mode_label: 'SWING',
       scalper_mode?: false,
-      tui_exchange_positions_enabled?: false
+      tui_exchange_positions_enabled?: false,
+      meta_first_win_strategy?: false
     )
   end
   let(:engine) { double('engine', snapshot: snapshot, broker: broker_double, config: config) }

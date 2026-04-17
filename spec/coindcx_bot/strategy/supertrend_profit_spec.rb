@@ -59,6 +59,51 @@ RSpec.describe CoindcxBot::Strategy::SupertrendProfit do
     end
   end
 
+  describe 'stop-loss exit' do
+    it 'emits close when long price falls to or below stop_price' do
+      position = { id: 3, side: 'long', entry_price: '100', stop_price: '95', quantity: '0.01',
+                   initial_stop_price: '95' }
+      sig = strategy.evaluate(
+        pair: 'B-X_USDT',
+        candles_htf: [],
+        candles_exec: [c(0, 1, 2, 1, 1)],
+        position: position,
+        ltp: BigDecimal('94.99')
+      )
+      expect(sig.action).to eq(:close)
+      expect(sig.reason).to eq('stop')
+      expect(sig.metadata[:position_id]).to eq(3)
+    end
+
+    it 'emits close when short price rises to or above stop_price' do
+      position = { id: 4, side: 'short', entry_price: '100', stop_price: '105', quantity: '0.01',
+                   initial_stop_price: '105' }
+      sig = strategy.evaluate(
+        pair: 'B-X_USDT',
+        candles_htf: [],
+        candles_exec: [c(0, 1, 2, 1, 1)],
+        position: position,
+        ltp: BigDecimal('105.01')
+      )
+      expect(sig.action).to eq(:close)
+      expect(sig.reason).to eq('stop')
+    end
+
+    it 'does not emit stop close when price is inside stop distance' do
+      position = { id: 5, side: 'long', entry_price: '100', stop_price: '95', quantity: '0.01',
+                   initial_stop_price: '95' }
+      sig = strategy.evaluate(
+        pair: 'B-X_USDT',
+        candles_htf: [],
+        candles_exec: [c(0, 1, 2, 1, 1)],
+        position: position,
+        ltp: BigDecimal('97')
+      )
+      # Not yet at TP (10%), not yet at stop — should hold (or trail if DynamicTrail fires)
+      expect(%i[hold trail]).to include(sig.action)
+    end
+  end
+
   describe 'Supertrend flip entry' do
     let(:closed) { 20.times.map { |i| c(i, 100, 101, 99, 100, 1000) } }
     let(:exec) { closed + [c(99, 100, 101, 99, 100, 1000)] }

@@ -160,6 +160,12 @@ module CoindcxBot
         )
       end
 
+      # Wraps a block in an exclusive SQLite transaction so multi-step writes are atomic.
+      # On exception the transaction is rolled back and the error re-raised.
+      def within_transaction(&block)
+        @db.transaction(:exclusive, &block)
+      end
+
       def recent_events(limit = 50)
         @db.execute('SELECT ts, type, payload FROM event_log ORDER BY id DESC LIMIT ?', limit)
       end

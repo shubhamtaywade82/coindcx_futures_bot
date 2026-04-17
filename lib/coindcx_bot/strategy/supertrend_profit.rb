@@ -1,12 +1,13 @@
 # frozen_string_literal: true
 
 require 'bigdecimal'
+require_relative 'dynamic_trail'
 require_relative 'hwm_giveback'
 
 module CoindcxBot
   module Strategy
-    # 5m (or any `execution_resolution`) Supertrend entries; exits only at configured take-profit % on price.
-    # Opposite Supertrend flips do not close — only the profit target does.
+    # Supertrend flip entries; exits via fixed TP %, DynamicTrail, HWM giveback, or stop.
+    # Opposite Supertrend flips do not trigger a close — only the exit conditions above do.
     class SupertrendProfit
       def initialize(strategy_config)
         @cfg = strategy_config.transform_keys(&:to_sym)
@@ -15,7 +16,7 @@ module CoindcxBot
       def evaluate(pair:, candles_htf:, candles_exec:, position:, ltp:, regime_hint: nil)
         exec = candles_exec
 
-        return manage_position(pair, position, ltp) if position
+        return manage_position(pair, position, exec, ltp) if position
 
         closed = exec.size >= 2 ? exec[0..-2] : []
         return hold(pair, 'insufficient_exec_bars') if closed.size < warmup_bars
@@ -49,18 +50,33 @@ module CoindcxBot
         BigDecimal(@cfg.fetch(:stop_distance_pct_for_sizing, 0.02).to_s)
       end
 
-      def manage_position(pair, position, ltp)
+      def manage_position(pair, position, exec, ltp)
         return hold(pair, 'no_ltp') unless ltp
 
         entry = BigDecimal(position[:entry_price].to_s)
         return hold(pair, 'bad_entry') unless entry.positive?
 
         side = position[:side].to_s
+        ltp_bd = BigDecimal(ltp.to_s)
+        id = position[:id]
+
+        # Stop-loss check (safety net; paper broker OCO also handles this via FillEngine).
+        stop = position[:stop_price] ? BigDecimal(position[:stop_price].to_s) : nil
+        if stop&.positive?
+          if side == 'long' && ltp_bd <= stop
+            return Signal.new(action: :close, pair: pair, side: :long, stop_price: nil,
+                              reason: 'stop', metadata: { position_id: id })
+          elsif side == 'short' && ltp_bd >= stop
+            return Signal.new(action: :close, pair: pair, side: :short, stop_price: nil,
+                              reason: 'stop', metadata: { position_id: id })
+          end
+        end
+
         gain =
           if side == 'long'
-            (BigDecimal(ltp.to_s) - entry) / entry
+            (ltp_bd - entry) / entry
           elsif side == 'short'
-            (entry - BigDecimal(ltp.to_s)) / entry
+            (entry - ltp_bd) / entry
           else
             return hold(pair, 'unknown_side')
           end
@@ -69,15 +85,35 @@ module CoindcxBot
         return hwm if hwm
 
         if gain >= take_profit_pct
-          id = position[:id]
-          return Signal.new(
-            action: :close,
-            pair: pair,
-            side: side.to_sym,
-            stop_price: nil,
-            reason: 'take_profit_pct',
-            metadata: { position_id: id }
+          return Signal.new(action: :close, pair: pair, side: side.to_sym, stop_price: nil,
+                            reason: 'take_profit_pct', metadata: { position_id: id })
+        end
+
+        # Trailing stop — activates once in profit; uses same DynamicTrail tiers as TrendContinuation.
+        if exec.size >= 2
+          initial_stop = BigDecimal((position[:initial_stop_price] || position[:stop_price]).to_s)
+          current_stop = stop || initial_stop
+          out = trail_calculator.call(
+            DynamicTrail::Input.new(
+              side: side.to_sym,
+              candles: exec,
+              entry_price: entry,
+              initial_stop: initial_stop,
+              current_stop: current_stop,
+              ltp: ltp_bd
+            )
           )
+          if out.changed
+            return Signal.new(
+              action: :trail,
+              pair: pair,
+              side: side.to_sym,
+              stop_price: out.stop_price,
+              reason: out.reason,
+              metadata: { position_id: id, tier: out.tier, v_factor: out.v_factor,
+                          vol_factor: out.vol_factor }
+            )
+          end
         end
 
         hold(pair, 'below_take_profit')
@@ -119,6 +155,10 @@ module CoindcxBot
         else
           hold(pair, 'no_entry_setup')
         end
+      end
+
+      def trail_calculator
+        @trail_calculator ||= DynamicTrail::Calculator.new(@cfg)
       end
     end
   end

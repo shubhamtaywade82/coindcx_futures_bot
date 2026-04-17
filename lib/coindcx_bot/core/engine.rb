@@ -214,6 +214,12 @@ module CoindcxBot
       end
 
       def run
+        if !@config.dry_run? && !@config.place_orders?
+          @logger.warn(
+            '[engine] LIVE-OBSERVE mode: strategy signals evaluated, journal updated, ' \
+            'NO orders placed (runtime.place_orders: false / PLACE_ORDER=0)'
+          )
+        end
         ws_thread = Thread.new { run_ws_loop }
         loop do
           break if @stop
@@ -949,8 +955,12 @@ module CoindcxBot
       def load_pair_resolution(pair, resolution, store)
         from, to = candle_window(resolution, @lookback)
         res = @md.list_candlesticks(pair: pair, resolution: resolution, from: from, to: to)
+        if res.failure?
+          sleep 0.5
+          res = @md.list_candlesticks(pair: pair, resolution: resolution, from: from, to: to)
+        end
         unless res.ok?
-          @logger.warn("candles #{pair} #{resolution}: #{res.message}")
+          @logger.warn("[candles] #{pair}/#{resolution} fetch failed (using stale): #{res.message}")
           return
         end
         store[pair] = res.value

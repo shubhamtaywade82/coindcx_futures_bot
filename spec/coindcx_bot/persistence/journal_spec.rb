@@ -210,4 +210,35 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(journal.smc_setup_get_row('e2')[:state]).to eq('invalidated')
     expect(journal.smc_setup_get_row('e3')[:state]).to eq('invalidated')
   end
+
+  describe '#within_transaction' do
+    it 'commits both writes when the block succeeds' do
+      journal = described_class.new(path)
+      journal.within_transaction do
+        journal.insert_position(
+          pair: 'B-SOL_USDT', side: 'long',
+          entry_price: BigDecimal('100'), quantity: BigDecimal('0.1'),
+          stop_price: BigDecimal('95'), trail_price: nil
+        )
+        journal.log_event('signal_open', { pair: 'B-SOL_USDT' })
+      end
+      expect(journal.open_positions.size).to eq(1)
+      expect(journal.recent_events(5).first['type']).to eq('signal_open')
+    end
+
+    it 'rolls back all writes in the block when an exception is raised' do
+      journal = described_class.new(path)
+      expect do
+        journal.within_transaction do
+          journal.insert_position(
+            pair: 'B-ETH_USDT', side: 'long',
+            entry_price: BigDecimal('2000'), quantity: BigDecimal('0.05'),
+            stop_price: BigDecimal('1900'), trail_price: nil
+          )
+          raise 'simulated broker failure'
+        end
+      end.to raise_error(RuntimeError, 'simulated broker failure')
+      expect(journal.open_positions).to be_empty
+    end
+  end
 end
