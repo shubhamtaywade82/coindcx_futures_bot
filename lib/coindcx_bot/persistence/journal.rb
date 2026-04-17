@@ -7,8 +7,9 @@ require 'fileutils'
 module CoindcxBot
   module Persistence
     class Journal
-      def initialize(path)
+      def initialize(path, event_sink: nil)
         @path = path
+        @event_sink = event_sink
         FileUtils.mkdir_p(File.dirname(path))
         @db = SQLite3::Database.new(path)
         @db.results_as_hash = true
@@ -79,18 +80,20 @@ module CoindcxBot
       end
 
       def insert_position(pair:, side:, entry_price:, quantity:, stop_price:, trail_price: nil,
-                          initial_stop_price: nil, smc_setup_id: nil)
+                          initial_stop_price: nil, smc_setup_id: nil, entry_lane: nil)
         now = Time.now.to_i
         initial = (initial_stop_price || stop_price)&.to_s('F')
         sid = smc_setup_id&.to_s
         sid = nil if sid&.strip&.empty?
+        lane = entry_lane&.to_s&.strip
+        lane = nil if lane&.empty?
         @db.execute(
           <<~SQL,
-            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id)
-            VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?)
+            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id, entry_lane)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?)
           SQL
           [pair, side.to_s, entry_price.to_s('F'), quantity.to_s('F'),
-           stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid]
+           stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid, lane]
         )
         @db.last_insert_row_id
       end
@@ -156,6 +159,13 @@ module CoindcxBot
           'INSERT INTO event_log(ts, type, payload) VALUES(?, ?, ?)',
           [Time.now.to_i, type.to_s, JSON.generate(payload)]
         )
+        notify_event_sink(type, payload)
+      end
+
+      # Wraps a block in an exclusive SQLite transaction so multi-step writes are atomic.
+      # On exception the transaction is rolled back and the error re-raised.
+      def within_transaction(&block)
+        @db.transaction(:exclusive, &block)
       end
 
       def recent_events(limit = 50)
@@ -305,6 +315,15 @@ module CoindcxBot
 
       private
 
+      def notify_event_sink(type, payload)
+        s = @event_sink
+        return unless s&.respond_to?(:deliver)
+
+        s.deliver(type, payload)
+      rescue StandardError
+        nil
+      end
+
       def blank?(v)
         v.nil? || v.to_s.strip.empty?
       end
@@ -354,9 +373,13 @@ module CoindcxBot
           @db.execute('ALTER TABLE positions ADD COLUMN peak_unrealized_usdt TEXT')
           cols = @db.table_info('positions').map { |r| r['name'] }
         end
-        return if cols.include?('smc_setup_id')
+        unless cols.include?('smc_setup_id')
+          @db.execute('ALTER TABLE positions ADD COLUMN smc_setup_id TEXT')
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        return if cols.include?('entry_lane')
 
-        @db.execute('ALTER TABLE positions ADD COLUMN smc_setup_id TEXT')
+        @db.execute('ALTER TABLE positions ADD COLUMN entry_lane TEXT')
       end
 
       def migrate_smc_trade_setups_table

@@ -58,11 +58,45 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(journal.open_positions).to be_empty
   end
 
+  it 'persists entry_lane on open positions for meta-strategy exit routing' do
+    journal = described_class.new(path)
+    journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil,
+      entry_lane: 'supertrend_profit'
+    )
+    row = journal.open_positions.first
+    expect(row[:entry_lane]).to eq('supertrend_profit')
+  end
+
   it 'sums pnl_usdt from paper_realized events' do
     journal = described_class.new(path)
     journal.log_event('paper_realized', pnl_usdt: '2.5', pair: 'B-SOL_USDT')
     journal.log_event('paper_realized', pnl_usdt: '1.0', pair: 'B-ETH_USDT')
     expect(journal.sum_paper_realized_pnl_usdt).to eq(BigDecimal('3.5'))
+  end
+
+  it 'notifies event_sink after persisting' do
+    seen = []
+    sink = Object.new
+    sink.define_singleton_method(:deliver) { |t, p| seen << [t, p] }
+    journal = described_class.new(path, event_sink: sink)
+    journal.log_event('flatten', pair: 'B-SOL_USDT')
+    expect(seen.size).to eq(1)
+    expect(seen.first.first).to eq('flatten')
+    expect(seen.first.last).to eq({ pair: 'B-SOL_USDT' })
+  end
+
+  it 'still persists when event_sink raises' do
+    boom = Object.new
+    boom.define_singleton_method(:deliver) { |_| raise 'sink boom' }
+    journal = described_class.new(path, event_sink: boom)
+    expect { journal.log_event('trail', stop: '1') }.not_to raise_error
+    expect(journal.recent_events(1).first['type']).to eq('trail')
   end
 
   it 'updates entry_price for an open position' do
@@ -194,5 +228,36 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(journal.smc_setup_get_row('e1')[:state]).to eq('pending_sweep')
     expect(journal.smc_setup_get_row('e2')[:state]).to eq('invalidated')
     expect(journal.smc_setup_get_row('e3')[:state]).to eq('invalidated')
+  end
+
+  describe '#within_transaction' do
+    it 'commits both writes when the block succeeds' do
+      journal = described_class.new(path)
+      journal.within_transaction do
+        journal.insert_position(
+          pair: 'B-SOL_USDT', side: 'long',
+          entry_price: BigDecimal('100'), quantity: BigDecimal('0.1'),
+          stop_price: BigDecimal('95'), trail_price: nil
+        )
+        journal.log_event('signal_open', { pair: 'B-SOL_USDT' })
+      end
+      expect(journal.open_positions.size).to eq(1)
+      expect(journal.recent_events(5).first['type']).to eq('signal_open')
+    end
+
+    it 'rolls back all writes in the block when an exception is raised' do
+      journal = described_class.new(path)
+      expect do
+        journal.within_transaction do
+          journal.insert_position(
+            pair: 'B-ETH_USDT', side: 'long',
+            entry_price: BigDecimal('2000'), quantity: BigDecimal('0.05'),
+            stop_price: BigDecimal('1900'), trail_price: nil
+          )
+          raise 'simulated broker failure'
+        end
+      end.to raise_error(RuntimeError, 'simulated broker failure')
+      expect(journal.open_positions).to be_empty
+    end
   end
 end

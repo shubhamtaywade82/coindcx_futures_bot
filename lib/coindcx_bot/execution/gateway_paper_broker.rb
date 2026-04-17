@@ -21,8 +21,8 @@ module CoindcxBot
         )
         @tick_base_url = tick_base_url.to_s.chomp('/')
         @tick_path = tick_path.start_with?('/') ? tick_path : "/#{tick_path}"
-        @api_key = (api_key || ENV.fetch('COINDCX_API_KEY')).to_s.strip
-        @api_secret = (api_secret || ENV.fetch('COINDCX_API_SECRET')).to_s.strip
+        @api_key = (api_key || ENV['COINDCX_API_KEY']).to_s.strip
+        @api_secret = (api_secret || ENV['COINDCX_API_SECRET']).to_s.strip
         @conn = faraday_connection || Faraday.new(url: @tick_base_url) do |f|
           f.options.open_timeout = 5
           f.options.timeout = 15

@@ -198,6 +198,7 @@ module CoindcxBot
             muted(row[:sl].to_s.ljust(7)),
             color_pnl(row[:pnl_usdt], row[:pnl_label])
           ]
+          parts << muted("[#{row[:lane]}]") if row[:lane]
           parts << spark if spark
           parts.join(muted(' '))
         end

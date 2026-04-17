@@ -59,6 +59,39 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
       expect(output.string).to include('PIPE:IDLE')
       expect(output.string).to include('awaiting HmmEngine')
     end
+
+    it 'adds wrapped detail lines for full AI transition and notes' do
+      allow(config).to receive(:regime_enabled?).and_return(true)
+      allow(config).to receive(:regime_ai_enabled?).and_return(true)
+      long_notes = 'The HMM indicates a strong regime while spot holds the range for several sessions.'
+      long_trans = 'State has remained consistent across the sampled bars without a vol spike.'
+      regime = CoindcxBot::Regime::TuiState::STANDBY_AI.merge(
+        active: true,
+        label: 'S1',
+        probability_pct: 99.0,
+        stability_bars: 24,
+        flicker_display: 'steady',
+        confirmed: false,
+        vol_rank_display: '3/4',
+        transition_display: 'short',
+        quant_display: 'S1 p=99%',
+        hmm_display: 'AI: preview only',
+        ai_transition_full: long_trans,
+        ai_notes_full: long_notes,
+        status: 'PIPE:RUN'
+      )
+      snap = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(regime: regime))
+      eng = double('engine', snapshot: snap, broker: broker_double, config: config)
+      panel = described_class.new(engine: eng, origin_row: 0, output: output)
+      expect(panel.row_count).to be > 4
+      panel.render
+      expect(output.string).to include('A:↓')
+      expect(output.string).to include('AI:↓')
+      expect(output.string).to include('A· ')
+      expect(output.string).to include('n· ')
+      expect(output.string).to include(long_trans[0, 40])
+      expect(output.string).to include(long_notes[0, 40])
+    end
   end
 
   describe '#row_count' do
