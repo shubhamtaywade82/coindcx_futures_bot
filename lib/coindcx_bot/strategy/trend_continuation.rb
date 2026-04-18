@@ -156,7 +156,7 @@ module CoindcxBot
                               reason: 'breakout_after_compression', metadata: {})
           end
           ema_f = Indicators.ema_last(exec.map(&:close), ef)
-          if ema_f && exec[-2].low <= ema_f * (BigDecimal('1') + tol) && price > ema_f && price > recent_high * BigDecimal('0.999')
+          if ema_f && exec.size >= 2 && exec[-2].low <= ema_f * (BigDecimal('1') + tol) && price > ema_f && price > recent_high * BigDecimal('0.999')
             return Signal.new(action: :open_long, pair: pair, side: :long, stop_price: stop,
                               reason: 'pullback_to_ema', metadata: {})
           end
@@ -167,7 +167,7 @@ module CoindcxBot
                               reason: 'breakout_after_compression', metadata: {})
           end
           ema_f = Indicators.ema_last(exec.map(&:close), ef)
-          if ema_f && exec[-2].high >= ema_f * (BigDecimal('1') - tol) && price < ema_f && price < recent_low * BigDecimal('1.001')
+          if ema_f && exec.size >= 2 && exec[-2].high >= ema_f * (BigDecimal('1') - tol) && price < ema_f && price < recent_low * BigDecimal('1.001')
             return Signal.new(action: :open_short, pair: pair, side: :short, stop_price: stop,
                               reason: 'pullback_to_ema', metadata: {})
           end

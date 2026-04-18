@@ -83,13 +83,15 @@ module CoindcxBot
         close_id = row&.dig(:id)
 
         if close_id
-          book_inr_from_paper_close(
-            { ok: true, realized_pnl_usdt: realized_pnl_usdt, fill_price: fill_price, position_id: position_id },
-            row: row,
-            pair: pair,
-            source: :"broker_#{trigger}"
-          )
-          @journal.close_position(close_id)
+          @journal.within_transaction do
+            book_inr_from_paper_close(
+              { ok: true, realized_pnl_usdt: realized_pnl_usdt, fill_price: fill_price, position_id: position_id },
+              row: row,
+              pair: pair,
+              source: :"broker_#{trigger}"
+            )
+            @journal.close_position(close_id)
+          end
           record_meta_first_win_entry_cooldown(pair)
           @logger&.info("[paper] broker exit synced: #{pair} id=#{close_id} trigger=#{trigger} pnl=#{realized_pnl_usdt&.to_s('F')}")
         else
@@ -457,7 +459,10 @@ module CoindcxBot
           return [row, row ? pid : nil]
         end
 
-        return [nil, nil] unless @dry
+        unless @dry
+          @logger&.warn("[live] close signal for #{pair} has no position_id — cannot target specific position, close skipped")
+          return [nil, nil]
+        end
 
         row = @journal.open_positions.find { |r| r[:pair].to_s == pair }
         [row, row&.dig(:id)]
@@ -576,7 +581,7 @@ module CoindcxBot
       def effective_leverage
         defaults = @config.execution.fetch(:order_defaults, {})
         raw = defaults[:leverage] || defaults['leverage'] || @config.risk.fetch(:max_leverage, 5)
-        requested = Integer(raw)
+        requested = BigDecimal(raw.to_s).to_i
         cap = @exposure.max_leverage
         [[requested, 1].max, cap].min
       end

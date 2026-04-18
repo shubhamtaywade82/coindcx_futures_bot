@@ -33,6 +33,9 @@ module CoindcxBot
       end
 
       def close_position(pair:, side:, quantity:, ltp:, position_id: nil)
+        if position_id
+          @logger&.warn("[live] close_position called with position_id=#{position_id} for #{pair} but live broker exits by pair — all positions for this pair will be closed")
+        end
         exit_exchange_for_pair(pair)
         :ok
       end

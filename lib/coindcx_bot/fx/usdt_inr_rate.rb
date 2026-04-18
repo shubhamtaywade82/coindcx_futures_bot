@@ -76,11 +76,11 @@ module CoindcxBot
           return
         end
 
+        # Don't update @cached_at on empty/invalid response so next call retries immediately.
         @logger&.warn('[fx] conversions response missing USDTINR conversion_price — using fallback or last good')
-        @cached_at = now
       rescue StandardError => e
+        # Don't update @cached_at on fetch error so next call retries immediately.
         @logger&.warn("[fx] conversions fetch failed: #{e.class}: #{e.message}")
-        @cached_at = now
       end
 
       def effective_value_locked

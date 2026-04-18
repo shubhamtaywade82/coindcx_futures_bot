@@ -3,6 +3,7 @@
 require 'sqlite3'
 require 'json'
 require 'fileutils'
+require 'monitor'
 
 module CoindcxBot
   module Persistence
@@ -13,6 +14,7 @@ module CoindcxBot
         FileUtils.mkdir_p(File.dirname(path))
         @db = SQLite3::Database.new(path)
         @db.results_as_hash = true
+        @db_mutex = Monitor.new
         migrate
       end
 
@@ -21,15 +23,16 @@ module CoindcxBot
       end
 
       def meta_get(key)
-        row = @db.get_first_value('SELECT value FROM meta WHERE key = ?', key.to_s)
-        row
+        db_sync { @db.get_first_value('SELECT value FROM meta WHERE key = ?', key.to_s) }
       end
 
       def meta_set(key, value)
-        @db.execute(
-          'INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-          [key.to_s, value.to_s]
-        )
+        db_sync do
+          @db.execute(
+            'INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+            [key.to_s, value.to_s]
+          )
+        end
       end
 
       def kill_switch?
@@ -55,95 +58,119 @@ module CoindcxBot
       def daily_pnl_inr
         v = meta_get("pnl_day:#{daily_key}")
         BigDecimal(blank?(v) ? '0' : v)
+      rescue ArgumentError
+        BigDecimal('0')
       end
 
       def add_daily_pnl_inr(delta)
-        key = "pnl_day:#{daily_key}"
-        cur = meta_get(key)
-        current = BigDecimal(blank?(cur) ? '0' : cur)
-        meta_set(key, (current + delta).to_s('F'))
+        db_sync do
+          key = "pnl_day:#{daily_key}"
+          cur = @db.get_first_value('SELECT value FROM meta WHERE key = ?', key)
+          current = begin
+            BigDecimal(blank?(cur) ? '0' : cur)
+          rescue ArgumentError
+            BigDecimal('0')
+          end
+          @db.execute(
+            'INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+            [key, (current + delta).to_s('F')]
+          )
+        end
       end
 
       # Keeps `pnl_current_day` in meta aligned with UTC calendar days.
       # Realized PnL for "today" already uses `pnl_day:#{daily_key}`; a new UTC day reads a new key (starts at 0).
       # Call this from the engine loop so the marker initializes on first run and updates after rollovers.
       def reset_daily_pnl_if_new_day!
-        last = meta_get('pnl_current_day')
-        today = daily_key
-        return if last == today
+        db_sync do
+          last = @db.get_first_value('SELECT value FROM meta WHERE key = ?', 'pnl_current_day')
+          today = daily_key
+          return if last == today
 
-        meta_set('pnl_current_day', today)
+          @db.execute(
+            'INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+            ['pnl_current_day', today]
+          )
+        end
       end
 
       def open_positions
-        @db.execute('SELECT * FROM positions WHERE state = ?', 'open').map { |row| symbolize_row(row) }
+        db_sync do
+          @db.execute('SELECT * FROM positions WHERE state = ?', 'open').map { |row| symbolize_row(row) }
+        end
       end
 
       def insert_position(pair:, side:, entry_price:, quantity:, stop_price:, trail_price: nil,
                           initial_stop_price: nil, smc_setup_id: nil, entry_lane: nil)
-        now = Time.now.to_i
-        initial = (initial_stop_price || stop_price)&.to_s('F')
-        sid = smc_setup_id&.to_s
-        sid = nil if sid&.strip&.empty?
-        lane = entry_lane&.to_s&.strip
-        lane = nil if lane&.empty?
-        @db.execute(
-          <<~SQL,
-            INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id, entry_lane)
-            VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?)
-          SQL
-          [pair, side.to_s, entry_price.to_s('F'), quantity.to_s('F'),
-           stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid, lane]
-        )
-        @db.last_insert_row_id
+        db_sync do
+          now = Time.now.to_i
+          initial = (initial_stop_price || stop_price)&.to_s('F')
+          sid = smc_setup_id&.to_s
+          sid = nil if sid&.strip&.empty?
+          lane = entry_lane&.to_s&.strip
+          lane = nil if lane&.empty?
+          @db.execute(
+            <<~SQL,
+              INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id, entry_lane)
+              VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?)
+            SQL
+            [pair, side.to_s, entry_price.to_s('F'), quantity.to_s('F'),
+             stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid, lane]
+          )
+          @db.last_insert_row_id
+        end
       end
 
       def update_position_trail(id, trail_price)
-        @db.execute('UPDATE positions SET trail_price = ? WHERE id = ?', [trail_price.to_s('F'), id])
+        db_sync { @db.execute('UPDATE positions SET trail_price = ? WHERE id = ?', [trail_price.to_s('F'), id]) }
       end
 
       def update_position_stop(id, stop_price)
-        @db.execute('UPDATE positions SET stop_price = ? WHERE id = ?', [stop_price.to_s('F'), id])
+        db_sync { @db.execute('UPDATE positions SET stop_price = ? WHERE id = ?', [stop_price.to_s('F'), id]) }
       end
 
       def update_position_entry_price(id, fill_price)
-        @db.execute(
-          'UPDATE positions SET entry_price = ? WHERE id = ?',
-          [BigDecimal(fill_price.to_s).to_s('F'), id]
-        )
+        db_sync do
+          @db.execute(
+            'UPDATE positions SET entry_price = ? WHERE id = ?',
+            [BigDecimal(fill_price.to_s).to_s('F'), id]
+          )
+        end
       end
 
       def mark_partial(id)
-        @db.execute('UPDATE positions SET partial_done = 1 WHERE id = ?', id)
+        db_sync { @db.execute('UPDATE positions SET partial_done = 1 WHERE id = ?', id) }
       end
 
       # Monotonic max unrealized USDT (MFE) for HWM giveback; persists peak_unrealized_usdt.
       def bump_peak_unrealized_usdt(id, current_usdt)
         return nil if id.nil?
 
-        cur = BigDecimal(current_usdt.to_s)
-        row = @db.get_first_row(
-          'SELECT peak_unrealized_usdt FROM positions WHERE id = ? AND state = ?',
-          [id, 'open']
-        )
-        return nil unless row
+        db_sync do
+          cur = BigDecimal(current_usdt.to_s)
+          row = @db.get_first_row(
+            'SELECT peak_unrealized_usdt FROM positions WHERE id = ? AND state = ?',
+            [id, 'open']
+          )
+          return nil unless row
 
-        raw = row['peak_unrealized_usdt']
-        prev = blank?(raw) ? nil : BigDecimal(raw.to_s)
-        new_peak = prev.nil? ? cur : [prev, cur].max
-        return new_peak if prev == new_peak
+          raw = row['peak_unrealized_usdt']
+          prev = blank?(raw) ? nil : BigDecimal(raw.to_s)
+          new_peak = prev.nil? ? cur : [prev, cur].max
+          return new_peak if prev == new_peak
 
-        @db.execute(
-          'UPDATE positions SET peak_unrealized_usdt = ? WHERE id = ? AND state = ?',
-          [new_peak.to_s('F'), id, 'open']
-        )
-        new_peak
+          @db.execute(
+            'UPDATE positions SET peak_unrealized_usdt = ? WHERE id = ? AND state = ?',
+            [new_peak.to_s('F'), id, 'open']
+          )
+          new_peak
+        end
       end
 
       def close_position(id)
         return if id.nil?
 
-        @db.execute("UPDATE positions SET state = 'closed' WHERE id = ?", id)
+        db_sync { @db.execute("UPDATE positions SET state = 'closed' WHERE id = ?", id) }
       end
 
       def bar_cursor(pair, resolution)
@@ -155,27 +182,30 @@ module CoindcxBot
       end
 
       def log_event(type, payload = {})
-        @db.execute(
-          'INSERT INTO event_log(ts, type, payload) VALUES(?, ?, ?)',
-          [Time.now.to_i, type.to_s, JSON.generate(payload)]
-        )
+        db_sync do
+          @db.execute(
+            'INSERT INTO event_log(ts, type, payload) VALUES(?, ?, ?)',
+            [Time.now.to_i, type.to_s, JSON.generate(payload)]
+          )
+        end
         notify_event_sink(type, payload)
       end
 
       # Wraps a block in an exclusive SQLite transaction so multi-step writes are atomic.
       # On exception the transaction is rolled back and the error re-raised.
+      # Uses a reentrant Monitor so callers within the block can safely call other Journal methods.
       def within_transaction(&block)
-        @db.transaction(:exclusive, &block)
+        db_sync { @db.transaction(:exclusive, &block) }
       end
 
       def recent_events(limit = 50)
-        @db.execute('SELECT ts, type, payload FROM event_log ORDER BY id DESC LIMIT ?', limit)
+        db_sync { @db.execute('SELECT ts, type, payload FROM event_log ORDER BY id DESC LIMIT ?', limit) }
       end
 
       # Sum of `pnl_usdt` from coordinator `paper_realized` events (USDT). Used when the broker
       # has no in-process paper store (e.g. gateway paper) but the journal still books closes.
       def sum_paper_realized_pnl_usdt
-        rows = @db.execute('SELECT payload FROM event_log WHERE type = ?', ['paper_realized'])
+        rows = db_sync { @db.execute('SELECT payload FROM event_log WHERE type = ?', ['paper_realized']) }
         rows.sum(BigDecimal('0')) do |row|
           raw = row['payload'] || row[:payload]
           h = JSON.parse(raw.to_s, symbolize_names: true)
@@ -188,16 +218,20 @@ module CoindcxBot
       TERMINAL_SMC_SETUP_STATES = %w[completed invalidated].freeze
 
       def smc_setup_load_active
-        placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
-        sql = "SELECT setup_id, pair, state, payload, eval_state FROM smc_trade_setups WHERE state NOT IN (#{placeholders})"
-        @db.execute(sql, TERMINAL_SMC_SETUP_STATES).map { |row| symbolize_row(row) }
+        db_sync do
+          placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
+          sql = "SELECT setup_id, pair, state, payload, eval_state FROM smc_trade_setups WHERE state NOT IN (#{placeholders})"
+          @db.execute(sql, TERMINAL_SMC_SETUP_STATES).map { |row| symbolize_row(row) }
+        end
       end
 
       def smc_setup_count_for_pair(pair)
-        placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
-        sql = "SELECT COUNT(*) AS c FROM smc_trade_setups WHERE pair = ? AND state NOT IN (#{placeholders})"
-        row = @db.get_first_row(sql, [pair.to_s, *TERMINAL_SMC_SETUP_STATES])
-        row ? row['c'].to_i : 0
+        db_sync do
+          placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
+          sql = "SELECT COUNT(*) AS c FROM smc_trade_setups WHERE pair = ? AND state NOT IN (#{placeholders})"
+          row = @db.get_first_row(sql, [pair.to_s, *TERMINAL_SMC_SETUP_STATES])
+          row ? row['c'].to_i : 0
+        end
       end
 
       # Oldest non-terminal rows first (`created_at`, then `setup_id`). Skips setups linked to an
@@ -206,72 +240,89 @@ module CoindcxBot
         need = slots_needed.to_i
         return 0 if need <= 0
 
-        placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
-        sql = <<~SQL
-          SELECT setup_id FROM smc_trade_setups
-          WHERE pair = ? AND state NOT IN (#{placeholders})
-          ORDER BY created_at ASC, setup_id ASC
-        SQL
-        rows = @db.execute(sql, [pair.to_s, *TERMINAL_SMC_SETUP_STATES])
-        freed = 0
-        rows.each do |row|
-          break if freed >= need
+        freed_ids = []
+        db_sync do
+          placeholders = TERMINAL_SMC_SETUP_STATES.map { '?' }.join(', ')
+          sql = <<~SQL
+            SELECT setup_id FROM smc_trade_setups
+            WHERE pair = ? AND state NOT IN (#{placeholders})
+            ORDER BY created_at ASC, setup_id ASC
+          SQL
+          rows = @db.execute(sql, [pair.to_s, *TERMINAL_SMC_SETUP_STATES])
+          rows.each do |row|
+            break if freed_ids.size >= need
 
-          sid = (row['setup_id'] || row[:setup_id]).to_s
-          next if sid.empty?
-          next if open_position_with_smc_setup?(sid)
+            sid = (row['setup_id'] || row[:setup_id]).to_s
+            next if sid.empty?
 
-          smc_setup_update_state_and_eval(setup_id: sid, state: 'invalidated')
-          log_event(
-            'smc_setup_invalidated',
-            reason: 'capacity_eviction',
-            pair: pair.to_s,
-            setup_id: sid
-          )
-          freed += 1
+            has_open = @db.get_first_row(
+              'SELECT 1 AS o FROM positions WHERE state = ? AND smc_setup_id = ? LIMIT 1',
+              ['open', sid]
+            )
+            next if has_open
+
+            now = Time.now.to_i
+            @db.execute(
+              'UPDATE smc_trade_setups SET state = ?, updated_at = ? WHERE setup_id = ?',
+              ['invalidated', now, sid]
+            )
+            @db.execute(
+              'INSERT INTO event_log(ts, type, payload) VALUES(?, ?, ?)',
+              [now, 'smc_setup_invalidated',
+               JSON.generate(reason: 'capacity_eviction', pair: pair.to_s, setup_id: sid)]
+            )
+            freed_ids << sid
+          end
         end
-        freed
+        freed_ids.each do |sid|
+          notify_event_sink('smc_setup_invalidated', reason: 'capacity_eviction', pair: pair.to_s, setup_id: sid)
+        end
+        freed_ids.size
       end
 
       def smc_setup_insert_or_update(setup_id:, pair:, state:, payload:, eval_state: {})
-        now = Time.now.to_i
-        payload_s = payload.is_a?(String) ? payload : JSON.generate(payload)
-        ev = eval_state.is_a?(String) ? eval_state : JSON.generate(eval_state || {})
-        existing = @db.get_first_row('SELECT id FROM smc_trade_setups WHERE setup_id = ?', setup_id.to_s)
-        if existing
-          @db.execute(
-            'UPDATE smc_trade_setups SET pair = ?, state = ?, payload = ?, eval_state = ?, updated_at = ? WHERE setup_id = ?',
-            [pair.to_s, state.to_s, payload_s, ev, now, setup_id.to_s]
-          )
-        else
-          @db.execute(
-            <<~SQL,
-              INSERT INTO smc_trade_setups(setup_id, pair, state, payload, eval_state, created_at, updated_at)
-              VALUES(?, ?, ?, ?, ?, ?, ?)
-            SQL
-            [setup_id.to_s, pair.to_s, state.to_s, payload_s, ev, now, now]
-          )
+        db_sync do
+          now = Time.now.to_i
+          payload_s = payload.is_a?(String) ? payload : JSON.generate(payload)
+          ev = eval_state.is_a?(String) ? eval_state : JSON.generate(eval_state || {})
+          existing = @db.get_first_row('SELECT id FROM smc_trade_setups WHERE setup_id = ?', setup_id.to_s)
+          if existing
+            @db.execute(
+              'UPDATE smc_trade_setups SET pair = ?, state = ?, payload = ?, eval_state = ?, updated_at = ? WHERE setup_id = ?',
+              [pair.to_s, state.to_s, payload_s, ev, now, setup_id.to_s]
+            )
+          else
+            @db.execute(
+              <<~SQL,
+                INSERT INTO smc_trade_setups(setup_id, pair, state, payload, eval_state, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+              SQL
+              [setup_id.to_s, pair.to_s, state.to_s, payload_s, ev, now, now]
+            )
+          end
         end
       end
 
       def smc_setup_update_state_and_eval(setup_id:, state:, eval_state: nil)
-        now = Time.now.to_i
-        if eval_state.nil?
-          @db.execute(
-            'UPDATE smc_trade_setups SET state = ?, updated_at = ? WHERE setup_id = ?',
-            [state.to_s, now, setup_id.to_s]
-          )
-        else
-          ev = eval_state.is_a?(String) ? eval_state : JSON.generate(eval_state)
-          @db.execute(
-            'UPDATE smc_trade_setups SET state = ?, eval_state = ?, updated_at = ? WHERE setup_id = ?',
-            [state.to_s, ev, now, setup_id.to_s]
-          )
+        db_sync do
+          now = Time.now.to_i
+          if eval_state.nil?
+            @db.execute(
+              'UPDATE smc_trade_setups SET state = ?, updated_at = ? WHERE setup_id = ?',
+              [state.to_s, now, setup_id.to_s]
+            )
+          else
+            ev = eval_state.is_a?(String) ? eval_state : JSON.generate(eval_state)
+            @db.execute(
+              'UPDATE smc_trade_setups SET state = ?, eval_state = ?, updated_at = ? WHERE setup_id = ?',
+              [state.to_s, ev, now, setup_id.to_s]
+            )
+          end
         end
       end
 
       def smc_setup_fetch_payload(setup_id)
-        row = @db.get_first_row('SELECT payload FROM smc_trade_setups WHERE setup_id = ?', setup_id.to_s)
+        row = db_sync { @db.get_first_row('SELECT payload FROM smc_trade_setups WHERE setup_id = ?', setup_id.to_s) }
         return nil unless row
 
         JSON.parse(row['payload'].to_s, symbolize_names: true)
@@ -280,40 +331,54 @@ module CoindcxBot
       end
 
       def smc_setup_exists?(setup_id)
-        !@db.get_first_row('SELECT 1 AS o FROM smc_trade_setups WHERE setup_id = ? LIMIT 1', setup_id.to_s).nil?
+        db_sync do
+          !@db.get_first_row('SELECT 1 AS o FROM smc_trade_setups WHERE setup_id = ? LIMIT 1', setup_id.to_s).nil?
+        end
       end
 
       def smc_setup_get_row(setup_id)
-        row = @db.get_first_row(
-          'SELECT setup_id, pair, state, payload, eval_state FROM smc_trade_setups WHERE setup_id = ?',
-          setup_id.to_s
-        )
+        row = db_sync do
+          @db.get_first_row(
+            'SELECT setup_id, pair, state, payload, eval_state FROM smc_trade_setups WHERE setup_id = ?',
+            setup_id.to_s
+          )
+        end
         row ? symbolize_row(row) : nil
       end
 
       def open_position_with_smc_setup?(setup_id)
         sid = setup_id.to_s
-        row = @db.get_first_row(
-          'SELECT 1 AS o FROM positions WHERE state = ? AND smc_setup_id = ? LIMIT 1',
-          ['open', sid]
-        )
-        !row.nil?
+        db_sync do
+          row = @db.get_first_row(
+            'SELECT 1 AS o FROM positions WHERE state = ? AND smc_setup_id = ? LIMIT 1',
+            ['open', sid]
+          )
+          !row.nil?
+        end
       end
 
       def smc_setup_count_all
-        row = @db.get_first_row('SELECT COUNT(*) AS c FROM smc_trade_setups')
-        row ? row['c'].to_i : 0
+        db_sync do
+          row = @db.get_first_row('SELECT COUNT(*) AS c FROM smc_trade_setups')
+          row ? row['c'].to_i : 0
+        end
       end
 
       def smc_setup_list_recent(limit = 15)
-        lim = [[limit.to_i, 1].max, 100].min
-        @db.execute(
-          'SELECT setup_id, pair, state, updated_at FROM smc_trade_setups ORDER BY updated_at DESC LIMIT ?',
-          lim
-        ).map { |row| symbolize_row(row) }
+        db_sync do
+          lim = [[limit.to_i, 1].max, 100].min
+          @db.execute(
+            'SELECT setup_id, pair, state, updated_at FROM smc_trade_setups ORDER BY updated_at DESC LIMIT ?',
+            lim
+          ).map { |row| symbolize_row(row) }
+        end
       end
 
       private
+
+      def db_sync(&block)
+        @db_mutex.synchronize(&block)
+      end
 
       def notify_event_sink(type, payload)
         s = @event_sink
@@ -333,6 +398,8 @@ module CoindcxBot
       end
 
       def migrate
+        @db.execute('PRAGMA journal_mode=WAL')
+        @db.execute('PRAGMA busy_timeout=5000')
         @db.execute_batch(<<~SQL)
           CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY,
