@@ -20,6 +20,41 @@ module CoindcxBot
         pairs.each { |pair| flatten_pair(pair, ltp: ltps[pair] || ltps[pair.to_s] || ltps[pair.to_sym]) }
       end
 
+      # Live-mode startup reconciliation: close journal positions that no longer exist on the exchange.
+      # Skipped unless `runtime.reconcile_on_startup: true` in bot.yml.
+      def reconcile_live_state!
+        return if @broker.paper?
+        return unless @config.reconcile_on_startup?
+
+        journal_positions = @journal.open_positions
+        return if journal_positions.empty?
+
+        unless @broker.respond_to?(:list_open_pairs)
+          @logger&.warn('[reconcile:live] broker does not support list_open_pairs — skipping')
+          return
+        end
+
+        exchange_pairs = @broker.list_open_pairs
+        journal_positions.each do |j_pos|
+          pair = j_pos[:pair].to_s
+          next if exchange_pairs.include?(pair)
+
+          @logger&.warn(
+            "[reconcile:live] #{pair} open in journal (id=#{j_pos[:id]}) but absent on exchange — closing orphan"
+          )
+          @journal.close_position(j_pos[:id])
+          record_meta_first_win_entry_cooldown(pair)
+          @journal.log_event(
+            'reconcile_orphan_closed',
+            pair: pair,
+            position_id: j_pos[:id],
+            reason: 'not_on_exchange_at_startup'
+          )
+        end
+      rescue StandardError => e
+        @logger&.warn("[reconcile:live] failed: #{e.message}")
+      end
+
       def reconcile_paper_state!
         return unless @broker.paper? && @broker.respond_to?(:open_positions)
 
@@ -362,21 +397,21 @@ module CoindcxBot
           return :failed
         end
 
+        row = @journal.open_positions.find { |r| r[:id] == close_id }
         result = @broker.close_position(
           pair: signal.pair.to_s,
           side: nil,
           quantity: 0,
           ltp: exit_price || 0
         )
-        row = @journal.open_positions.find { |r| r[:id] == close_id }
         pnl_path = paper_broker_close_result?(result) && result[:ok]
         if pnl_path
-          book_inr_from_paper_close(
-            result,
-            row: row,
-            pair: signal.pair.to_s,
-            source: :strategy_close
-          )
+          book_inr_from_paper_close(result, row: row, pair: signal.pair.to_s, source: :strategy_close)
+        elsif row && exit_price
+          # Live market exit: no fill confirmation from broker, estimate PnL from LTP at signal time.
+          book_inr_from_live_close(row: row, exit_price: exit_price, pair: signal.pair.to_s,
+                                   reason: signal.reason.to_s)
+          pnl_path = true
         end
         @journal.within_transaction do
           @journal.close_position(close_id)
@@ -503,6 +538,34 @@ module CoindcxBot
         BigDecimal(ltp.to_s)
       rescue ArgumentError, TypeError
         nil
+      end
+
+      # Estimated live PnL: entry_price and LTP-at-signal are known; actual fill and fees are not.
+      # Marked `estimated: true` in the event so it can be audited. Still feeds daily_pnl_inr so
+      # the daily-loss circuit breaker fires correctly in live mode.
+      def book_inr_from_live_close(row:, exit_price:, pair:, reason:)
+        entry  = BigDecimal(row[:entry_price].to_s)
+        qty    = BigDecimal(row[:quantity].to_s)
+        ep     = BigDecimal(exit_price.to_s)
+        side   = row[:side].to_s
+
+        pnl_usdt = side == 'long' ? (ep - entry) * qty : (entry - ep) * qty
+        inr      = pnl_usdt * @fx.inr_per_usdt
+
+        @journal.add_daily_pnl_inr(inr)
+        @journal.log_event(
+          'live_realized',
+          pair: pair,
+          pnl_usdt: pnl_usdt.to_s('F'),
+          pnl_inr: inr.to_s('F'),
+          exit_price: ep.to_s('F'),
+          entry_price: entry.to_s('F'),
+          reason: reason,
+          estimated: true
+        )
+        @logger&.info("[live] est. PnL ~₹#{inr.round(2)} (#{pnl_usdt.round(4)} USDT) #{pair}")
+      rescue StandardError => e
+        @logger&.warn("[live] PnL booking failed #{pair}: #{e.message}")
       end
 
       def book_inr_from_paper_close(result, row:, pair:, source:)

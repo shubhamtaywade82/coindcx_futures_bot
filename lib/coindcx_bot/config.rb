@@ -436,6 +436,40 @@ module CoindcxBot
       File.expand_path(runtime.fetch(:journal_path, './data/bot_journal.sqlite3'), Dir.pwd)
     end
 
+    # Cross-pair correlation groups: array-of-arrays from `risk.correlation_groups`.
+    # Each inner array is a set of pair strings that share directional exposure.
+    # Default: empty (no correlation gating).
+    def correlation_groups
+      raw_groups = risk.fetch(:correlation_groups, [])
+      return [] unless raw_groups.is_a?(Array)
+
+      raw_groups.filter_map do |g|
+        next unless g.is_a?(Array)
+
+        g.map(&:to_s).reject(&:empty?)
+      end.reject(&:empty?)
+    end
+
+    # On startup, compare journal open positions against the live exchange and close orphans.
+    # Opt-in only: `runtime.reconcile_on_startup: true`.
+    def reconcile_on_startup?
+      truthy?(runtime[:reconcile_on_startup])
+    end
+
+    # Maximum reconnect attempts before the WS loop gives up (0 = unlimited).
+    def ws_reconnect_attempts
+      v = runtime.fetch(:ws_reconnect_attempts, 5).to_i
+      v.negative? ? 5 : v
+    end
+
+    # Base delay (seconds) for exponential backoff between WS reconnects.
+    def ws_reconnect_base_seconds
+      f = Float(runtime.fetch(:ws_reconnect_base_seconds, 3.0))
+      f < 0.5 ? 0.5 : f
+    rescue ArgumentError, TypeError
+      3.0
+    end
+
     # Read-only TUI: poll CoinDCX futures positions (list only — no orders/exits).
     def tui_exchange_positions_enabled?
       truthy?(runtime[:tui_exchange_positions])

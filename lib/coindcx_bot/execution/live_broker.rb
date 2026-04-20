@@ -44,6 +44,18 @@ module CoindcxBot
         false
       end
 
+      # Returns the set of pair strings that the exchange currently holds open positions for.
+      # Used by Coordinator#reconcile_live_state! to detect journal orphans on startup.
+      def list_open_pairs
+        res = @account.list_positions
+        return [] if res.failure?
+
+        normalize_rows(res.value).filter_map { |r| r[:pair]&.to_s }.uniq
+      rescue StandardError => e
+        @logger&.warn("[live_broker] list_open_pairs failed: #{e.message}")
+        []
+      end
+
       private
 
       def exit_exchange_for_pair(pair)

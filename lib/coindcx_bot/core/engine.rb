@@ -77,7 +77,6 @@ module CoindcxBot
           logger: @logger,
           fx: @fx
         )
-        @coord.reconcile_paper_state!
 
         @candles_htf = {}
         @candles_exec = {}
@@ -120,11 +119,15 @@ module CoindcxBot
         @smc_setup_mutexes = Hash.new { |h, k| h[k] = Mutex.new }
         init_smc_setup_stack! if @config.smc_setup_enabled?
 
+        @stop_breach_queue = {}
+        @stop_breach_mutex = Mutex.new
+
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
           @tracker.record_tick(tick)
           forward_tick_to_store(tick)
           @logger&.info("[ws] tick #{tick.pair} #{tick.price}") if ENV['COINDCX_WS_TRACE'].to_s == '1'
+          check_and_queue_stop_breach(tick) unless @config.dry_run?
           @on_tick&.call(tick)
         end
 
@@ -233,9 +236,24 @@ module CoindcxBot
             'NO orders placed (runtime.place_orders: false / PLACE_ORDER=0)'
           )
         end
+
+        # SIGHUP: graceful stop so the process manager (systemd, supervisord) can restart
+        # with fresh config. Only minimal work is safe inside a signal handler.
+        @sighup_received = false
+        Signal.trap('HUP') { @sighup_received = true; @stop = true }
+
+        # Reconcile journal against broker state before the first tick cycle.
+        @coord.reconcile_paper_state!
+        @coord.reconcile_live_state!
+
         ws_thread = Thread.new { run_ws_loop }
         loop do
           break if @stop
+
+          if @sighup_received
+            @logger.info('[engine] SIGHUP received — stopping for graceful restart')
+            break
+          end
 
           tick_cycle
           break if @stop
@@ -841,7 +859,34 @@ module CoindcxBot
         nil
       end
 
+      # Outer reconnect loop: on an unexpected WS session end, wait with exponential backoff
+      # and restart subscriptions. Caps at ws_reconnect_attempts (0 = unlimited retries).
       def run_ws_loop
+        max_attempts = @config.ws_reconnect_attempts
+        base_delay   = @config.ws_reconnect_base_seconds
+        attempt      = 0
+
+        until @stop
+          run_ws_once
+          break if @stop
+
+          attempt += 1
+          if max_attempts > 0 && attempt >= max_attempts
+            @logger.error("[ws] max reconnect attempts (#{max_attempts}) reached — WS feed offline")
+            @engine_loop_crashed = true
+            break
+          end
+
+          delay = [base_delay * (2**(attempt - 1)), 60.0].min
+          @logger.warn("[ws] session ended — reconnecting in #{delay.round(1)}s (attempt #{attempt})")
+          interruptible_sleep(delay)
+        end
+      rescue StandardError => e
+        @last_error = e.message
+        @logger.error("[ws] fatal: #{e.full_message}")
+      end
+
+      def run_ws_once
         conn = @ws.connect
         unless conn.ok?
           @last_error = "ws connect: #{conn.message}"
@@ -886,7 +931,7 @@ module CoindcxBot
         end
       rescue StandardError => e
         @last_error = e.message
-        @logger.error("WS loop: #{e.full_message}")
+        @logger.error("[ws] session error: #{e.message}")
       end
 
       def tick_cycle
@@ -899,6 +944,8 @@ module CoindcxBot
         refresh_tracker_from_exec_candle_when_ws_stale
         mirror_tracker_into_tick_store
         run_paper_process_tick if @broker.paper?
+        # Drain WS-tick-detected stop breaches before strategy (avoids double-close race).
+        drain_stop_breach_queue
         maybe_flatten_on_daily_loss_breach
         # Entry gating must be **per pair**: if ETH has no WS ticks, SOL must still be allowed to open.
         # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
@@ -1036,6 +1083,65 @@ module CoindcxBot
           ::Regexp.last_match(1).to_i * 86_400
         else
           900
+        end
+      end
+
+      # Called from the WS-tick event (WS thread). Enqueues a stop breach without touching the
+      # journal or coordinator (not thread-safe from the WS thread). The main tick_cycle thread
+      # drains the queue and issues the close order atomically.
+      def check_and_queue_stop_breach(tick)
+        pos = @tracker.open_position_for(tick.pair)
+        return unless pos
+
+        stop_raw = pos[:stop_price]
+        return unless stop_raw
+
+        stop = BigDecimal(stop_raw.to_s)
+        side = pos[:side].to_s
+        ltp  = tick.price
+
+        breached = (side == 'long' && ltp <= stop) || (side == 'short' && ltp >= stop)
+        return unless breached
+
+        @stop_breach_mutex.synchronize do
+          @stop_breach_queue[tick.pair.to_s] ||= {
+            position_id: pos[:id],
+            stop_price:  stop,
+            ltp:         ltp,
+            side:        side,
+            queued_at:   Time.now
+          }
+        end
+      rescue StandardError => e
+        @logger&.warn("[tick_stop] queue error #{tick.pair}: #{e.message}")
+      end
+
+      # Drain and process stop breaches queued by WS-tick callbacks.
+      # Runs on the main engine thread — safe to call coordinator and journal.
+      def drain_stop_breach_queue
+        pending = @stop_breach_mutex.synchronize { @stop_breach_queue.dup.tap { @stop_breach_queue.clear } }
+        return if pending.empty?
+
+        pending.each do |pair, breach|
+          next if @journal.paused? || @journal.kill_switch?
+
+          pos = @journal.open_positions.find { |r| r[:id] == breach[:position_id] }
+          next unless pos
+
+          @logger&.warn(
+            "[tick_stop] #{pair} stop breached: ltp=#{breach[:ltp]} stop=#{breach[:stop_price]} side=#{breach[:side]}"
+          )
+          sig = Strategy::Signal.new(
+            action:     :close,
+            pair:       pair,
+            side:       breach[:side].to_sym,
+            stop_price: nil,
+            reason:     'tick_stop_breached',
+            metadata:   { position_id: breach[:position_id] }
+          )
+          @coord.apply(sig, exit_price: breach[:ltp])
+        rescue StandardError => e
+          @logger&.error("[tick_stop] close failed #{pair}: #{e.message}")
         end
       end
 

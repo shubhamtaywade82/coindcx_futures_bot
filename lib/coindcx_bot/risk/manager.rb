@@ -23,6 +23,7 @@ module CoindcxBot
         return [:reject, 'daily_loss'] if daily_loss_breached?
         return [:reject, 'symbol_already_open'] if open_positions.any? { |p| p[:pair] == pair }
         return [:reject, 'max_positions'] unless @guard.within_concurrency?(open_positions.size)
+        return [:reject, 'correlated_exposure'] unless @guard.correlated_ok?(open_positions, pair)
 
         cb = evaluate_circuit_breaker
         return [:reject, cb] if cb
@@ -34,15 +35,16 @@ module CoindcxBot
         limit = @config.risk.fetch(:consecutive_loss_limit, 3)
         return nil if limit <= 0
 
-        # Fetch a wide window so interleaved trail/smc events don't mask consecutive losses.
-        candidates = @journal.recent_events(limit * 20)
-                             .select { |e| e['type'] == 'paper_realized' }
-                             .first(limit)
+        # recent_realized_events covers both paper_realized and live_realized so the
+        # circuit breaker fires identically in live and paper execution modes.
+        candidates = @journal.recent_realized_events(limit * 4).first(limit)
         return nil if candidates.size < limit
 
         all_losses = candidates.all? do |e|
           payload = JSON.parse(e['payload'] || '{}')
           BigDecimal(payload['pnl_usdt'] || '0').negative?
+        rescue JSON::ParserError, ArgumentError
+          false
         end
         return nil unless all_losses
 

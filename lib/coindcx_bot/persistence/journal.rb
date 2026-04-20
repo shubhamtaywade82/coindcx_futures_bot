@@ -170,7 +170,12 @@ module CoindcxBot
       def close_position(id)
         return if id.nil?
 
-        db_sync { @db.execute("UPDATE positions SET state = 'closed' WHERE id = ?", id) }
+        db_sync do
+          @db.execute(
+            "UPDATE positions SET state = 'closed', closed_at = ? WHERE id = ?",
+            [Time.now.to_i, id]
+          )
+        end
       end
 
       def bar_cursor(pair, resolution)
@@ -200,6 +205,18 @@ module CoindcxBot
 
       def recent_events(limit = 50)
         db_sync { @db.execute('SELECT ts, type, payload FROM event_log ORDER BY id DESC LIMIT ?', limit) }
+      end
+
+      # Most-recent realized PnL events (paper OR live) ordered newest-first.
+      # Used by the circuit breaker so it works identically in both execution modes.
+      def recent_realized_events(limit = 50)
+        db_sync do
+          @db.execute(
+            "SELECT ts, type, payload FROM event_log WHERE type IN ('paper_realized','live_realized') " \
+            'ORDER BY id DESC LIMIT ?',
+            limit
+          )
+        end
       end
 
       # Sum of `pnl_usdt` from coordinator `paper_realized` events (USDT). Used when the broker
@@ -444,9 +461,13 @@ module CoindcxBot
           @db.execute('ALTER TABLE positions ADD COLUMN smc_setup_id TEXT')
           cols = @db.table_info('positions').map { |r| r['name'] }
         end
-        return if cols.include?('entry_lane')
-
-        @db.execute('ALTER TABLE positions ADD COLUMN entry_lane TEXT')
+        unless cols.include?('entry_lane')
+          @db.execute('ALTER TABLE positions ADD COLUMN entry_lane TEXT')
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        unless cols.include?('closed_at')
+          @db.execute('ALTER TABLE positions ADD COLUMN closed_at INTEGER')
+        end
       end
 
       def migrate_smc_trade_setups_table
