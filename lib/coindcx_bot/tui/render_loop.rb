@@ -8,9 +8,11 @@ module CoindcxBot
       DEFAULT_INTERVAL = 0.25
       QUEUE_POP_TIMEOUT = Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.2')
 
-      def initialize(panels:, interval: DEFAULT_INTERVAL)
+      def initialize(panels:, interval: DEFAULT_INTERVAL, engine: nil, focus_sync_proc: nil)
         @panels    = panels
         @interval  = interval
+        @engine    = engine
+        @focus_sync_proc = focus_sync_proc
         @running   = false
         @thread    = nil
         @wake_queue = Queue.new
@@ -56,7 +58,14 @@ module CoindcxBot
 
       private
 
+      def sync_tui_focus_to_engine!
+        return unless @engine && @focus_sync_proc
+
+        @engine.tui_focus_pair = @focus_sync_proc.call
+      end
+
       def render_once
+        sync_tui_focus_to_engine!
         @panels.each { |panel| render_panel_cached(panel) }
       rescue StandardError => e
         warn "[RenderLoop] #{e.class}: #{e.message}"

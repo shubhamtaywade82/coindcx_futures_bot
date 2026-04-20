@@ -7,6 +7,7 @@ module CoindcxBot
       DISABLED = {
         enabled: false,
         active: false,
+        regime_pair: nil,
         label: '—',
         probability_pct: nil,
         stability_bars: nil,

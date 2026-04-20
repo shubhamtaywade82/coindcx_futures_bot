@@ -11,7 +11,7 @@ margin_currency_short_name: USDT
 
 # REST + WS instrument pair codes (run `bin/bot doctor` to verify).
 pairs:
-  - B-SOL_USDT
+  # - B-SOL_USDT
   - B-ETH_USDT
 
 # Approximate INR per USDT — updated by CoinDCX conversions API (fx.ttl_seconds).

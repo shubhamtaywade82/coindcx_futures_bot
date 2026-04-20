@@ -62,7 +62,12 @@ module CoindcxBot
           engine: engine,
           symbols: symbols
         )
-        @render_loop = RenderLoop.new(panels: panels, interval: RENDER_INTERVAL)
+        @render_loop = RenderLoop.new(
+          panels: panels,
+          interval: RENDER_INTERVAL,
+          engine: engine,
+          focus_sync_proc: -> { @focus&.current }
+        )
         start_ltp_rest_poller(config: config, symbols: symbols, tick_store: tick_store)
 
         engine_thread = start_engine(engine)

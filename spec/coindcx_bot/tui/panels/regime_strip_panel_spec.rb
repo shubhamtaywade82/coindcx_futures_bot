@@ -58,6 +58,31 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
       expect(output.string).to include('Pn/a')
       expect(output.string).to include('PIPE:IDLE')
       expect(output.string).to include('awaiting HmmEngine')
+      expect(output.string).to include('┌ REGIME ')
+      expect(output.string).not_to include('┌ REGIME ·')
+    end
+
+    it 'shows the focused instrument in the regime box title when regime_pair is present' do
+      allow(config).to receive(:regime_enabled?).and_return(true)
+      allow(config).to receive(:regime_ai_enabled?).and_return(false)
+      regime = CoindcxBot::Regime::TuiState::STANDBY.merge(
+        active: true,
+        regime_pair: 'B-SOL_USDT',
+        label: 'S3',
+        probability_pct: 62.0,
+        stability_bars: 3,
+        flicker_display: 'low',
+        confirmed: false,
+        vol_rank_display: '5/5',
+        transition_display: 'tier_a',
+        quant_display: 'S3 p=58%',
+        hmm_display: '—',
+        status: 'PIPE:HMM'
+      )
+      snap = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(regime: regime))
+      eng = double('engine', snapshot: snap, broker: broker_double, config: config)
+      described_class.new(engine: eng, origin_row: 0, output: output).render
+      expect(output.string).to include('┌ REGIME · SOL ')
     end
 
     it 'adds wrapped detail lines for full AI transition and notes' do
