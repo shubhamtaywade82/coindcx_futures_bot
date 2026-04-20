@@ -69,13 +69,18 @@ module CoindcxBot
         @account = Gateways::AccountGateway.new(client: @order_account_client)
         @ws = Gateways::WsGateway.new(client: @client, logger: @logger)
         @broker = build_broker(config)
+
+        @order_tracker = Execution::OrderTracker.new(journal: @journal, logger: @logger)
+        @ws_fill_handler = Execution::WsFillHandler.new(order_tracker: @order_tracker, logger: @logger)
+
         @coord = Execution::Coordinator.new(
           broker: @broker,
           journal: @journal,
           config: config,
           exposure_guard: @exposure,
           logger: @logger,
-          fx: @fx
+          fx: @fx,
+          order_tracker: @order_tracker
         )
 
         @candles_htf = {}
@@ -121,6 +126,9 @@ module CoindcxBot
 
         @stop_breach_queue = {}
         @stop_breach_mutex = Mutex.new
+
+        @runtime_reconcile_at    = nil
+        @runtime_reconcile_mutex = Mutex.new
 
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
@@ -903,6 +911,7 @@ module CoindcxBot
 
         ou = @ws.subscribe_order_updates do |payload|
           @journal.log_event('ws_order_update', ws_order_snippet(payload))
+          @ws_fill_handler.handle(payload)
         rescue StandardError => e
           @logger.warn("order ws: #{e.message}")
         end
@@ -956,6 +965,8 @@ module CoindcxBot
         refresh_regime_ai_if_due
         refresh_exchange_positions_for_tui_if_due
         refresh_futures_wallet_for_tui_if_due
+        refresh_runtime_reconcile_if_due
+        apply_funding_for_live_positions!
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
@@ -1083,6 +1094,77 @@ module CoindcxBot
           ::Regexp.last_match(1).to_i * 86_400
         else
           900
+        end
+      end
+
+      # Periodic live position reconciliation: runs in a background thread to avoid blocking
+      # tick_cycle. Cadence controlled by `runtime.runtime_reconcile_interval_seconds`.
+      def refresh_runtime_reconcile_if_due
+        return if @config.dry_run?
+        return unless @config.runtime_reconcile_enabled?
+
+        interval = @config.runtime_reconcile_interval_seconds
+        now      = Time.now
+        should_run = @runtime_reconcile_mutex.synchronize do
+          at = @runtime_reconcile_at
+          if at.nil? || (now - at) >= interval
+            @runtime_reconcile_at = now
+            true
+          else
+            false
+          end
+        end
+        return unless should_run
+
+        Thread.new do
+          Thread.current.name = 'runtime_reconcile'
+          @coord.reconcile_live_state!
+        rescue StandardError => e
+          @logger&.warn("[reconcile:runtime] #{e.message}")
+        end
+      end
+
+      # For live open positions, estimate and deduct the CoinDCX 8-hour funding cost.
+      # Marked as estimated because actual funding rates fluctuate; the default rate from
+      # `risk.default_funding_rate_bps` (default 1 bps = 0.01 %) is a conservative estimate.
+      def apply_funding_for_live_positions!
+        return if @config.dry_run?
+        return unless @config.track_funding_rate?
+
+        rate_bps = @config.default_funding_rate_bps
+        now      = Time.now.to_i
+
+        @journal.open_positions.each do |pos|
+          opened_at   = pos[:opened_at].to_i
+          last_funded = pos[:last_funded_at]&.to_i || opened_at
+          hours_since = (now - last_funded) / 3600.0
+          next if hours_since < 8.0
+
+          entry    = BigDecimal(pos[:entry_price].to_s)
+          qty      = BigDecimal(pos[:quantity].to_s)
+          notional = entry * qty
+          funding_usdt = (notional * BigDecimal(rate_bps.to_s) / 10_000).round(8, BigDecimal::ROUND_UP)
+
+          # Longs pay funding; shorts receive it.
+          debit_usdt = pos[:side].to_s == 'long' ? funding_usdt : -funding_usdt
+          debit_inr  = debit_usdt * @fx.inr_per_usdt
+
+          @journal.apply_funding_to_position(id: pos[:id], funding_usdt: debit_usdt)
+          @journal.add_daily_pnl_inr(-debit_inr)
+          @journal.log_event(
+            'funding_payment',
+            pair:         pos[:pair],
+            position_id:  pos[:id],
+            funding_usdt: debit_usdt.to_s('F'),
+            funding_inr:  debit_inr.to_s('F'),
+            rate_bps:     rate_bps,
+            estimated:    true
+          )
+          @logger&.info(
+            "[funding] #{pos[:pair]} id=#{pos[:id]} debit=#{debit_usdt.to_s('F')} USDT (est. #{rate_bps} bps/8h)"
+          )
+        rescue StandardError => e
+          @logger&.warn("[funding] pos #{pos[:id]}: #{e.message}")
         end
       end
 

@@ -456,6 +456,34 @@ module CoindcxBot
       truthy?(runtime[:reconcile_on_startup])
     end
 
+    # Periodic runtime reconciliation: re-check journal positions against the exchange
+    # during a live session (not only at startup). Opt-in via `runtime.runtime_reconcile: true`.
+    def runtime_reconcile_enabled?
+      truthy?(runtime[:runtime_reconcile])
+    end
+
+    def runtime_reconcile_interval_seconds
+      v = runtime.fetch(:runtime_reconcile_interval_seconds, 300).to_i
+      v < 30 ? 30 : v
+    rescue ArgumentError, TypeError
+      300
+    end
+
+    # Funding rate estimation for live open positions (every 8 h).
+    # Enable with `risk.track_funding_rate: true`.
+    def track_funding_rate?
+      truthy?(risk[:track_funding_rate])
+    end
+
+    # Estimated per-8h funding rate in basis points (default 1 bps = 0.01 %).
+    # Longs pay this; shorts receive it. Used when real-time rate is not fetched.
+    def default_funding_rate_bps
+      v = risk.fetch(:default_funding_rate_bps, 1).to_f
+      v < 0 ? 0 : v
+    rescue ArgumentError, TypeError
+      1.0
+    end
+
     # Maximum reconnect attempts before the WS loop gives up (0 = unlimited).
     def ws_reconnect_attempts
       v = runtime.fetch(:ws_reconnect_attempts, 5).to_i

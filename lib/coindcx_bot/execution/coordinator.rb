@@ -6,14 +6,15 @@ require 'securerandom'
 module CoindcxBot
   module Execution
     class Coordinator
-      def initialize(broker:, journal:, config:, exposure_guard:, logger:, fx:)
-        @broker = broker
-        @journal = journal
-        @config = config
-        @exposure = exposure_guard
-        @logger = logger
-        @fx = fx
-        @dry = config.dry_run?
+      def initialize(broker:, journal:, config:, exposure_guard:, logger:, fx:, order_tracker: nil)
+        @broker        = broker
+        @journal       = journal
+        @config        = config
+        @exposure      = exposure_guard
+        @logger        = logger
+        @fx            = fx
+        @dry           = config.dry_run?
+        @order_tracker = order_tracker
       end
 
       def flatten_all(pairs, ltps: {})
@@ -246,8 +247,24 @@ module CoindcxBot
           return :failed
         end
 
-        result = @broker.place_order(rest_futures_open_order(signal, quantity, leverage))
-        if result == :failed
+        order = rest_futures_open_order(signal, quantity, leverage)
+        coid  = order[:client_order_id]
+
+        # Register order as pending BEFORE sending to exchange (idempotency anchor).
+        # If the bot crashes between place_order and journal_open, this row will be
+        # in `pending`/`submitted` state with no linked position — visible on restart.
+        @order_tracker&.begin_entry(
+          client_order_id: coid,
+          pair:            signal.pair,
+          side:            signal.side.to_s,
+          quantity:        quantity.to_s('F')
+        )
+
+        result = @broker.place_order(order)
+        ok     = result.is_a?(Hash) ? result[:ok] : (result == :ok)
+
+        unless ok
+          @order_tracker&.on_rejected(client_order_id: coid)
           @journal.log_event(
             'open_failed',
             pair: signal.pair,
@@ -256,21 +273,31 @@ module CoindcxBot
             leverage: leverage,
             detail: 'broker_rejected'
           )
-          @logger&.error("Live order failed for #{signal.pair}")
+          @logger&.error("[live] order rejected for #{signal.pair}")
           return :failed
         end
 
+        exchange_order_id = result.is_a?(Hash) ? result[:order_id] : nil
+        @order_tracker&.on_submitted(client_order_id: coid, exchange_order_id: exchange_order_id)
+
+        journal_id = nil
         @journal.within_transaction do
-          journal_open(signal, quantity, entry_price)
+          journal_id = journal_open(signal, quantity, entry_price)
           @journal.log_event(
             'signal_open',
             action: signal.action.to_s,
             pair: signal.pair,
             reason: signal.reason.to_s,
-            leverage: leverage
+            leverage: leverage,
+            client_order_id: coid,
+            exchange_order_id: exchange_order_id.to_s
           )
         end
-        @logger&.info("Opened #{signal.side} #{signal.pair} qty=#{quantity}")
+
+        # Link order → position so WS fills can back-fill entry_price.
+        @order_tracker&.link_position(client_order_id: coid, position_id: journal_id) if journal_id
+
+        @logger&.info("[live] opened #{signal.side} #{signal.pair} qty=#{quantity} coid=#{coid}")
         :ok
       end
 
