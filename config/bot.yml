@@ -147,7 +147,7 @@ runtime:
   ws_shutdown_join_seconds: 45
 
   # Paper mode: in-process PaperBroker, no exchange order/account REST calls.
-  dry_run: true
+  dry_run: false
 
   # Live only (dry_run: false): false = read-only account APIs, NO order placement.
   # Override via env: PLACE_ORDER=0 or PLACE_ORDER=false
