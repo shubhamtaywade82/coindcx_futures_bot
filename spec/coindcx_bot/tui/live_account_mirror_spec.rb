@@ -97,6 +97,33 @@ RSpec.describe CoindcxBot::Tui::LiveAccountMirror do
       expect(snap[:cross_order_margin]).to eq(BigDecimal('10'))
       expect(snap[:cross_user_margin]).to eq(BigDecimal('20'))
     end
+
+    it 'does not treat available_balance as wallet balance when balance keys are absent' do
+      rows = [
+        { 'currency_short_name' => 'INR', 'available_balance' => '22', 'locked_balance' => '226482' }
+      ]
+      expect(described_class.extract_wallet_snapshot_for_display(rows, 'INR')).to be_nil
+    end
+
+    it 'fills INR wallet balance from the USDT row when INR row omits balance and FX is given' do
+      rows = [
+        { 'currency_short_name' => 'INR', 'available_balance' => '22', 'locked_balance' => '100' },
+        { 'currency_short_name' => 'USDT', 'balance' => '2355.742' }
+      ]
+      snap = described_class.extract_wallet_snapshot_for_display(rows, 'INR', inr_per_usdt: BigDecimal('83'))
+      expect(snap[:currency]).to eq('INR')
+      expect(snap[:balance]).to eq(BigDecimal('2355.742') * BigDecimal('83'))
+      expect(snap[:available_balance]).to eq(BigDecimal('22'))
+    end
+
+    it 'reads USDT wallet balance from camelCase walletBalance when present' do
+      rows = [
+        { 'currency_short_name' => 'INR', 'available_balance' => '22' },
+        { 'currency_short_name' => 'USDT', 'walletBalance' => '2355.742' }
+      ]
+      snap = described_class.extract_wallet_snapshot_for_display(rows, 'INR', inr_per_usdt: BigDecimal('83'))
+      expect(snap[:balance]).to eq(BigDecimal('2355.742') * BigDecimal('83'))
+    end
   end
 
   describe '.combined_daily_pnl_inr_for_header' do
@@ -209,6 +236,14 @@ RSpec.describe CoindcxBot::Tui::LiveAccountMirror do
       ]
       ticks = { 'B-ETH_USDT' => { price: BigDecimal('3100') } }
       expect(described_class.sum_unrealized_usdt(rows, ticks)).to eq(BigDecimal('-100'))
+    end
+
+    it 'prefers tick mark over last price when both are present' do
+      rows = [
+        { pair: 'B-ETH_USDT', active_pos: '-1', avg_price: '3000' }
+      ]
+      ticks = { 'B-ETH_USDT' => { price: BigDecimal('3000'), mark: BigDecimal('3200') } }
+      expect(described_class.sum_unrealized_usdt(rows, ticks)).to eq(BigDecimal('-200'))
     end
   end
 end

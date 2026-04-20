@@ -96,6 +96,7 @@ module CoindcxBot
         @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
         @daily_loss_flatten_warned = false
         @engine_loop_crashed = false
+        @tui_focus_pair = nil # TUI sets each frame; regime strip + regime AI use it
         @exchange_positions_tui_mutex = Mutex.new
         @exchange_positions_tui = { rows: [], error: nil, fetched_at: nil }
         @futures_wallet_tui_mutex = Mutex.new
@@ -133,6 +134,7 @@ module CoindcxBot
       end
 
       attr_reader :config, :logger, :journal, :broker
+      attr_accessor :tui_focus_pair
 
       def inr_per_usdt
         @fx.inr_per_usdt
@@ -155,7 +157,12 @@ module CoindcxBot
       def snapshot
         ticks = @config.pairs.to_h do |p|
           tick_at = @tracker.last_tick_at(p)
-          [p, { price: @tracker.ltp(p), at: tick_at }]
+          h = { price: @tracker.ltp(p), at: tick_at }
+          if @tick_store
+            mk = @tick_store.snapshot[p]&.mark
+            h[:mark] = mk unless mk.nil?
+          end
+          [p, h]
         end
         stale = @config.pairs.any? { |p| ws_feed_stale?(p) }
 
@@ -257,7 +264,7 @@ module CoindcxBot
         base = Regime::TuiState.build(@config)
         merged = base.dup
         if @hmm_runtime
-          merged = merged.merge(@hmm_runtime.tui_overlay)
+          merged = merged.merge(@hmm_runtime.tui_overlay(primary_pair: @tui_focus_pair))
         end
         return merged unless @config.regime_ai_enabled?
 
@@ -348,7 +355,10 @@ module CoindcxBot
       def build_regime_ai_context
         max_pairs = @config.regime_ai_max_pairs
         n = @config.regime_ai_bars_per_pair
-        pairs = @config.pairs.first(max_pairs)
+        ordered = @config.pairs.map(&:to_s)
+        fp = @tui_focus_pair.to_s.strip
+        ordered = [fp] + ordered.reject { |x| x == fp } if fp && ordered.include?(fp)
+        pairs = ordered.first(max_pairs)
         candles_by_pair = pairs.to_h do |p|
           arr = Array(@candles_exec[p]).last(n)
           rows = arr.map do |c|
@@ -1214,7 +1224,8 @@ module CoindcxBot
         if res.ok?
           snap = CoindcxBot::Tui::LiveAccountMirror.extract_wallet_snapshot_for_display(
             res.value,
-            @config.margin_currency_short_name
+            @config.margin_currency_short_name,
+            inr_per_usdt: inr_per_usdt
           )
         else
           err = res.message.to_s

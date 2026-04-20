@@ -83,10 +83,16 @@ module CoindcxBot
           next BigDecimal('0') unless pseudo
 
           pair = pseudo[:pair].to_s
-          ltp_raw = ticks_by_pair[pair]&.dig(:price) || ticks_by_pair[pair]&.dig('price')
-          next BigDecimal('0') if ltp_raw.nil? || ltp_raw.to_s.strip.empty?
+          tick = ticks_by_pair[pair]
+          px_raw =
+            if tick.is_a?(Hash)
+              tick[:mark] || tick['mark'] || tick[:price] || tick['price']
+            else
+              nil
+            end
+          next BigDecimal('0') if px_raw.nil? || px_raw.to_s.strip.empty?
 
-          calc = CoindcxBot::Strategy::UnrealizedPnl.position_usdt(pseudo, BigDecimal(ltp_raw.to_s))
+          calc = CoindcxBot::Strategy::UnrealizedPnl.position_usdt(pseudo, BigDecimal(px_raw.to_s))
           calc.nil? ? BigDecimal('0') : calc
         end
       end
@@ -188,11 +194,19 @@ module CoindcxBot
 
       # Picks the futures wallet hash row for +margin_currency_short_name+ (from bot.yml), with optional
       # +strict+ mode (+strict: true+ → only a row whose currency exactly matches +want+, no INR/USDT fallback).
-      def select_wallet_row(payload, margin_currency_short_name, strict: false)
+      # CoinDCX / JSON may use snake_case symbols or camelCase strings; never use +available_balance+ here.
+      WALLET_BALANCE_FIELD_KEYS = [
+        :balance, :wallet_balance, :total_balance, :total_wallet_balance, :account_balance,
+        :net_balance, :margin_balance, :spot_futures_wallet_balance,
+        'balance', 'walletBalance', 'wallet_balance', 'totalBalance', 'total_balance',
+        'accountBalance', 'netBalance', 'marginBalance'
+      ].freeze
+
+      def select_wallet_row(payload, margin_currency_short_name, strict: false, cached_rows: nil)
         want = margin_currency_short_name.to_s.strip.upcase
         want = 'USDT' if want.empty?
 
-        rows = extract_wallet_rows(payload)
+        rows = cached_rows || extract_wallet_rows(payload)
         if rows.empty? && payload.is_a?(Hash)
           h = payload.transform_keys(&:to_sym)
           c = wallet_row_currency(h)
@@ -213,7 +227,13 @@ module CoindcxBot
 
       def parse_wallet_decimal(row, *keys)
         keys.flatten.each do |k|
-          raw = row[k] || row[k.to_s]
+          raw =
+            case k
+            when Symbol
+              row[k] || row[k.to_s]
+            else
+              row[k] || row[k.to_sym]
+            end
           next if raw.nil? || raw.to_s.strip.empty?
 
           return BigDecimal(raw.to_s)
@@ -224,17 +244,23 @@ module CoindcxBot
       end
 
       # Full numeric snapshot for the selected margin-currency row (balance, optional available / locked / cross).
-      # Keys: +:currency+, +:balance+ (same basis as the header BAL line), optional +:available_balance+,
-      # +:locked_balance+, +:cross_order_margin+, +:cross_user_margin+.
-      def extract_wallet_snapshot_for_display(payload, margin_currency_short_name)
-        row = select_wallet_row(payload, margin_currency_short_name, strict: false)
+      # +:balance+ is **wallet balance** (deposits + realized, excluding unrealized), never +available_balance+ alone
+      # (that is free margin and was a common mis-parse when +balance+ was omitted on the INR row).
+      # When the selected row has no balance fields but another wallet row does (e.g. USDT row carries balance while
+      # INR row carries margin breakdown), pass +inr_per_usdt+ to synthesize the missing side.
+      #
+      # Keys: +:currency+, +:balance+, optional +:available_balance+, +:locked_balance+, +:cross_order_margin+,
+      # +:cross_user_margin+.
+      def extract_wallet_snapshot_for_display(payload, margin_currency_short_name, inr_per_usdt: nil)
+        rows = extract_wallet_rows(payload)
+        row = select_wallet_row(payload, margin_currency_short_name, strict: false, cached_rows: rows)
         return nil unless row
 
         cur = wallet_row_currency(row)
         cur = 'USDT' unless %w[INR USDT].include?(cur)
 
-        bal = parse_wallet_decimal(row, :balance, :wallet_balance, :total_balance)
-        bal ||= parse_wallet_decimal(row, :available_balance, :available, :free_balance, :free)
+        bal = parse_wallet_decimal(row, *WALLET_BALANCE_FIELD_KEYS)
+        bal ||= wallet_balance_from_sibling_row(rows, cur, inr_per_usdt)
         return nil if bal.nil?
 
         avail = parse_wallet_decimal(row, :available_balance, :available, :free_balance, :free)
@@ -252,8 +278,8 @@ module CoindcxBot
 
       # Returns +{ amount: BigDecimal, currency: 'INR'|'USDT' }+ for the futures wallet row matching
       # +margin_currency_short_name+ (from bot.yml). INR rows are shown as-is in the TUI; USDT is converted via FX.
-      def extract_wallet_balance_for_display(payload, margin_currency_short_name)
-        snap = extract_wallet_snapshot_for_display(payload, margin_currency_short_name)
+      def extract_wallet_balance_for_display(payload, margin_currency_short_name, inr_per_usdt: nil)
+        snap = extract_wallet_snapshot_for_display(payload, margin_currency_short_name, inr_per_usdt: inr_per_usdt)
         return nil unless snap
 
         { amount: snap[:balance], currency: snap[:currency] }
@@ -278,8 +304,38 @@ module CoindcxBot
       end
 
       def balance_raw_from_wallet_row(row)
-        row[:balance] || row[:available_balance] || row[:wallet_balance] ||
-          row['balance'] || row['available_balance'] || row['wallet_balance']
+        row[:balance] || row[:wallet_balance] || row[:total_balance] ||
+          row['balance'] || row['wallet_balance'] || row['total_balance']
+      end
+
+      def wallet_balance_from_sibling_row(rows, target_currency, inr_per_usdt)
+        return nil if rows.nil? || rows.empty? || inr_per_usdt.nil?
+
+        fx = BigDecimal(inr_per_usdt.to_s)
+        return nil unless fx.positive?
+
+        case target_currency.to_s.upcase
+        when 'INR'
+          usdt_row = rows.find { |r| wallet_row_currency(r) == 'USDT' }
+          return nil unless usdt_row
+
+          usdt_amt = parse_wallet_decimal(usdt_row, *WALLET_BALANCE_FIELD_KEYS)
+          return nil if usdt_amt.nil?
+
+          usdt_amt * fx
+        when 'USDT'
+          inr_row = rows.find { |r| wallet_row_currency(r) == 'INR' }
+          return nil unless inr_row
+
+          inr_amt = parse_wallet_decimal(inr_row, *WALLET_BALANCE_FIELD_KEYS)
+          return nil if inr_amt.nil?
+
+          inr_amt / fx
+        else
+          nil
+        end
+      rescue ArgumentError, TypeError
+        nil
       end
 
       def extract_wallet_rows(payload)

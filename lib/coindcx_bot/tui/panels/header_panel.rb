@@ -29,13 +29,22 @@ module CoindcxBot
           snap = @engine.snapshot
           vm = desk_vm(snap)
           w = term_width
+          strip = show_live_futures_account_strip?(snap)
 
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row)     << clr(line_mode_engine_kill_ws_lat_feed(snap, w))
-          buf << move(@row + 1) << clr(line_balance_net_real_unreal_dd_risk(snap, vm, w))
-          buf << move(@row + 2) << clr(line_pos_ord_err_last(snap, vm, w))
-          buf << move(@row + 3) << clr(muted('─' * [[w - 1, 40].max, 120].min))
+          r = @row
+          buf << move(r) << clr(line_mode_engine_kill_ws_lat_feed(snap, w))
+          r += 1
+          if strip
+            buf << move(r) << clr(line_live_equity_wallet_unreal(snap, w))
+            r += 1
+          end
+          buf << move(r) << clr(line_balance_net_real_unreal_dd_risk(snap, vm, w))
+          r += 1
+          buf << move(r) << clr(line_pos_ord_err_last(snap, vm, w))
+          r += 1
+          buf << move(r) << clr(muted('─' * [[w - 1, 40].max, 120].min))
           buf << @cursor.restore
 
           @output.print buf.string
@@ -43,7 +52,8 @@ module CoindcxBot
         end
 
         def row_count
-          4
+          snap = @engine.snapshot
+          show_live_futures_account_strip?(snap) ? 5 : 4
         end
 
         private
@@ -136,7 +146,7 @@ module CoindcxBot
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
               ].join(muted(' │ '))
             end
-          join_compact(w, [bal, net, rest])
+          join_compact(w, [bal, net, rest].compact)
         end
 
         # Desk-wide daily PnL: live mirror uses **exchange REAL+UNREAL (USDT) × FX** (+DeskViewModel#daily_pnl_inr_for_desk+).
@@ -148,6 +158,8 @@ module CoindcxBot
         # Live: config capital only; with +live_tui_metrics+ (exchange mirror): futures wallet in margin currency
         # (INR shown as-is; USDT converted via +inr_per_usdt+).
         def balance_line(snap)
+          return nil if show_live_futures_account_strip?(snap)
+
           if paper_metrics?(snap)
             base = snap.capital_inr || BigDecimal('0')
             realized_usdt = BigDecimal((snap.paper_metrics[:total_realized_pnl] || 0).to_s)
@@ -250,6 +262,77 @@ module CoindcxBot
             m.key?(:realized_usdt) ||
             m.key?(:unrealized_usdt) ||
             m.key?(:open_positions_count)
+        end
+
+        # Live futures mirror: wallet balance (API) + summed uPnL → equity; each shown in INR and USDT.
+        def show_live_futures_account_strip?(snap)
+          return false if snap.dry_run
+          return false unless live_tui_metrics?(snap)
+
+          dual_futures_account_metrics(snap).is_a?(Hash)
+        end
+
+        def dual_futures_account_metrics(snap)
+          fx = safe_inr_per_usdt_bigdecimal
+          return nil if fx.nil? || !fx.positive?
+
+          m = snap.live_tui_metrics
+          ur = BigDecimal((m[:unrealized_usdt] || 0).to_s)
+
+          wal_inr, wal_usdt =
+            if m[:wallet_amount] && m[:wallet_currency]
+              amt = BigDecimal(m[:wallet_amount].to_s)
+              case m[:wallet_currency].to_s.upcase
+              when 'INR'
+                [amt, amt / fx]
+              when 'USDT'
+                [amt * fx, amt]
+              else
+                return nil
+              end
+            elsif m[:balance_usdt]
+              usdt = BigDecimal(m[:balance_usdt].to_s)
+              [usdt * fx, usdt]
+            else
+              return nil
+            end
+
+          ur_usdt = ur
+          ur_inr = ur * fx
+          {
+            eq_inr: wal_inr + ur_inr,
+            eq_usdt: wal_usdt + ur_usdt,
+            wal_inr: wal_inr,
+            wal_usdt: wal_usdt,
+            ur_inr: ur_inr,
+            ur_usdt: ur_usdt
+          }
+        rescue ArgumentError, TypeError
+          nil
+        end
+
+        def safe_inr_per_usdt_bigdecimal
+          BigDecimal(@engine.inr_per_usdt.to_s)
+        rescue ArgumentError, TypeError
+          nil
+        end
+
+        def line_live_equity_wallet_unreal(snap, w)
+          d = dual_futures_account_metrics(snap)
+          return muted('—') unless d.is_a?(Hash)
+
+          join_compact(
+            w,
+            [
+              live_account_pair_label('EQ', d[:eq_inr], d[:eq_usdt]),
+              live_account_pair_label('WAL', d[:wal_inr], d[:wal_usdt]),
+              live_account_pair_label('UR', d[:ur_inr], d[:ur_usdt])
+            ]
+          )
+        end
+
+        def live_account_pair_label(tag, inr_amt, usdt_amt)
+          "#{bold("#{tag}: ")}#{colored_inr(inr_amt)}#{muted(' · ')}#{colored_num(usdt_amt)}#{muted(' USDT')}"
         end
 
         def fmt_inr(v)

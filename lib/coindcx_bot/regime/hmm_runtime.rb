@@ -34,7 +34,9 @@ module CoindcxBot
       end
 
       def tui_overlay(primary_pair = nil)
-        pair = primary_pair || @config.pairs.first
+        pair = resolve_overlay_primary_pair(primary_pair)
+        return {} if pair.nil?
+
         st = state_for(pair)
         return {} if st.nil?
 
@@ -42,6 +44,7 @@ module CoindcxBot
         {
           active: true,
           enabled: true,
+          regime_pair: pair,
           label: st.label.to_s[0, 14],
           probability_pct: st.probability.to_f * 100.0,
           stability_bars: st.consecutive_bars,
@@ -58,21 +61,21 @@ module CoindcxBot
       def hmm_context_for_ai
         return {} unless @config.regime_hmm_enabled?
 
+        if @config.regime_scope == 'global'
+          p0 = @config.pairs.first
+          st = state_for(p0)
+          return {} if st.nil?
+
+          slice = hmm_state_slice(st)
+          return @config.pairs.to_h { |p| [p, slice.dup] }
+        end
+
         out = {}
         @config.pairs.each do |pair|
           st = state_for(pair)
           next if st.nil?
 
-          out[pair] = {
-            state_id: st.state_id,
-            label: st.label,
-            probability: st.probability.round(4),
-            vol_rank: st.vol_rank,
-            vol_rank_total: st.vol_rank_total,
-            flickering: st.flickering,
-            uncertainty: st.uncertainty,
-            confirmed: st.is_confirmed
-          }
+          out[pair] = hmm_state_slice(st)
         end
         out
       end
@@ -82,6 +85,27 @@ module CoindcxBot
       end
 
       private
+
+      def resolve_overlay_primary_pair(primary_pair)
+        candidates = []
+        p = primary_pair.to_s.strip
+        candidates << p unless p.empty?
+        @config.pairs.each { |x| candidates << x.to_s }
+        candidates.compact.uniq.find { |pair| state_for(pair) }
+      end
+
+      def hmm_state_slice(st)
+        {
+          state_id: st.state_id,
+          label: st.label,
+          probability: st.probability.round(4),
+          vol_rank: st.vol_rank,
+          vol_rank_total: st.vol_rank_total,
+          flickering: st.flickering,
+          uncertainty: st.uncertainty,
+          confirmed: st.is_confirmed
+        }
+      end
 
       def format_quant(st)
         "S#{st.state_id} p=#{(st.probability * 100).round(0)}%"

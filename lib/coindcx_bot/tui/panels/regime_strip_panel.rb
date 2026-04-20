@@ -71,7 +71,7 @@ module CoindcxBot
           detail = ai_detail_wrap_lines(r, text_w)
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row) << clr(top_rule(w))
+          buf << move(@row) << clr(top_rule(w, r))
           buf << move(@row + 1) << clr(line_primary(r, w))
           buf << move(@row + 2) << clr(line_secondary(r, w))
           detail.each_with_index do |plain, i|
@@ -110,12 +110,33 @@ module CoindcxBot
           TermWidth.columns
         end
 
-        def top_rule(w)
+        def top_rule(w, r)
           inner = w - 2
-          title = ' REGIME '
+          title = regime_box_title(r, inner)
           dashes = inner - title.length
           dashes = 0 if dashes.negative?
           "┌#{title}#{'─' * dashes}┐"
+        end
+
+        def regime_box_title(r, max_plain_len)
+          core = ' REGIME '
+          sym = compact_regime_pair_label(r[:regime_pair])
+          return core if sym.nil? || sym.empty?
+
+          extra = "· #{sym} "
+          full = "#{core}#{extra}"
+          return full if full.length <= max_plain_len
+
+          short_sym = sym.length > 12 ? "#{sym[0, 11]}…" : sym
+          candidate = "#{core}· #{short_sym} "
+          candidate.length <= max_plain_len ? candidate : core
+        end
+
+        def compact_regime_pair_label(pair)
+          p = pair.to_s.strip
+          return nil if p.empty?
+
+          p.sub(/\AB-/, '').sub(/_USDT\z/i, '')
         end
 
         def bot_rule(w)

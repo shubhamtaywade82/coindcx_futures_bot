@@ -206,12 +206,17 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         )
       end
 
-      it 'shows futures wallet balance in INR without applying inr_per_usdt' do
+      it 'shows futures EQ WAL UR in INR and USDT without treating wallet row as USDT' do
         panel.render
-        expect(output.string).to include('BAL:')
-        expect(output.string).to include('1541.08')
+        rendered = output.string
+        expect(rendered).to include('EQ:')
+        expect(rendered).to include('WAL:')
+        expect(rendered).to include('UR:')
+        expect(rendered).to include('1541.08')
+        expect(rendered).to include('41.82')
         # Would be wrong if 1541.08 were treated as USDT at 83 INR/USDT (~127_909)
-        expect(output.string).not_to include('127909')
+        expect(rendered).not_to include('127909')
+        expect(rendered).not_to include('BAL:')
       end
 
       it 'shows NET as exchange REAL+UNREAL USDT at inr_per_usdt (not journal)' do
@@ -220,6 +225,57 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         expect(output.string).to include('3471.06')
         expect(output.string).to include('REAL USDT:')
         expect(output.string).to include('0.00')
+      end
+    end
+
+    context 'with live TUI metrics (USDT futures wallet)' do
+      let(:snapshot) do
+        CoindcxBot::Core::Engine::Snapshot.new(
+          pairs: %w[B-BTC_USDT],
+          ticks: {},
+          positions: [],
+          paused: false,
+          kill_switch: false,
+          stale: false,
+          last_error: nil,
+          daily_pnl: BigDecimal('0'),
+          running: true,
+          dry_run: false,
+          stale_tick_seconds: 45,
+          paper_metrics: {},
+          capital_inr: BigDecimal('50_000'),
+          recent_events: [],
+          working_orders: [],
+          ws_last_tick_ms_ago: 10,
+          strategy_last_by_pair: {},
+          regime: CoindcxBot::Regime::TuiState.disabled,
+          smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+          exchange_positions: [],
+          exchange_positions_error: nil,
+          exchange_positions_fetched_at: nil,
+          live_tui_metrics: {
+            wallet_amount: BigDecimal('2355.742'),
+            wallet_currency: 'USDT',
+            realized_usdt: BigDecimal('0'),
+            unrealized_usdt: BigDecimal('-408.459'),
+            open_positions_count: 1
+          }
+        )
+      end
+
+      it 'shows equity ≈ wallet USDT + unreal in both currencies' do
+        eng = double('engine', snapshot: snapshot, broker: broker_double, config: config)
+        allow(eng).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+        allow(eng).to receive(:ws_feed_stale?).and_return(false)
+        allow(eng).to receive(:engine_loop_crashed?).and_return(false)
+        described_class.new(engine: eng, origin_row: 0, output: output).render
+        rendered = output.string
+        expect(rendered).to include('EQ:')
+        expect(rendered).to include('1947.28')
+        expect(rendered).to include('WAL:')
+        expect(rendered).to include('2355.74')
+        expect(rendered).to include('UR:')
+        expect(rendered).to match(/408\.4/)
       end
     end
 
@@ -275,8 +331,46 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
   end
 
   describe '#row_count' do
-    it 'returns 4' do
+    it 'returns 4 without live futures account strip' do
       expect(panel.row_count).to eq(4)
+    end
+
+    it 'returns 5 when live futures EQ/WAL/UR strip is active' do
+      snap = CoindcxBot::Core::Engine::Snapshot.new(
+        pairs: %w[B-ETH_USDT],
+        ticks: {},
+        positions: [],
+        paused: false,
+        kill_switch: false,
+        stale: false,
+        last_error: nil,
+        daily_pnl: BigDecimal('0'),
+        running: true,
+        dry_run: false,
+        stale_tick_seconds: 45,
+        paper_metrics: {},
+        capital_inr: BigDecimal('50_000'),
+        recent_events: [],
+        working_orders: [],
+        ws_last_tick_ms_ago: 10,
+        strategy_last_by_pair: {},
+        regime: CoindcxBot::Regime::TuiState.disabled,
+        smc_setup: CoindcxBot::SmcSetup::TuiOverlay::DISABLED,
+        exchange_positions: [],
+        exchange_positions_error: nil,
+        exchange_positions_fetched_at: nil,
+        live_tui_metrics: {
+          wallet_amount: BigDecimal('100'),
+          wallet_currency: 'USDT',
+          unrealized_usdt: BigDecimal('-10'),
+          open_positions_count: 1
+        }
+      )
+      eng = double('engine', snapshot: snap, broker: broker_double, config: config)
+      allow(eng).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+      allow(eng).to receive(:ws_feed_stale?).and_return(false)
+      allow(eng).to receive(:engine_loop_crashed?).and_return(false)
+      expect(described_class.new(engine: eng, origin_row: 0, output: output).row_count).to eq(5)
     end
   end
 end
