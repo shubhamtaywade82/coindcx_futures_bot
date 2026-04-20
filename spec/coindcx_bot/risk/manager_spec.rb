@@ -110,6 +110,53 @@ RSpec.describe CoindcxBot::Risk::Manager do
     expect(qty).to eq(expected_qty)
   end
 
+  describe 'circuit breaker' do
+    let(:cb_config) do
+      CoindcxBot::Config.new(
+        minimal_bot_config(
+          risk: {
+            per_trade_inr_min: 250, per_trade_inr_max: 500, max_daily_loss_inr: 5000,
+            consecutive_loss_limit: 3, circuit_breaker_cooldown_minutes: 60
+          }
+        )
+      )
+    end
+    let(:cb_fx) { instance_double(CoindcxBot::Fx::UsdtInrRate, inr_per_usdt: cb_config.inr_per_usdt) }
+    let(:cb_guard) { CoindcxBot::Risk::ExposureGuard.new(config: cb_config) }
+    subject(:cb_manager) { described_class.new(config: cb_config, journal: journal, exposure_guard: cb_guard, fx: cb_fx) }
+
+    def log_paper_realized(pnl_usdt)
+      journal.log_event('paper_realized', { pnl_usdt: pnl_usdt.to_s })
+    end
+
+    it 'triggers after 3 consecutive losses with no interleaved events' do
+      3.times { log_paper_realized(-10) }
+      result, reason = cb_manager.allow_new_entry?(open_positions: [], pair: 'B-SOL_USDT')
+      expect(result).to eq(:reject)
+      expect(reason).to eq('circuit_breaker_streak')
+    end
+
+    it 'triggers after 3 consecutive losses even when trail/smc events are interleaved' do
+      log_paper_realized(-10)
+      journal.log_event('trail_update', { pair: 'B-SOL_USDT', new_stop: '98' })
+      journal.log_event('smc_setup_invalidated', { pair: 'B-SOL_USDT' })
+      log_paper_realized(-8)
+      journal.log_event('trail_update', { pair: 'B-ETH_USDT', new_stop: '1800' })
+      log_paper_realized(-5)
+      result, reason = cb_manager.allow_new_entry?(open_positions: [], pair: 'B-SOL_USDT')
+      expect(result).to eq(:reject)
+      expect(reason).to eq('circuit_breaker_streak')
+    end
+
+    it 'does not trigger when the last N trades include a winning trade' do
+      log_paper_realized(-10)
+      log_paper_realized(5)  # win breaks the streak
+      log_paper_realized(-8)
+      result, = cb_manager.allow_new_entry?(open_positions: [], pair: 'B-SOL_USDT')
+      expect(result).to eq(:ok)
+    end
+  end
+
   it 'raises per-trade INR budget from pct when raw pct budget is below min' do
     cfg = CoindcxBot::Config.new(
       minimal_bot_config(

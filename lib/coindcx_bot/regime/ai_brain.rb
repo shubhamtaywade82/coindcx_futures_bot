@@ -73,9 +73,12 @@ module CoindcxBot
         st = state.is_a?(Hash) ? state : {}
         err = st[:error].to_s.strip
         unless err.empty?
+          msg = err.to_s.strip
           return {
             active: false,
-            hmm_display: "AI err: #{err[0, 48]}",
+            hmm_display: truncate(msg, 56),
+            ai_transition_full: '',
+            ai_notes_full: msg,
             status: 'PIPE:ERR'
           }
         end
@@ -108,8 +111,10 @@ module CoindcxBot
           flicker_display: flick.empty? ? '—' : flick,
           confirmed: coerce_bool(p[:confirmed] || p['confirmed']),
           vol_rank_display: truncate(vol_disp, 14),
-          transition_display: truncate(trans, 28),
-          hmm_display: truncate("AI: #{notes}", 40),
+          transition_display: truncate(trans, 40),
+          hmm_display: truncate("AI: #{notes}", 52),
+          ai_transition_full: trans.to_s.strip,
+          ai_notes_full: notes.to_s.strip,
           status: 'PIPE:RUN'
         }
       end
@@ -142,7 +147,7 @@ module CoindcxBot
       private
 
       def ensure_ollama_loaded!
-        require 'ollama_client'
+        require 'ollama-client'
       end
 
       def resolved_model

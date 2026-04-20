@@ -38,6 +38,7 @@ module CoindcxBot
       validate_risk_band!
       validate_risk_capital_pct!
       validate_runtime_no_legacy_paper_flag!
+      validate_meta_first_win!
     end
 
     def scalper_mode?
@@ -151,6 +152,29 @@ module CoindcxBot
 
     def strategy
       raw.fetch(:strategy, {})
+    end
+
+    def strategy_name
+      s = strategy[:name]
+      (s || 'trend_continuation').to_s
+    end
+
+    def meta_first_win_strategy?
+      strategy_name == 'meta_first_win'
+    end
+
+    def meta_first_win_cooldown_seconds_after_close
+      return 0 unless meta_first_win_strategy?
+
+      mf = strategy[:meta_first_win]
+      return 0 unless mf.is_a?(Hash)
+
+      v = mf[:cooldown_seconds_after_close]
+      return 0 if v.nil?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      0
     end
 
     def execution
@@ -450,6 +474,41 @@ module CoindcxBot
       %w[USDT INR]
     end
 
+    # Optional Telegram mirror of +Journal#log_event+ rows (+Notifications::TelegramJournalSink+).
+    # All switches and IDs are ENV-only (no bot.yml +notifications+ block):
+    #   COINDCX_TELEGRAM_BOT_TOKEN, COINDCX_TELEGRAM_CHAT_ID — required to enable
+    #   COINDCX_TELEGRAM_OPS_CHAT_ID, COINDCX_TELEGRAM_OPS_BOT_TOKEN — optional second destination
+    #   COINDCX_TELEGRAM_OPS_TYPES — comma-separated +event_log+ +type+ names for ops duplicate (default below)
+    def telegram_journal_notifications_ready?
+      !telegram_journal_bot_token.empty? && !telegram_journal_chat_id.empty?
+    end
+
+    def telegram_journal_bot_token
+      ENV['COINDCX_TELEGRAM_BOT_TOKEN'].to_s.strip
+    end
+
+    def telegram_journal_chat_id
+      ENV['COINDCX_TELEGRAM_CHAT_ID'].to_s.strip
+    end
+
+    def telegram_journal_ops_bot_token
+      t = ENV['COINDCX_TELEGRAM_OPS_BOT_TOKEN'].to_s.strip
+      t.empty? ? telegram_journal_bot_token : t
+    end
+
+    def telegram_journal_ops_chat_id
+      ENV['COINDCX_TELEGRAM_OPS_CHAT_ID'].to_s.strip
+    end
+
+    # When +COINDCX_TELEGRAM_OPS_CHAT_ID+ is set, these +event_log+ +type+ values are also sent there.
+    # +COINDCX_TELEGRAM_OPS_TYPES+ comma list; unset → defaults; set to empty string → no ops duplicates.
+    def telegram_journal_ops_duplicate_types
+      raw = ENV['COINDCX_TELEGRAM_OPS_TYPES']
+      return %w[open_failed smc_setup_invalidated] if raw.nil?
+
+      raw.to_s.split(',').map(&:strip).reject(&:empty?)
+    end
+
     class ConfigurationError < StandardError; end
 
     private
@@ -531,6 +590,41 @@ module CoindcxBot
 
       raise ConfigurationError,
             'Remove runtime.paper from bot.yml; use runtime.dry_run only (true = paper trading, false = live).'
+    end
+
+    ALLOWED_META_FIRST_WIN_CHILDREN = %w[trend_continuation supertrend_profit smc_confluence].freeze
+
+    def validate_meta_first_win!
+      return unless meta_first_win_strategy?
+
+      mf = strategy[:meta_first_win]
+      unless mf.is_a?(Hash)
+        raise ConfigurationError,
+              'strategy.name meta_first_win requires strategy.meta_first_win (hash with children:)'
+      end
+
+      kids = mf[:children]
+      unless kids.is_a?(Array) && kids.any?
+        raise ConfigurationError, 'meta_first_win requires non-empty strategy.meta_first_win.children'
+      end
+
+      kids.each_with_index do |ch, i|
+        unless ch.is_a?(Hash)
+          raise ConfigurationError, "meta_first_win.children[#{i}] must be a Hash"
+        end
+
+        chs = ch.transform_keys(&:to_sym)
+        n = (chs[:name] || chs[:lane]).to_s.strip
+        if n.empty?
+          raise ConfigurationError, "meta_first_win.children[#{i}] needs name: (strategy lane for exits)"
+        end
+
+        next if ALLOWED_META_FIRST_WIN_CHILDREN.include?(n)
+
+        raise ConfigurationError,
+              "meta_first_win.children[#{i}] unsupported name #{n.inspect} " \
+              "(allowed: #{ALLOWED_META_FIRST_WIN_CHILDREN.join(', ')})"
+      end
     end
 
     def deep_symbolize(obj)

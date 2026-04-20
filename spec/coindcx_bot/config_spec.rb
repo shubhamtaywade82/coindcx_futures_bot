@@ -229,6 +229,10 @@ RSpec.describe CoindcxBot::Config do
       expect(cfg.strategy[:higher_timeframe_resolution]).to eq('15m')
       expect(cfg.flatten_on_daily_loss_breach?).to be(true)
       expect(cfg.pause_after_daily_loss_flatten?).to be(true)
+      hwm = cfg.strategy[:hwm_giveback]
+      expect(hwm[:enabled]).to be(true)
+      expect(hwm[:min_peak_usdt]).to eq(25)
+      expect(hwm[:giveback_pct]).to eq(0.5)
     end
 
     it 'does not override explicit runtime or strategy keys when scalper' do
@@ -255,6 +259,103 @@ RSpec.describe CoindcxBot::Config do
       )
       expect(cfg.scalper_mode?).to be(false)
       expect(cfg.runtime[:refresh_candles_seconds]).to eq(60)
+    end
+  end
+
+  describe 'meta_first_win strategy' do
+    it 'accepts a valid meta_first_win block' do
+      cfg = described_class.new(
+        minimal_bot_config(
+          strategy: {
+            name: 'meta_first_win',
+            execution_resolution: '15m',
+            higher_timeframe_resolution: '1h',
+            meta_first_win: {
+              cooldown_seconds_after_close: 3,
+              children: [
+                { name: 'trend_continuation', trend_strength_min: 0.2 },
+                { name: 'supertrend_profit' }
+              ]
+            }
+          }
+        )
+      )
+      expect(cfg.strategy_name).to eq('meta_first_win')
+      expect(cfg.meta_first_win_strategy?).to be(true)
+      expect(cfg.meta_first_win_cooldown_seconds_after_close).to eq(3.0)
+    end
+
+    it 'defaults strategy_name to trend_continuation when name is omitted' do
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.strategy_name).to eq('trend_continuation')
+      expect(cfg.meta_first_win_cooldown_seconds_after_close).to eq(0)
+    end
+
+    it 'rejects meta_first_win without children' do
+      bad = minimal_bot_config(
+        strategy: {
+          name: 'meta_first_win',
+          meta_first_win: { children: [] }
+        }
+      )
+      expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /children/)
+    end
+
+    it 'rejects an unsupported child name' do
+      bad = minimal_bot_config(
+        strategy: {
+          name: 'meta_first_win',
+          meta_first_win: { children: [{ name: 'regime_vol_tier' }] }
+        }
+      )
+      expect { described_class.new(bad) }.to raise_error(CoindcxBot::Config::ConfigurationError, /unsupported/)
+    end
+  end
+
+  describe 'telegram journal notifications' do
+    around do |example|
+      keys = %w[
+        COINDCX_TELEGRAM_BOT_TOKEN
+        COINDCX_TELEGRAM_CHAT_ID
+        COINDCX_TELEGRAM_OPS_CHAT_ID
+        COINDCX_TELEGRAM_OPS_BOT_TOKEN
+        COINDCX_TELEGRAM_OPS_TYPES
+      ]
+      saved = keys.to_h { |k| [k, ENV[k]] }
+      keys.each { |k| ENV.delete(k) }
+      example.run
+    ensure
+      saved.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
+    end
+
+    it 'is not ready when env credentials are incomplete' do
+      ENV['COINDCX_TELEGRAM_BOT_TOKEN'] = 't'
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.telegram_journal_notifications_ready?).to be(false)
+    end
+
+    it 'is ready when bot token and chat id are set' do
+      ENV['COINDCX_TELEGRAM_BOT_TOKEN'] = 'secret'
+      ENV['COINDCX_TELEGRAM_CHAT_ID'] = '99'
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.telegram_journal_notifications_ready?).to be(true)
+    end
+
+    it 'defaults ops duplicate types when COINDCX_TELEGRAM_OPS_TYPES is unset' do
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.telegram_journal_ops_duplicate_types).to eq(%w[open_failed smc_setup_invalidated])
+    end
+
+    it 'parses COINDCX_TELEGRAM_OPS_TYPES as a comma-separated list' do
+      ENV['COINDCX_TELEGRAM_OPS_TYPES'] = ' a , b '
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.telegram_journal_ops_duplicate_types).to eq(%w[a b])
+    end
+
+    it 'treats empty COINDCX_TELEGRAM_OPS_TYPES as no ops duplicate types' do
+      ENV['COINDCX_TELEGRAM_OPS_TYPES'] = ''
+      cfg = described_class.new(minimal_bot_config)
+      expect(cfg.telegram_journal_ops_duplicate_types).to eq([])
     end
   end
 end

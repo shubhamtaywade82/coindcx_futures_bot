@@ -10,7 +10,7 @@ ruby '3.3.4'
 gem 'coindcx-client', path: '../coindcx-client'
 
 # Regime AI (local Ollama): trading analyst via ollama-client; optional retries via ollama_agent.
-gem 'ollama-client'
+gem 'ollama-client', '~> 1.3'
 gem 'ollama_agent'
 
 gem 'bigdecimal'

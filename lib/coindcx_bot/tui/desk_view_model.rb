@@ -377,7 +377,8 @@ module CoindcxBot
           sl: fmt_stop_price(p),
           liq: '—',
           pnl_usdt: u,
-          pnl_label: fmt_pnl_label(u, p, mark_for_calc, entry_for_display)
+          pnl_label: fmt_pnl_label(u, p, mark_for_calc, entry_for_display),
+          lane: lane_abbrev(p)
         }
       end
 
@@ -386,6 +387,23 @@ module CoindcxBot
         return '—' if sp.nil? || sp.to_s.strip.empty?
 
         fmt_price(optional_bd(sp))
+      end
+
+      # Returns a short badge for the MetaFirstWin child that opened this position,
+      # or nil when not running meta_first_win.
+      LANE_ABBREVS = {
+        'trend_continuation' => 'tc',
+        'supertrend_profit'  => 'sp',
+        'smc_confluence'     => 'sc'
+      }.freeze
+
+      def lane_abbrev(p)
+        return nil unless @config.meta_first_win_strategy?
+
+        lane = (p[:entry_lane] || p['entry_lane']).to_s.strip
+        return '?' if lane.empty?
+
+        LANE_ABBREVS.fetch(lane, lane[0, 3])
       end
 
       def position_side_label(p)

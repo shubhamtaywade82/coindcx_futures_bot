@@ -10,10 +10,13 @@ require_relative '../ansi_string'
 module CoindcxBot
   module Tui
     module Panels
-      # Two-line regime summary (layout.md-style) between header and futures grid.
+      # Regime summary between header and futures grid: two headline rows plus optional
+      # wrapped lines for full AI transition + notes (+Engine#snapshot :regime +ai_*_full+).
       class RegimeStripPanel
         include Theme
         include AnsiString
+
+        MAX_AI_DETAIL_LINES = 12
 
         def initialize(engine:, origin_row:, origin_col: 0, output: $stdout)
           @engine = engine
@@ -32,7 +35,12 @@ module CoindcxBot
         end
 
         def row_count
-          regime_feature_disabled? ? 1 : 4
+          return 1 if regime_feature_disabled?
+
+          r = normalize_regime(@engine.snapshot.regime)
+          w = term_width
+          text_w = w - 4
+          4 + ai_detail_wrap_lines(r, text_w).size
         end
 
         private
@@ -59,12 +67,17 @@ module CoindcxBot
           snap = @engine.snapshot
           r = normalize_regime(snap.regime)
           w = term_width
+          text_w = w - 4
+          detail = ai_detail_wrap_lines(r, text_w)
           buf = StringIO.new
           buf << @cursor.save
           buf << move(@row) << clr(top_rule(w))
           buf << move(@row + 1) << clr(line_primary(r, w))
           buf << move(@row + 2) << clr(line_secondary(r, w))
-          buf << move(@row + 3) << clr(bot_rule(w))
+          detail.each_with_index do |plain, i|
+            buf << move(@row + 3 + i) << clr(ai_detail_box_line(plain, text_w))
+          end
+          buf << move(@row + 3 + detail.size) << clr(bot_rule(w))
           buf << @cursor.restore
           @output.print buf.string
           @output.flush
@@ -131,13 +144,11 @@ module CoindcxBot
           text_w = w - 4
           q = r[:quant_display].to_s
           q = '—' if q.strip.empty?
-          ai = r[:hmm_display].to_s
-          ai = '—' if ai.strip.empty?
           plain = [
             "VolRank:#{display_vol_rank(r)}",
-            "A:#{display_transition(r)}",
+            secondary_transition_cell(r),
             "Mdl:#{q}",
-            "AI:#{ai}"
+            secondary_ai_cell(r)
           ].join(' ')
           line = plain.length > text_w ? "#{plain[0, text_w - 1]}…" : plain.ljust(text_w)
           "│ #{muted(line)} │"
@@ -186,6 +197,67 @@ module CoindcxBot
           return 'n/a' if standby_waiting?(r) && (raw.nil? || raw.to_s == '—')
 
           raw.nil? || raw.to_s.empty? ? '—' : raw.to_s
+        end
+
+        # Avoid duplicating the same copy on row 2 when wrapped +A· / +n· lines show it below.
+        def secondary_transition_cell(r)
+          return "A:#{display_transition(r)}" if r[:ai_transition_full].to_s.strip.empty?
+
+          'A:↓'
+        end
+
+        def secondary_ai_cell(r)
+          cell = ai_column_fragment(r[:hmm_display])
+          return cell if r[:ai_notes_full].to_s.strip.empty?
+          return cell if cell == 'AI:—'
+
+          'AI:↓'
+        end
+
+        def ai_column_fragment(hmm_display)
+          t = hmm_display.to_s.strip
+          return 'AI:—' if t.empty?
+          return t if t.match?(/\AAI[ :]/)
+
+          "AI:#{t}"
+        end
+
+        def ai_detail_wrap_lines(r, text_w)
+          out = []
+          [['A· ', r[:ai_transition_full]], ['n· ', r[:ai_notes_full]]].each do |prefix, raw|
+            text = raw.to_s.strip
+            next if text.empty?
+
+            chunk_w = text_w - visible_len(prefix)
+            chunk_w = [[chunk_w, 8].max, 500].min
+            wrap_plain_text(text, chunk_w).each do |chunk|
+              break if out.size >= MAX_AI_DETAIL_LINES
+
+              out << "#{prefix}#{chunk}"
+            end
+          end
+          out
+        end
+
+        def wrap_plain_text(text, width)
+          return [] if text.empty? || width < 8
+
+          lines = []
+          rest = text
+          until rest.empty?
+            if rest.length <= width
+              lines << rest
+              break
+            end
+            lines << rest[0, width]
+            rest = rest[width..].lstrip
+          end
+          lines
+        end
+
+        def ai_detail_box_line(plain, text_w)
+          inner = pad_visible(muted(plain), text_w)
+          "│ #{inner} │"
         end
 
         def box_line(plain, text_w)

@@ -46,6 +46,7 @@ module CoindcxBot
           next if paper_pos.key?(pair)
           @logger&.warn("[reconcile] Journal position found for #{pair} without Paper entry. Closing to sync.")
           @journal.close_position(j_row[:id])
+          record_meta_first_win_entry_cooldown(pair)
           @journal.log_event(
             'signal_close',
             pair: pair,
@@ -82,13 +83,16 @@ module CoindcxBot
         close_id = row&.dig(:id)
 
         if close_id
-          book_inr_from_paper_close(
-            { ok: true, realized_pnl_usdt: realized_pnl_usdt, fill_price: fill_price, position_id: position_id },
-            row: row,
-            pair: pair,
-            source: :"broker_#{trigger}"
-          )
-          @journal.close_position(close_id)
+          @journal.within_transaction do
+            book_inr_from_paper_close(
+              { ok: true, realized_pnl_usdt: realized_pnl_usdt, fill_price: fill_price, position_id: position_id },
+              row: row,
+              pair: pair,
+              source: :"broker_#{trigger}"
+            )
+            @journal.close_position(close_id)
+          end
+          record_meta_first_win_entry_cooldown(pair)
           @logger&.info("[paper] broker exit synced: #{pair} id=#{close_id} trigger=#{trigger} pnl=#{realized_pnl_usdt&.to_s('F')}")
         else
           @logger&.warn("[paper] broker exit for #{pair} but no matching journal row")
@@ -115,6 +119,7 @@ module CoindcxBot
         @journal.open_positions.select { |row| row[:pair] == pair_s }.each do |row|
           @journal.close_position(row[:id])
         end
+        record_meta_first_win_entry_cooldown(pair_s)
         :ok
       end
 
@@ -174,15 +179,18 @@ module CoindcxBot
           return :failed
         end
 
-        journal_id = journal_open(signal, quantity, entry_price)
+        journal_id = nil
+        @journal.within_transaction do
+          journal_id = journal_open(signal, quantity, entry_price)
+          @journal.log_event(
+            'signal_open',
+            action: signal.action.to_s,
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            leverage: leverage
+          )
+        end
         sync_journal_entry_from_paper_fill(signal.pair.to_s, journal_id)
-        @journal.log_event(
-          'signal_open',
-          action: signal.action.to_s,
-          pair: signal.pair,
-          reason: signal.reason.to_s,
-          leverage: leverage
-        )
         @logger&.info("[paper] opened #{signal.side} #{signal.pair} qty=#{quantity}")
         :paper
       end
@@ -217,14 +225,16 @@ module CoindcxBot
           return :failed
         end
 
-        journal_open(signal, quantity, entry_price)
-        @journal.log_event(
-          'signal_open',
-          action: signal.action.to_s,
-          pair: signal.pair,
-          reason: signal.reason.to_s,
-          leverage: leverage
-        )
+        @journal.within_transaction do
+          journal_open(signal, quantity, entry_price)
+          @journal.log_event(
+            'signal_open',
+            action: signal.action.to_s,
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            leverage: leverage
+          )
+        end
         @logger&.info("Opened #{signal.side} #{signal.pair} qty=#{quantity}")
         :ok
       end
@@ -239,7 +249,23 @@ module CoindcxBot
           stop_price: signal.stop_price,
           trail_price: nil,
           initial_stop_price: signal.stop_price,
-          smc_setup_id: smc_id
+          smc_setup_id: smc_id,
+          entry_lane: entry_lane_from_signal(signal)
+        )
+      end
+
+      def entry_lane_from_signal(signal)
+        m = metadata_symbols(signal)
+        v = m[:meta_lane] || m['meta_lane']
+        s = v.to_s.strip
+        s.empty? ? nil : s
+      end
+
+      def record_meta_first_win_entry_cooldown(pair)
+        CoindcxBot::Strategy::MetaFirstWin.record_entry_cooldown(
+          journal: @journal,
+          config: @config,
+          pair: pair.to_s
         )
       end
 
@@ -303,18 +329,20 @@ module CoindcxBot
           )
         end
 
-        @journal.close_position(close_id)
-        @logger&.info("[paper] closed #{signal.pair} id=#{close_id}")
-
         outcome, pnl_flag = summarize_paper_close_outcome(broker_res, exchange_attempted, skipped_no_ltp)
-        @journal.log_event(
-          'signal_close',
-          pair: signal.pair,
-          reason: signal.reason.to_s,
-          position_id: close_id,
-          outcome: outcome,
-          pnl_booked: pnl_flag
-        )
+        @journal.within_transaction do
+          @journal.close_position(close_id)
+          @journal.log_event(
+            'signal_close',
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            position_id: close_id,
+            outcome: outcome,
+            pnl_booked: pnl_flag
+          )
+        end
+        record_meta_first_win_entry_cooldown(signal.pair)
+        @logger&.info("[paper] closed #{signal.pair} id=#{close_id}")
         :paper
       end
 
@@ -350,15 +378,18 @@ module CoindcxBot
             source: :strategy_close
           )
         end
-        @journal.close_position(close_id)
-        @journal.log_event(
-          'signal_close',
-          pair: signal.pair,
-          reason: signal.reason.to_s,
-          position_id: close_id,
-          outcome: 'live_closed',
-          pnl_booked: pnl_path
-        )
+        @journal.within_transaction do
+          @journal.close_position(close_id)
+          @journal.log_event(
+            'signal_close',
+            pair: signal.pair,
+            reason: signal.reason.to_s,
+            position_id: close_id,
+            outcome: 'live_closed',
+            pnl_booked: pnl_path
+          )
+        end
+        record_meta_first_win_entry_cooldown(signal.pair)
         :ok
       end
 
@@ -428,7 +459,10 @@ module CoindcxBot
           return [row, row ? pid : nil]
         end
 
-        return [nil, nil] unless @dry
+        unless @dry
+          @logger&.warn("[live] close signal for #{pair} has no position_id — cannot target specific position, close skipped")
+          return [nil, nil]
+        end
 
         row = @journal.open_positions.find { |r| r[:pair].to_s == pair }
         [row, row&.dig(:id)]
@@ -547,7 +581,7 @@ module CoindcxBot
       def effective_leverage
         defaults = @config.execution.fetch(:order_defaults, {})
         raw = defaults[:leverage] || defaults['leverage'] || @config.risk.fetch(:max_leverage, 5)
-        requested = Integer(raw)
+        requested = BigDecimal(raw.to_s).to_i
         cap = @exposure.max_leverage
         [[requested, 1].max, cap].min
       end

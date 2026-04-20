@@ -27,8 +27,8 @@ module CoindcxBot
         breakout_lookback: 3,
         hwm_giveback: {
           enabled: true,
-          min_peak_usdt: 10,
-          giveback_pct: 0.35
+          min_peak_usdt: 25,
+          giveback_pct: 0.5
         }
       }
     }.freeze

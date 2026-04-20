@@ -14,7 +14,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
       trading_mode_label: 'SWING',
       scalper_mode?: false,
       tui_exchange_positions_enabled?: false,
-      tui_exchange_mirror?: false
+      tui_exchange_mirror?: false,
+      meta_first_win_strategy?: false
     )
   end
 
@@ -137,7 +138,8 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
           trading_mode_label: 'SCALP',
           scalper_mode?: false,
           tui_exchange_positions_enabled?: true,
-          tui_exchange_mirror?: true
+          tui_exchange_mirror?: true,
+          meta_first_win_strategy?: false
         )
       end
 
