@@ -239,7 +239,7 @@ CHECKSUMS
   wisper (2.0.1) sha256=ce17bc5c3a166f241a2e6613848b025c8146fce2defba505920c1d1f3f88fae6
 
 RUBY VERSION
-  ruby 3.3.4
+  ruby 3.3.6
 
 BUNDLED WITH
   4.0.9
