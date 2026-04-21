@@ -98,6 +98,7 @@ module CoindcxBot
         @regime_ai_brain = nil
         @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
         @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
+        @margin_sim = Risk::MarginSimulator.new(config: @config, logger: @logger)
         @daily_loss_flatten_warned = false
         @engine_loop_crashed = false
         @exchange_positions_tui_mutex = Mutex.new
@@ -967,6 +968,7 @@ module CoindcxBot
         refresh_futures_wallet_for_tui_if_due
         refresh_runtime_reconcile_if_due
         apply_funding_for_live_positions!
+        check_liquidation_risks
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
@@ -1304,10 +1306,73 @@ module CoindcxBot
             return
           end
 
+          unless @config.dry_run?
+            lev = resolved_leverage
+            margin_gate = @margin_sim.pre_trade_ok?(entry_price: entry, quantity: qty, leverage: lev)
+            unless margin_gate.first == :ok
+              @logger&.info("[engine] #{pair} #{sig.action} blocked: #{margin_gate.last}") if @strategy_signal_trace
+              return
+            end
+          end
+
           @coord.apply(sig, quantity: qty, entry_price: entry)
         else
           exit_for_close = sig.action == :close ? ltp : nil
           @coord.apply(sig, exit_price: exit_for_close)
+        end
+      end
+
+      # Effective leverage: coordinator config capped by ExposureGuard.max_leverage.
+      def resolved_leverage
+        defaults = @config.execution.fetch(:order_defaults, {})
+        raw = defaults[:leverage] || defaults['leverage'] || @config.risk.fetch(:max_leverage, 5)
+        requested = BigDecimal(raw.to_s).to_i
+        [[requested, 1].max, @exposure.max_leverage].min
+      rescue ArgumentError, TypeError
+        1
+      end
+
+      # Scan open journal positions for liquidation proximity; log alerts and optionally
+      # emergency-close positions where mark price is dangerously close to liquidation price.
+      def check_liquidation_risks
+        return if @config.dry_run?
+
+        alert_pct     = @config.liquidation_alert_pct
+        emergency_pct = @config.emergency_close_pct
+
+        @journal.open_positions.each do |pos|
+          ltp     = @tracker.ltp(pos[:pair])
+          liq_raw = pos[:liquidation_price]
+          next unless ltp && liq_raw
+
+          liq = BigDecimal(liq_raw.to_s)
+          mp  = BigDecimal(ltp.to_s)
+          next unless liq.positive? && mp.positive?
+
+          distance_pct = ((mp - liq).abs / mp * 100).round(2)
+
+          if distance_pct < emergency_pct
+            @logger&.error(
+              "[liq_risk] EMERGENCY #{pos[:pair]} id=#{pos[:id]} " \
+              "liq=#{liq.to_s('F')} mark=#{mp.to_s('F')} dist=#{distance_pct}% — force-closing"
+            )
+            sig = Strategy::Signal.new(
+              action:     :close,
+              pair:       pos[:pair],
+              side:       pos[:side]&.to_sym,
+              stop_price: nil,
+              reason:     'liquidation_emergency',
+              metadata:   { position_id: pos[:id] }
+            )
+            @coord.apply(sig, exit_price: ltp)
+          elsif distance_pct < alert_pct
+            @logger&.warn(
+              "[liq_risk] #{pos[:pair]} id=#{pos[:id]} " \
+              "liq=#{liq.to_s('F')} mark=#{mp.to_s('F')} dist=#{distance_pct}% — monitor closely"
+            )
+          end
+        rescue StandardError => e
+          @logger&.warn("[liq_risk] pos #{pos[:id]}: #{e.message}")
         end
       end
 
@@ -1404,6 +1469,8 @@ module CoindcxBot
             res.value,
             @config.margin_currency_short_name
           )
+          account_state = Models::AccountState.from_wallet_snapshot(snap)
+          @margin_sim.update(account_state)
         else
           err = res.message.to_s
         end

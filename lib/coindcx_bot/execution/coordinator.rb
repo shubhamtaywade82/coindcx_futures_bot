@@ -567,28 +567,39 @@ module CoindcxBot
         nil
       end
 
-      # Estimated live PnL: entry_price and LTP-at-signal are known; actual fill and fees are not.
+      # Estimated live PnL: uses PnlCalculator with round-trip fees and accumulated funding.
+      # Fill price is LTP at signal time (actual WS fill may differ slightly).
       # Marked `estimated: true` in the event so it can be audited. Still feeds daily_pnl_inr so
       # the daily-loss circuit breaker fires correctly in live mode.
       def book_inr_from_live_close(row:, exit_price:, pair:, reason:)
-        entry  = BigDecimal(row[:entry_price].to_s)
-        qty    = BigDecimal(row[:quantity].to_s)
-        ep     = BigDecimal(exit_price.to_s)
-        side   = row[:side].to_s
+        entry        = BigDecimal(row[:entry_price].to_s)
+        qty          = BigDecimal(row[:quantity].to_s)
+        ep           = BigDecimal(exit_price.to_s)
+        side         = row[:side].to_s.to_sym
+        funding_paid = BigDecimal((row[:funding_paid_usdt] || '0').to_s)
+        fee_bps      = BigDecimal(@config.taker_fee_bps.to_s)
 
-        pnl_usdt = side == 'long' ? (ep - entry) * qty : (entry - ep) * qty
-        inr      = pnl_usdt * @fx.inr_per_usdt
+        pnl_usdt = Risk::PnlCalculator.realized_usdt(
+          entry_price:       entry,
+          exit_price:        ep,
+          size:              qty,
+          side:              side,
+          funding_paid_usdt: funding_paid,
+          entry_fee_bps:     fee_bps,
+          exit_fee_bps:      fee_bps
+        )
+        inr = pnl_usdt * @fx.inr_per_usdt
 
         @journal.add_daily_pnl_inr(inr)
         @journal.log_event(
           'live_realized',
-          pair: pair,
-          pnl_usdt: pnl_usdt.to_s('F'),
-          pnl_inr: inr.to_s('F'),
-          exit_price: ep.to_s('F'),
+          pair:        pair,
+          pnl_usdt:    pnl_usdt.to_s('F'),
+          pnl_inr:     inr.to_s('F'),
+          exit_price:  ep.to_s('F'),
           entry_price: entry.to_s('F'),
-          reason: reason,
-          estimated: true
+          reason:      reason,
+          estimated:   true
         )
         @logger&.info("[live] est. PnL ~₹#{inr.round(2)} (#{pnl_usdt.round(4)} USDT) #{pair}")
       rescue StandardError => e

@@ -475,6 +475,47 @@ module CoindcxBot
       truthy?(risk[:track_funding_rate])
     end
 
+    # Safety buffer applied to available margin before allowing new entries (%).
+    # A 20% buffer means only 80% of available margin can be consumed.
+    def margin_safety_buffer_pct
+      v = risk.fetch(:margin_safety_buffer_pct, 20).to_f
+      [[v, 0].max, 50].min
+    rescue ArgumentError, TypeError
+      20.0
+    end
+
+    # Block new entries when used_margin / equity exceeds this threshold (%).
+    def max_margin_ratio_pct
+      v = risk.fetch(:max_margin_ratio_pct, 80).to_f
+      [[v, 10].max, 100].min
+    rescue ArgumentError, TypeError
+      80.0
+    end
+
+    # Log a warning when liquidation is within this % of mark price.
+    def liquidation_alert_pct
+      v = risk.fetch(:liquidation_alert_pct, 5).to_f
+      [[v, 1].max, 20].min
+    rescue ArgumentError, TypeError
+      5.0
+    end
+
+    # Emergency-close threshold: force-close when liquidation is within this % of mark price.
+    def emergency_close_pct
+      v = risk.fetch(:emergency_close_pct, 2).to_f
+      [[v, 0.5].max, 10].min
+    rescue ArgumentError, TypeError
+      2.0
+    end
+
+    # CoinDCX futures taker fee in basis points (default 5 bps = 0.05 %).
+    def taker_fee_bps
+      v = risk.fetch(:taker_fee_bps, 5).to_f
+      [v, 0].max
+    rescue ArgumentError, TypeError
+      5.0
+    end
+
     # Estimated per-8h funding rate in basis points (default 1 bps = 0.01 %).
     # Longs pay this; shorts receive it. Used when real-time rate is not fetched.
     def default_funding_rate_bps
