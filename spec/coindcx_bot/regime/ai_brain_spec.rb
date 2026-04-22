@@ -1,6 +1,24 @@
 # frozen_string_literal: true
 
 RSpec.describe CoindcxBot::Regime::AiBrain do
+  describe '#build_user_message' do
+    let(:brain) { described_class.new(config: CoindcxBot::Config.new(minimal_bot_config), logger: nil) }
+
+    it 'embeds OHLCV feature JSON when features_by_pair is present' do
+      ctx = {
+        exec_resolution: '15m',
+        htf_resolution: '1h',
+        positions: [],
+        pairs: %w[B-SOL_USDT],
+        candles_by_pair: { 'B-SOL_USDT' => [{ o: 1, h: 2, l: 1, c: 1.5, v: 1 }] },
+        features_by_pair: { 'B-SOL_USDT' => { symbol: 'B-SOL_USDT', price: 1.5 } }
+      }
+      msg = brain.send(:build_user_message, ctx)
+      expect(msg).to include('OHLCV feature packets')
+      expect(msg).to include('B-SOL_USDT')
+    end
+  end
+
   describe '.overlay_from_state' do
     it 'returns empty hash when there is no payload and no error' do
       expect(described_class.overlay_from_state({})).to eq({})

@@ -191,9 +191,18 @@ module CoindcxBot
         lines << 'Open positions (journal):'
         Array(context[:positions]).each { |pos| lines << pos.inspect }
         lines << ''
+        feats = context[:features_by_pair]
+        if feats.is_a?(Hash) && feats.any?
+          lines << 'OHLCV feature packets (JSON, deterministic Ruby layer; use with bar list if present):'
+          lines << JSON.generate(feats)
+          lines << ''
+        end
         Array(context[:pairs]).each do |pair|
           bars = context[:candles_by_pair][pair] || []
           lines << "PAIR #{pair} (#{bars.size} bars, oldest first):"
+          if bars.empty? && feats.is_a?(Hash) && feats[pair]
+            lines << '  (raw OHLCV lines omitted; see ohlcv feature packet for this pair)'
+          end
           bars.each_with_index do |b, idx|
             lines << "  #{idx} o=#{b[:o]} h=#{b[:h]} l=#{b[:l]} c=#{b[:c]} v=#{b[:v]}"
           end

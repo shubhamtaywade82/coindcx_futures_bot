@@ -16,6 +16,9 @@
 #   COINDCX_TUI_VERBOSE=1       — TUI: engine logs to tmp/coindcx_tui.log (or COINDCX_TUI_LOG path)
 #   COINDCX_TUI_LOG             — custom path for TUI verbose log
 #   COINDCX_TUI_POLL_ONLY=1     — TUI: REST LTP poll only (no WS requirement for display)
+# Telegram (optional): COINDCX_TELEGRAM_BOT_TOKEN, COINDCX_TELEGRAM_CHAT_ID enable the main chat.
+#   COINDCX_TELEGRAM_OPS_CHAT_ID / COINDCX_TELEGRAM_OPS_BOT_TOKEN — optional second destination
+#   COINDCX_TELEGRAM_OPS_TYPES — comma-separated event_log.type names for ops duplicate (empty = none)
 
 margin_currency_short_name: USDT
 
@@ -204,6 +207,29 @@ runtime:
   # tui_exchange_positions_refresh_seconds: 25
   # tui_exchange_positions_margins: [USDT, INR]   # optional; default: top-level margin_currency_short_name, or [USDT, INR] if unset
 
+# Multi-level analysis alerts (journal always; Telegram optional + throttle when filter_telegram is true).
+# When filter_telegram is false or omitted, every journal event still reaches Telegram as today (no policy).
+# New analysis_* events are emitted only when the matching analysis.* flag is true (except price_rules: any listed rule runs).
+# alerts:
+#   filter_telegram: false
+#   analysis:
+#     strategy_transitions: false      # analysis_strategy_transition on sig action/reason edge (per pair)
+#     regime_hmm_transitions: false    # analysis_regime_change after HMM decode changes
+#     regime_ai_updates: false         # analysis_regime_ai_update when Ollama label/prob delta exceeds threshold
+#     regime_ai_min_probability_delta: 10   # percentage points
+#   price_rules:
+#     - pair: B-SOL_USDT
+#       id: sol_above_100
+#       label: "SOL century"
+#       above: 100        # also supports below: or both (zone flips emit analysis_price_cross)
+#   telegram:
+#     allow_types: []                 # empty = all types allowed; otherwise whitelist (suffix * = prefix match)
+#     critical_types: []              # omit for defaults: open_failed, signal_close, analysis_liquidation_proximity, flatten
+#     default_throttle_seconds: 0     # 0 = no throttle except dedupe key still buckets repeats
+#     critical_throttle_seconds: 30
+#     throttle_by_type:              # per-type minimum seconds between Telegram sends (same type+pair+dedupe_key)
+#       analysis_regime_ai_update: 900
+
 # Regime: HMM (Ruby diagonal Gaussian), optional Ollama narrative, optional risk size multipliers.
 # See docs/hmm_regime_trading_spec.md. Ollama does not submit orders; strategy `regime_vol_tier` gates entries from HMM tier.
 # regime:
@@ -243,6 +269,12 @@ runtime:
 #     temperature: 0.15
 #     use_retry_middleware: true
 #     retry_attempts: 3
+#     # Deterministic OHLCV feature packet (CoindcxBot::TradingAi::FeatureEnricher) for the regime Ollama prompt.
+#     include_feature_packet: false
+#     feature_min_candles: 30
+#     feature_tz_offset_minutes: 0
+#     # When true with include_feature_packet: skip per-bar OHLCV text lines (token savings; packet JSON only).
+#     omit_raw_bars_when_feature_packet: false
 #
 # regime_backtest:
 #   n_candidates: [3, 4]
@@ -268,6 +300,10 @@ runtime:
 #   planner_reset_state: false
 #   gatekeeper_enabled: false
 #   gatekeeper_min_interval_seconds: 45
+#   # Append CoindcxBot::TradingAi::FeatureEnricher JSON to the gatekeeper user payload (needs enough exec candles).
+#   gatekeeper_include_feature_packet: false
+#   gatekeeper_feature_min_candles: 30
+#   gatekeeper_feature_tz_offset_minutes: 0
 #   model: llama3.2:3b
 #   ollama_base_url: http://127.0.0.1:11434
 #   timeout_seconds: 60

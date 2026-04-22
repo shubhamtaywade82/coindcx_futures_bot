@@ -178,7 +178,7 @@ module CoindcxBot
         # and the CoinDCX client (buy/sell, client_order_id, total_quantity, market_order).
         if @broker.is_a?(GatewayPaperBroker)
           result = @broker.place_order(rest_futures_open_order(signal, quantity, leverage))
-          ok = result == :ok
+          ok = result.is_a?(Hash) ? result[:ok] : (result == :ok)
         else
           order_params = {
             pair: signal.pair,

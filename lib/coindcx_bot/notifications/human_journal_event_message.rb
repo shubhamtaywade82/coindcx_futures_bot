@@ -22,6 +22,11 @@ module CoindcxBot
             when 'ws_order_update' then format_ws_order_update(h)
             when 'smc_setup_fired' then format_smc_setup_fired(h)
             when 'smc_setup_invalidated' then format_smc_setup_invalidated(h)
+            when 'analysis_strategy_transition' then format_analysis_strategy_transition(h)
+            when 'analysis_regime_change' then format_analysis_regime_change(h)
+            when 'analysis_regime_ai_update' then format_analysis_regime_ai_update(h)
+            when 'analysis_price_cross' then format_analysis_price_cross(h)
+            when 'analysis_liquidation_proximity' then format_analysis_liquidation_proximity(h)
             else format_fallback(type, h)
             end
 
@@ -148,6 +153,48 @@ module CoindcxBot
           lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
           lines << "Setup: #{fetch_s(h, :setup_id)}" if fetch_s(h, :setup_id) != ''
           lines << "Reason: #{fetch_s(h, :reason)}" if fetch_s(h, :reason) != ''
+          lines.join("\n")
+        end
+
+        def format_analysis_strategy_transition(h)
+          lines = ['Strategy signal change']
+          lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
+          lines << "From: #{fetch_s(h, :from_action)} (#{fetch_s(h, :from_reason)})" if fetch_s(h, :from_action) != ''
+          lines << "To: #{fetch_s(h, :to_action)} (#{fetch_s(h, :to_reason)})" if fetch_s(h, :to_action) != ''
+          lines << "LTP: #{fetch_s(h, :ltp)}" if fetch_s(h, :ltp) != ''
+          lines.join("\n")
+        end
+
+        def format_analysis_regime_change(h)
+          lines = ['HMM regime change']
+          lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
+          lines << "From: #{fetch_s(h, :from_label)} (state #{fetch_s(h, :from_state_id)})" if fetch_s(h, :from_label) != ''
+          lines << "To: #{fetch_s(h, :to_label)} (state #{fetch_s(h, :to_state_id)})" if fetch_s(h, :to_label) != ''
+          lines << "Posterior: #{fetch_s(h, :probability_pct)}%" if fetch_s(h, :probability_pct) != ''
+          lines.join("\n")
+        end
+
+        def format_analysis_regime_ai_update(h)
+          lines = ['Regime AI update']
+          lines << "Label: #{fetch_s(h, :regime_label)} (was #{fetch_s(h, :prev_label)})" if fetch_s(h, :regime_label) != ''
+          lines << "Prob: #{fetch_s(h, :probability_pct)}% (was #{fetch_s(h, :prev_probability_pct)}%)" if fetch_s(h, :probability_pct) != ''
+          lines << "Summary: #{fetch_s(h, :transition_summary)}" if fetch_s(h, :transition_summary) != ''
+          lines.join("\n")
+        end
+
+        def format_analysis_price_cross(h)
+          lines = ['Price rule']
+          lines << "#{fetch_s(h, :label)} (#{fetch_s(h, :rule_id)})" if fetch_s(h, :label) != '' || fetch_s(h, :rule_id) != ''
+          lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
+          lines << "Cross: #{fetch_s(h, :direction)} @ #{fetch_s(h, :price)} vs #{fetch_s(h, :level)}" if fetch_s(h, :price) != ''
+          lines.join("\n")
+        end
+
+        def format_analysis_liquidation_proximity(h)
+          lines = ['Liquidation proximity']
+          lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
+          lines << "Distance: #{fetch_s(h, :distance_pct)}%" if fetch_s(h, :distance_pct) != ''
+          lines << "Mark: #{fetch_s(h, :mark)} liq: #{fetch_s(h, :liquidation)}" if fetch_s(h, :mark) != ''
           lines.join("\n")
         end
 

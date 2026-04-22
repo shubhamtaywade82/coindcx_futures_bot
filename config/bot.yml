@@ -11,7 +11,7 @@ margin_currency_short_name: USDT
 
 # REST + WS instrument pair codes (run `bin/bot doctor` to verify).
 pairs:
-  # - B-SOL_USDT
+  - B-SOL_USDT
   - B-ETH_USDT
 
 # Approximate INR per USDT — updated by CoinDCX conversions API (fx.ttl_seconds).
@@ -154,7 +154,7 @@ runtime:
   ws_shutdown_join_seconds: 45
 
   # Paper mode: in-process PaperBroker, no exchange order/account REST calls.
-  dry_run: false
+  dry_run: true
 
   # Live only (dry_run: false): false = read-only account APIs, NO order placement.
   # Override via env: PLACE_ORDER=0 or PLACE_ORDER=false

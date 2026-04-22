@@ -95,5 +95,72 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
       )
       expect(s).to include('Open SHORT · B-SOL_USDT')
     end
+
+    it 'formats analysis_strategy_transition' do
+      s = described_class.format(
+        'analysis_strategy_transition',
+        pair: 'B-SOL_USDT',
+        from_action: 'hold',
+        from_reason: 'no_flip',
+        to_action: 'open_long',
+        to_reason: 'supertrend_bull_flip',
+        ltp: '100.5'
+      )
+      expect(s).to include('Strategy signal change')
+      expect(s).to include('B-SOL_USDT')
+      expect(s).to include('open_long')
+    end
+
+    it 'formats analysis_price_cross' do
+      s = described_class.format(
+        'analysis_price_cross',
+        pair: 'B-SOL_USDT',
+        rule_id: 'r1',
+        direction: 'below→above',
+        price: '101',
+        level: 'above 100',
+        label: 'test'
+      )
+      expect(s).to include('Price rule')
+      expect(s).to include('101')
+    end
+
+    it 'formats analysis_regime_change' do
+      s = described_class.format(
+        'analysis_regime_change',
+        pair: 'B-SOL_USDT',
+        from_state: 0,
+        to_state: 1,
+        from_label: 'low',
+        to_label: 'high'
+      )
+      expect(s).to include('HMM regime change')
+      expect(s).to include('B-SOL_USDT')
+    end
+
+    it 'formats analysis_regime_ai_update' do
+      s = described_class.format(
+        'analysis_regime_ai_update',
+        pair: 'B-SOL_USDT',
+        from_label: 'range',
+        to_label: 'trend',
+        from_probability_pct: 40.0,
+        to_probability_pct: 55.0
+      )
+      expect(s).to include('Regime AI')
+    end
+
+    it 'formats analysis_liquidation_proximity' do
+      s = described_class.format(
+        'analysis_liquidation_proximity',
+        pair: 'B-SOL_USDT',
+        side: 'long',
+        distance_pct: 2.5,
+        ltp: '100',
+        liq: '97.5'
+      )
+      expect(s).to include('Liquidation')
+      expect(s).to include('2.5')
+    end
   end
 end

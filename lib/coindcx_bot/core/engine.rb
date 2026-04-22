@@ -34,9 +34,17 @@ module CoindcxBot
                      on_market_data: nil)
         @config = config
         @logger = logger || Logger.new($stdout)
+        base_telegram_sink = CoindcxBot::Notifications::TelegramJournalSink.build_if_configured(config: config, logger: @logger)
+        alert_policy = CoindcxBot::Alerts::TelegramPolicy.new(config)
+        event_sink =
+          if base_telegram_sink && config.alerts_filter_telegram?
+            CoindcxBot::Alerts::FilteredEventSink.new(base_telegram_sink, alert_policy)
+          else
+            base_telegram_sink
+          end
         @journal = Persistence::Journal.new(
           config.journal_path,
-          event_sink: CoindcxBot::Notifications::TelegramJournalSink.build_if_configured(config: config, logger: @logger)
+          event_sink: event_sink
         )
         @bus = EventBus.new
         @tick_store = tick_store
@@ -93,6 +101,9 @@ module CoindcxBot
         @lookback = config.runtime.fetch(:candle_lookback, 120).to_i
         @ws_tick_at = {}
         @last_strategy_by_pair = {}
+        @analysis_last_sig_fingerprint = {}
+        @analysis_last_hmm_state = {}
+        @analysis_price_rule_zone = {}
         @regime_ai_mutex = Mutex.new
         @regime_ai_state = { updated_at: nil, payload: nil, error: nil }
         @regime_ai_brain = nil
@@ -334,6 +345,7 @@ module CoindcxBot
       end
 
       def run_regime_ai_sync(ctx, started_at)
+        prev_payload = @regime_ai_mutex.synchronize { @regime_ai_state[:payload] }
         brain = (@regime_ai_brain ||= Regime::AiBrain.new(config: @config, logger: @logger))
         res = brain.analyze!(ctx)
         @regime_ai_mutex.synchronize do
@@ -345,6 +357,7 @@ module CoindcxBot
             @regime_ai_state[:error] = res.error_message
           end
         end
+        maybe_log_regime_ai_transition!(prev_payload, res.payload) if res.ok && res.payload.is_a?(Hash)
       rescue StandardError => e
         @logger&.warn("[regime_ai] #{e.class}: #{e.message}")
         @regime_ai_mutex.synchronize { @regime_ai_state[:error] = e.message }
@@ -386,20 +399,58 @@ module CoindcxBot
         fp = @tui_focus_pair.to_s.strip
         ordered = [fp] + ordered.reject { |x| x == fp } if fp && ordered.include?(fp)
         pairs = ordered.first(max_pairs)
-        candles_by_pair = pairs.to_h do |p|
-          arr = Array(@candles_exec[p]).last(n)
-          rows = arr.map do |c|
-            { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
+        features_by_pair = build_regime_ai_features_by_pair(pairs)
+        omit_raw = @config.regime_ai_omit_raw_bars_when_feature_packet?
+        candles_by_pair =
+          if omit_raw && features_by_pair.any?
+            pairs.to_h { |p| [p, []] }
+          else
+            pairs.to_h do |p|
+              arr = Array(@candles_exec[p]).last(n)
+              rows = arr.map do |c|
+                { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
+              end
+              [p, rows]
+            end
           end
-          [p, rows]
-        end
         {
           pairs: pairs,
           candles_by_pair: candles_by_pair,
+          features_by_pair: features_by_pair,
           positions: @journal.open_positions,
           exec_resolution: @exec_res,
           htf_resolution: @htf_res
         }
+      end
+
+      def build_regime_ai_features_by_pair(pairs)
+        return {} unless @config.regime_ai_include_feature_packet?
+
+        min = @config.regime_ai_feature_min_candles
+        tz = @config.regime_ai_feature_tz_offset_minutes
+        smc_cfg = SmcConfluence::Configuration.from_hash(@config.strategy[:smc_confluence] || {})
+        out = {}
+        pairs.each do |p|
+          exec = Array(@candles_exec[p])
+          next if exec.size < min
+
+          rows = SmcConfluence::Candles.from_dto(exec)
+          bar = SmcConfluence::Engine.run(rows, configuration: smc_cfg).last
+          smc = CoindcxBot::TradingAi::SmcSnapshot.from_bar_result(bar)
+          out[p] = CoindcxBot::TradingAi::FeatureEnricher.call(
+            candles: rows,
+            smc: smc,
+            dtw: {},
+            history: [],
+            entry: nil,
+            stop_loss: nil,
+            targets: [],
+            symbol: p,
+            timeframe: @exec_res,
+            tz_offset_minutes: tz
+          )
+        end
+        out
       end
 
       def regime_hint_for(pair)
@@ -960,6 +1011,7 @@ module CoindcxBot
         @daily_loss_flatten_warned = false unless @risk.daily_loss_breached?
         load_candles
         @hmm_runtime&.refresh!(@candles_exec)
+        emit_regime_hmm_transitions!
         seed_tracker_from_last_candle_if_no_ltp
         refresh_tracker_from_exec_candle_when_ws_stale
         mirror_tracker_into_tick_store
@@ -972,6 +1024,7 @@ module CoindcxBot
         @last_strategy_by_pair = {}
         run_smc_setup_evaluator!
         @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
+        emit_price_rule_crossings!
         refresh_smc_setup_planner_if_due
         refresh_regime_ai_if_due
         refresh_exchange_positions_for_tui_if_due
@@ -1283,6 +1336,8 @@ module CoindcxBot
 
         @last_strategy_by_pair[pair.to_s] = { action: sig.action, reason: sig.reason.to_s }
 
+        maybe_log_analysis_strategy_transition(pair, sig, ltp)
+
         log_strategy_signal(pair, sig) if @strategy_signal_trace
 
         case sig.action
@@ -1383,6 +1438,15 @@ module CoindcxBot
             @logger&.warn(
               "[liq_risk] #{pos[:pair]} id=#{pos[:id]} " \
               "liq=#{liq.to_s('F')} mark=#{mp.to_s('F')} dist=#{distance_pct}% — monitor closely"
+            )
+            @journal.log_event(
+              'analysis_liquidation_proximity',
+              pair: pos[:pair].to_s,
+              position_id: pos[:id],
+              distance_pct: distance_pct.to_s,
+              mark: mp.to_s('F'),
+              liquidation: liq.to_s('F'),
+              dedupe_key: "pos_#{pos[:id]}"
             )
           end
         rescue StandardError => e
@@ -1515,6 +1579,134 @@ module CoindcxBot
             fetched_at: Time.now
           }
         end
+      end
+
+      def maybe_log_analysis_strategy_transition(pair, sig, ltp)
+        return unless @config.alerts_analysis_strategy_transitions?
+
+        pair_s = pair.to_s
+        fp = "#{sig.action}:#{sig.reason}"
+        prev = @analysis_last_sig_fingerprint[pair_s]
+        return if prev == fp
+        if prev.nil? && sig.action == :hold
+          @analysis_last_sig_fingerprint[pair_s] = fp
+          return
+        end
+
+        prev_action, prev_reason = prev.to_s.split(':', 2)
+        @journal.log_event(
+          'analysis_strategy_transition',
+          pair: pair_s,
+          from_action: prev_action,
+          from_reason: prev_reason.to_s,
+          to_action: sig.action.to_s,
+          to_reason: sig.reason.to_s,
+          ltp: ltp&.to_s,
+          dedupe_key: fp
+        )
+        @analysis_last_sig_fingerprint[pair_s] = fp
+      end
+
+      def emit_regime_hmm_transitions!
+        return unless @hmm_runtime && @config.alerts_analysis_regime_hmm_transitions?
+
+        @config.pairs.each do |pair|
+          st = @hmm_runtime.state_for(pair)
+          next unless st
+
+          cur = "#{st.state_id}:#{st.label}"
+          prev = @analysis_last_hmm_state[pair]
+          if prev.nil?
+            @analysis_last_hmm_state[pair] = cur
+            next
+          end
+          next if prev == cur
+
+          @analysis_last_hmm_state[pair] = cur
+          prev_sid, prev_lbl = prev.split(':', 2)
+          @journal.log_event(
+            'analysis_regime_change',
+            pair: pair,
+            from_state_id: prev_sid.to_s,
+            from_label: prev_lbl.to_s,
+            to_state_id: st.state_id.to_s,
+            to_label: st.label.to_s,
+            probability_pct: (st.probability * 100).round(2).to_s,
+            dedupe_key: "#{pair}|#{cur}"
+          )
+        end
+      end
+
+      def emit_price_rule_crossings!
+        rules = @config.alerts_price_rules
+        return if rules.empty?
+
+        @config.pairs.each do |pair|
+          ltp = @tracker.ltp(pair)
+          next unless ltp
+
+          events = CoindcxBot::Alerts::PriceRuleEvaluator.evaluate(
+            rules: rules,
+            pair: pair,
+            ltp: ltp,
+            last_side: @analysis_price_rule_zone
+          )
+          events.each do |ev|
+            @journal.log_event(
+              'analysis_price_cross',
+              pair: ev[:pair],
+              rule_id: ev[:rule_id],
+              direction: ev[:direction],
+              price: ev[:price],
+              level: ev[:level],
+              label: ev[:label],
+              from_zone: ev[:from_zone],
+              to_zone: ev[:to_zone],
+              dedupe_key: "#{ev[:pair]}|#{ev[:rule_id]}|#{ev[:to_zone]}"
+            )
+          end
+        end
+      end
+
+      def maybe_log_regime_ai_transition!(prev_payload, new_payload)
+        return unless @config.alerts_analysis_regime_ai_updates?
+        return unless new_payload.is_a?(Hash)
+
+        new_h = new_payload.transform_keys(&:to_sym)
+        prev_h =
+          if prev_payload.is_a?(Hash)
+            prev_payload.transform_keys(&:to_sym)
+          else
+            {}
+          end
+
+        return if prev_h.empty?
+
+        new_l = (new_h[:regime_label]).to_s
+        old_l = (prev_h[:regime_label]).to_s
+
+        new_p = regime_ai_probability_float(new_h[:probability_pct])
+        old_p = regime_ai_probability_float(prev_h[:probability_pct])
+        delta = (new_p - old_p).abs
+        label_changed = new_l != old_l && !(new_l.empty? && old_l.empty?)
+        return unless label_changed || delta >= @config.alerts_regime_ai_min_probability_delta
+
+        trans = (new_h[:transition_summary]).to_s
+        @journal.log_event(
+          'analysis_regime_ai_update',
+          regime_label: new_l,
+          prev_label: old_l,
+          probability_pct: new_p.to_s,
+          prev_probability_pct: old_p.to_s,
+          transition_summary: trans,
+          dedupe_key: 'regime_ai_global'
+        )
+      end
+
+      def regime_ai_probability_float(raw)
+        Float(raw || 0)
+      rescue ArgumentError, TypeError
+        0.0
       end
     end
   end

@@ -39,7 +39,15 @@ module CoindcxBot
               rec = @store.record_by_id(setup_id)
               break unless rec
 
-              cont = run_step(rec, pair: pair, ltp: ltp, bar: bar, stale: stale, bars_json: bars_json)
+              cont = run_step(
+                rec,
+                pair: pair,
+                ltp: ltp,
+                bar: bar,
+                stale: stale,
+                bars_json: bars_json,
+                candles_exec: candles_exec
+              )
               break unless cont
             end
           end
@@ -48,14 +56,14 @@ module CoindcxBot
 
       private
 
-      def run_step(rec, pair:, ltp:, bar:, stale:, bars_json:)
+      def run_step(rec, pair:, ltp:, bar:, stale:, bars_json:, candles_exec:)
         case rec.state
         when States::PENDING_SWEEP
           step_pending_sweep(rec, ltp)
         when States::SWEEP_SEEN
-          step_sweep_seen(rec, bar, bars_json)
+          step_sweep_seen(rec, bar, bars_json, pair: pair, candles_exec: candles_exec)
         when States::AWAITING_CONFIRMATIONS
-          step_awaiting_confirmations(rec, bar, bars_json)
+          step_awaiting_confirmations(rec, bar, bars_json, pair: pair, candles_exec: candles_exec)
         when States::ARMED_ENTRY
           step_armed_entry(rec, pair, ltp, stale)
           false
@@ -86,9 +94,9 @@ module CoindcxBot
         true
       end
 
-      def step_sweep_seen(rec, bar, bars_json)
+      def step_sweep_seen(rec, bar, bars_json, pair:, candles_exec:)
         if rec.trade_setup.confirmations.empty?
-          try_arm_entry(rec, bar, bars_json)
+          try_arm_entry(rec, bar, bars_json, pair: pair, candles_exec: candles_exec)
         else
           rec.state = States::AWAITING_CONFIRMATIONS
           @store.persist_record!(rec)
@@ -96,18 +104,18 @@ module CoindcxBot
         rec.state == States::ARMED_ENTRY
       end
 
-      def step_awaiting_confirmations(rec, bar, bars_json)
+      def step_awaiting_confirmations(rec, bar, bars_json, pair:, candles_exec:)
         return false unless bar
 
         dir = rec.trade_setup.direction
         ok = rec.trade_setup.confirmations.all? { |c| confirmation_satisfied?(bar, c, dir) }
         return false unless ok
 
-        try_arm_entry(rec, bar, bars_json)
+        try_arm_entry(rec, bar, bars_json, pair: pair, candles_exec: candles_exec)
         rec.state == States::ARMED_ENTRY
       end
 
-      def try_arm_entry(rec, bar, bars_json)
+      def try_arm_entry(rec, bar, bars_json, pair:, candles_exec:)
         need_gate = rec.trade_setup.gatekeeper && @config.smc_setup_gatekeeper_enabled?
         if need_gate
           now = Time.now.to_f
@@ -123,7 +131,8 @@ module CoindcxBot
           end
 
           gk = (@gatekeeper ||= GatekeeperBrain.new(config: @config, logger: @logger))
-          approved = gk.approve?(rec: rec, bar: bar, bars_json: bars_json)
+          ohlcv = gatekeeper_ohlcv_features(pair: pair, candles_exec: candles_exec, bar: bar, trade_setup: rec.trade_setup)
+          approved = gk.approve?(rec: rec, bar: bar, bars_json: bars_json, ohlcv_features: ohlcv)
           rec.eval_state = rec.eval_state.merge(last_gate_ts: now, gate_ok: approved)
           @store.persist_record!(rec)
           return unless approved
@@ -209,6 +218,30 @@ module CoindcxBot
         rec.state = States::COMPLETED
         @store.persist_record!(rec)
         @store.reload!
+      end
+
+      def gatekeeper_ohlcv_features(pair:, candles_exec:, bar:, trade_setup:)
+        return nil unless @config.smc_setup_gatekeeper_include_feature_packet?
+
+        min = @config.smc_setup_gatekeeper_feature_min_candles
+        exec = Array(candles_exec)
+        return nil if exec.size < min
+
+        rows = SmcConfluence::Candles.from_dto(exec)
+        smc = CoindcxBot::TradingAi::SmcSnapshot.from_bar_result(bar)
+        entry_mid = (trade_setup.entry_min + trade_setup.entry_max) / 2
+        CoindcxBot::TradingAi::FeatureEnricher.call(
+          candles: rows,
+          smc: smc,
+          dtw: {},
+          history: [],
+          entry: entry_mid.to_f,
+          stop_loss: trade_setup.sl.to_f,
+          targets: trade_setup.targets.map(&:to_f),
+          symbol: pair,
+          timeframe: nil,
+          tz_offset_minutes: @config.smc_setup_gatekeeper_feature_tz_offset_minutes
+        )
       end
 
       def compact_bars_json(candles_exec, n)

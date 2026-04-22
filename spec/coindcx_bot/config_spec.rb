@@ -23,6 +23,53 @@ RSpec.describe CoindcxBot::Config do
     expect(on.regime_ai_enabled?).to be(true)
   end
 
+  it 'reads regime.ai.include_feature_packet only when regime ai is enabled' do
+    off = described_class.new(
+      minimal_bot_config(regime: { enabled: true, ai: { enabled: false, include_feature_packet: true } })
+    )
+    expect(off.regime_ai_include_feature_packet?).to be(false)
+    on = described_class.new(
+      minimal_bot_config(regime: { enabled: true, ai: { enabled: true, include_feature_packet: true } })
+    )
+    expect(on.regime_ai_include_feature_packet?).to be(true)
+  end
+
+  it 'defaults regime ai feature_min_candles and omits raw bars only when packet is enabled' do
+    cfg = described_class.new(
+      minimal_bot_config(regime: { enabled: true, ai: { enabled: true, include_feature_packet: true } })
+    )
+    expect(cfg.regime_ai_feature_min_candles).to eq(30)
+    expect(cfg.regime_ai_omit_raw_bars_when_feature_packet?).to be(false)
+    cfg2 = described_class.new(
+      minimal_bot_config(
+        regime: {
+          enabled: true,
+          ai: {
+            enabled: true,
+            include_feature_packet: true,
+            omit_raw_bars_when_feature_packet: true
+          }
+        }
+      )
+    )
+    expect(cfg2.regime_ai_omit_raw_bars_when_feature_packet?).to be(true)
+  end
+
+  it 'reads smc_setup gatekeeper_include_feature_packet only when gatekeeper is enabled' do
+    off = described_class.new(
+      minimal_bot_config(
+        smc_setup: { enabled: true, gatekeeper_enabled: false, gatekeeper_include_feature_packet: true }
+      )
+    )
+    expect(off.smc_setup_gatekeeper_include_feature_packet?).to be(false)
+    on = described_class.new(
+      minimal_bot_config(
+        smc_setup: { enabled: true, gatekeeper_enabled: true, gatekeeper_include_feature_packet: true }
+      )
+    )
+    expect(on.smc_setup_gatekeeper_include_feature_packet?).to be(true)
+  end
+
   it 'reads regime.enabled as regime_enabled?' do
     on = described_class.new(minimal_bot_config(regime: { enabled: true }))
     expect(on.regime_enabled?).to be(true)
@@ -127,6 +174,15 @@ RSpec.describe CoindcxBot::Config do
       minimal_bot_config(runtime: { dry_run: true, journal_path: '/tmp/x.sqlite3', place_orders: false })
     )
     expect(cfg.place_orders?).to be(true)
+  end
+
+  it 'defaults alerts_filter_telegram? to false' do
+    expect(described_class.new(minimal_bot_config).alerts_filter_telegram?).to be(false)
+  end
+
+  it 'reads alerts.filter_telegram from YAML' do
+    cfg = described_class.new(minimal_bot_config(alerts: { filter_telegram: true }))
+    expect(cfg.alerts_filter_telegram?).to be(true)
   end
 
   it 'defaults exit_on_hard_stop? to true' do

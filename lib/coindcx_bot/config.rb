@@ -259,6 +259,27 @@ module CoindcxBot
       regime_ai_section.fetch(:mode, 'tui_narrative').to_s.strip
     end
 
+    def regime_ai_include_feature_packet?
+      return false unless regime_ai_enabled?
+
+      truthy?(regime_ai_section.fetch(:include_feature_packet, false))
+    end
+
+    def regime_ai_feature_min_candles
+      n = regime_ai_section.fetch(:feature_min_candles, 30).to_i
+      [[n, 20].max, 200].min
+    end
+
+    def regime_ai_feature_tz_offset_minutes
+      regime_ai_section.fetch(:feature_tz_offset_minutes, 0).to_i
+    end
+
+    def regime_ai_omit_raw_bars_when_feature_packet?
+      return false unless regime_ai_include_feature_packet?
+
+      truthy?(regime_ai_section.fetch(:omit_raw_bars_when_feature_packet, false))
+    end
+
     def smc_setup_section
       raw.fetch(:smc_setup, {})
     end
@@ -341,6 +362,21 @@ module CoindcxBot
 
     def smc_setup_gatekeeper_min_interval_seconds
       smc_setup_section.fetch(:gatekeeper_min_interval_seconds, 45).to_f
+    end
+
+    def smc_setup_gatekeeper_include_feature_packet?
+      return false unless smc_setup_gatekeeper_enabled?
+
+      truthy?(smc_setup_section.fetch(:gatekeeper_include_feature_packet, false))
+    end
+
+    def smc_setup_gatekeeper_feature_min_candles
+      n = smc_setup_section.fetch(:gatekeeper_feature_min_candles, 30).to_i
+      [[n, 20].max, 200].min
+    end
+
+    def smc_setup_gatekeeper_feature_tz_offset_minutes
+      smc_setup_section.fetch(:gatekeeper_feature_tz_offset_minutes, 0).to_i
     end
 
     def regime_hmm_section
@@ -637,6 +673,104 @@ module CoindcxBot
       return %w[open_failed smc_setup_invalidated] if raw.nil?
 
       raw.to_s.split(',').map(&:strip).reject(&:empty?)
+    end
+
+    # --- Multi-level analysis alerts (journal + optional Telegram filter) ---
+
+    def alerts_section
+      s = raw[:alerts]
+      s.is_a?(Hash) ? s.transform_keys(&:to_sym) : {}
+    end
+
+    def alerts_analysis_section
+      s = alerts_section[:analysis]
+      s.is_a?(Hash) ? s.transform_keys(&:to_sym) : {}
+    end
+
+    def alerts_filter_telegram?
+      truthy?(alerts_section[:filter_telegram])
+    end
+
+    def alerts_analysis_strategy_transitions?
+      truthy?(alerts_analysis_section[:strategy_transitions])
+    end
+
+    def alerts_analysis_regime_hmm_transitions?
+      truthy?(alerts_analysis_section[:regime_hmm_transitions])
+    end
+
+    def alerts_analysis_regime_ai_updates?
+      truthy?(alerts_analysis_section[:regime_ai_updates])
+    end
+
+    def alerts_regime_ai_min_probability_delta
+      v = alerts_analysis_section[:regime_ai_min_probability_delta]
+      return 10.0 if v.nil? || v.to_s.strip.empty?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      10.0
+    end
+
+    def alerts_price_rules
+      Array(alerts_section[:price_rules]).select { |r| r.is_a?(Hash) }
+    end
+
+    def alerts_telegram_config
+      h = alerts_section[:telegram] || alerts_section['telegram']
+      h.is_a?(Hash) ? h.transform_keys(&:to_sym) : {}
+    end
+
+    def alerts_telegram_allow_types
+      v = alerts_telegram_config[:allow_types]
+      return nil if v.nil?
+
+      Array(v).map(&:to_s).reject(&:empty?)
+    end
+
+    def alerts_telegram_critical_types
+      v = alerts_telegram_config[:critical_types]
+      return default_alerts_critical_types if v.nil?
+
+      Array(v).map(&:to_s).reject(&:empty?)
+    end
+
+    def alerts_telegram_default_throttle_seconds
+      v = alerts_telegram_config[:default_throttle_seconds]
+      return 0.0 if v.nil? || v.to_s.strip.empty?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      0.0
+    end
+
+    def alerts_telegram_throttle_by_type
+      raw = alerts_telegram_config[:throttle_by_type]
+      return {} unless raw.is_a?(Hash)
+
+      raw.transform_keys(&:to_s).each_with_object({}) do |(k, v), acc|
+        acc[k] = Float(v.to_s)
+      rescue ArgumentError, TypeError
+        acc[k] = 0.0
+      end
+    end
+
+    def alerts_telegram_critical_throttle_seconds
+      v = alerts_telegram_config[:critical_throttle_seconds]
+      return 30.0 if v.nil? || v.to_s.strip.empty?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      30.0
+    end
+
+    def default_alerts_critical_types
+      %w[
+        open_failed
+        signal_close
+        analysis_liquidation_proximity
+        flatten
+      ]
     end
 
     class ConfigurationError < StandardError; end
