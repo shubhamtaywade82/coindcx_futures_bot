@@ -8,12 +8,16 @@ require 'monitor'
 module CoindcxBot
   module Persistence
     class Journal
+      SQLITE_BUSY_TIMEOUT_MS = 10_000
+
       def initialize(path, event_sink: nil)
         @path = path
         @event_sink = event_sink
         FileUtils.mkdir_p(File.dirname(path))
         @db = SQLite3::Database.new(path)
         @db.results_as_hash = true
+        @db.busy_timeout = SQLITE_BUSY_TIMEOUT_MS
+        @db.execute('PRAGMA journal_mode=WAL;')
         @db_mutex = Monitor.new
         migrate
       end
@@ -101,7 +105,7 @@ module CoindcxBot
       end
 
       def insert_position(pair:, side:, entry_price:, quantity:, stop_price:, trail_price: nil,
-                          initial_stop_price: nil, smc_setup_id: nil, entry_lane: nil)
+                          initial_stop_price: nil, smc_setup_id: nil, entry_lane: nil, peak_ltp: nil)
         db_sync do
           now = Time.now.to_i
           initial = (initial_stop_price || stop_price)&.to_s('F')
@@ -109,13 +113,14 @@ module CoindcxBot
           sid = nil if sid&.strip&.empty?
           lane = entry_lane&.to_s&.strip
           lane = nil if lane&.empty?
+          peak = (peak_ltp || entry_price).to_s('F')
           @db.execute(
             <<~SQL,
-              INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id, entry_lane)
-              VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?)
+              INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id, entry_lane, peak_ltp)
+              VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?)
             SQL
             [pair, side.to_s, entry_price.to_s('F'), quantity.to_s('F'),
-             stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid, lane]
+             stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid, lane, peak]
           )
           @db.last_insert_row_id
         end
@@ -167,10 +172,57 @@ module CoindcxBot
         end
       end
 
+      # Monotonic favorable extreme since open (high for longs, low for shorts) for HWM price trail exits.
+      def bump_peak_ltp(id, ltp)
+        return nil if id.nil?
+
+        db_sync do
+          mark = BigDecimal(ltp.to_s)
+          row = @db.get_first_row(
+            'SELECT side, entry_price, peak_ltp FROM positions WHERE id = ? AND state = ?',
+            [id, 'open']
+          )
+          return nil unless row
+
+          side = row['side'].to_s.downcase
+          entry = BigDecimal(row['entry_price'].to_s)
+          raw_peak = row['peak_ltp']
+          cur_peak =
+            if blank?(raw_peak)
+              entry
+            else
+              BigDecimal(raw_peak.to_s)
+            end
+
+          new_peak =
+            case side
+            when 'long', 'buy'
+              [cur_peak, mark].max
+            when 'short', 'sell'
+              [cur_peak, mark].min
+            else
+              cur_peak
+            end
+
+          return new_peak if new_peak == cur_peak && !blank?(raw_peak)
+
+          @db.execute(
+            'UPDATE positions SET peak_ltp = ? WHERE id = ? AND state = ?',
+            [new_peak.to_s('F'), id, 'open']
+          )
+          new_peak
+        end
+      end
+
       def close_position(id)
         return if id.nil?
 
-        db_sync { @db.execute("UPDATE positions SET state = 'closed' WHERE id = ?", id) }
+        db_sync do
+          @db.execute(
+            "UPDATE positions SET state = 'closed', closed_at = ? WHERE id = ?",
+            [Time.now.to_i, id]
+          )
+        end
       end
 
       def bar_cursor(pair, resolution)
@@ -200,6 +252,109 @@ module CoindcxBot
 
       def recent_events(limit = 50)
         db_sync { @db.execute('SELECT ts, type, payload FROM event_log ORDER BY id DESC LIMIT ?', limit) }
+      end
+
+      # ── Order lifecycle ──────────────────────────────────────────────────────
+      # Registers a new order before it is sent to the exchange.
+      def orders_insert(client_order_id:, pair:, side:, quantity:, order_type: 'market_entry', position_id: nil)
+        db_sync do
+          now = Time.now.to_i
+          @db.execute(
+            <<~SQL,
+              INSERT OR IGNORE INTO orders(client_order_id, pair, side, quantity, order_type, state, position_id, created_at, updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?)
+            SQL
+            [client_order_id.to_s, pair.to_s, side.to_s, quantity.to_s, order_type.to_s, 'pending', position_id, now, now]
+          )
+        end
+      end
+
+      def orders_update_submitted(client_order_id:, exchange_order_id:)
+        db_sync do
+          @db.execute(
+            'UPDATE orders SET state = ?, exchange_order_id = ?, updated_at = ? WHERE client_order_id = ?',
+            ['submitted', exchange_order_id.to_s, Time.now.to_i, client_order_id.to_s]
+          )
+        end
+      end
+
+      # Updates an order with actual fill details from the WS order-update feed.
+      def orders_update_fill(client_order_id: nil, exchange_order_id: nil,
+                             fill_price:, filled_quantity:, fees_usdt:, state: 'filled')
+        db_sync do
+          now = Time.now.to_i
+          if client_order_id
+            @db.execute(
+              'UPDATE orders SET state=?,fill_price=?,filled_quantity=?,fees_usdt=?,updated_at=? WHERE client_order_id=?',
+              [state.to_s, fill_price&.to_s, filled_quantity&.to_s, fees_usdt&.to_s, now, client_order_id.to_s]
+            )
+          elsif exchange_order_id
+            @db.execute(
+              'UPDATE orders SET state=?,fill_price=?,filled_quantity=?,fees_usdt=?,updated_at=? WHERE exchange_order_id=?',
+              [state.to_s, fill_price&.to_s, filled_quantity&.to_s, fees_usdt&.to_s, now, exchange_order_id.to_s]
+            )
+          end
+        end
+      end
+
+      def orders_update_state(client_order_id:, state:)
+        db_sync do
+          @db.execute(
+            'UPDATE orders SET state = ?, updated_at = ? WHERE client_order_id = ?',
+            [state.to_s, Time.now.to_i, client_order_id.to_s]
+          )
+        end
+      end
+
+      # Associates a journal position row with the order that opened it.
+      def orders_link_position(client_order_id:, position_id:)
+        db_sync do
+          @db.execute(
+            'UPDATE orders SET position_id = ?, updated_at = ? WHERE client_order_id = ?',
+            [position_id.to_i, Time.now.to_i, client_order_id.to_s]
+          )
+        end
+      end
+
+      def orders_find_by_client_id(client_order_id)
+        row = db_sync { @db.get_first_row('SELECT * FROM orders WHERE client_order_id = ?', client_order_id.to_s) }
+        row ? symbolize_row(row) : nil
+      end
+
+      def orders_find_by_exchange_id(exchange_order_id)
+        row = db_sync { @db.get_first_row('SELECT * FROM orders WHERE exchange_order_id = ?', exchange_order_id.to_s) }
+        row ? symbolize_row(row) : nil
+      end
+
+      # ── Funding rate ─────────────────────────────────────────────────────────
+      # Accumulate estimated funding payments against a live position.
+      def apply_funding_to_position(id:, funding_usdt:)
+        db_sync do
+          now = Time.now.to_i
+          row = @db.get_first_row(
+            'SELECT funding_paid_usdt FROM positions WHERE id = ? AND state = ?', [id, 'open']
+          )
+          return unless row
+
+          prev = BigDecimal((row['funding_paid_usdt'] || '0').to_s)
+          new_total = prev + BigDecimal(funding_usdt.to_s)
+          @db.execute(
+            'UPDATE positions SET funding_paid_usdt = ?, last_funded_at = ? WHERE id = ?',
+            [new_total.to_s('F'), now, id]
+          )
+        end
+      end
+
+      # Most-recent realized PnL events (paper OR live) ordered newest-first.
+      # Used by the circuit breaker so it works identically in both execution modes.
+      def recent_realized_events(limit = 50)
+        db_sync do
+          @db.execute(
+            "SELECT ts, type, payload FROM event_log WHERE type IN ('paper_realized','live_realized') " \
+            'ORDER BY id DESC LIMIT ?',
+            limit
+          )
+        end
       end
 
       # Sum of `pnl_usdt` from coordinator `paper_realized` events (USDT). Used when the broker
@@ -428,6 +583,7 @@ module CoindcxBot
         SQL
         migrate_positions_columns
         migrate_smc_trade_setups_table
+        migrate_orders_table
       end
 
       def migrate_positions_columns
@@ -444,9 +600,49 @@ module CoindcxBot
           @db.execute('ALTER TABLE positions ADD COLUMN smc_setup_id TEXT')
           cols = @db.table_info('positions').map { |r| r['name'] }
         end
-        return if cols.include?('entry_lane')
+        unless cols.include?('entry_lane')
+          @db.execute('ALTER TABLE positions ADD COLUMN entry_lane TEXT')
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        unless cols.include?('closed_at')
+          @db.execute('ALTER TABLE positions ADD COLUMN closed_at INTEGER')
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        unless cols.include?('funding_paid_usdt')
+          @db.execute("ALTER TABLE positions ADD COLUMN funding_paid_usdt TEXT DEFAULT '0'")
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        unless cols.include?('peak_ltp')
+          @db.execute('ALTER TABLE positions ADD COLUMN peak_ltp TEXT')
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        return if cols.include?('last_funded_at')
 
-        @db.execute('ALTER TABLE positions ADD COLUMN entry_lane TEXT')
+        @db.execute('ALTER TABLE positions ADD COLUMN last_funded_at INTEGER')
+      end
+
+      def migrate_orders_table
+        @db.execute_batch(<<~SQL)
+          CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_order_id TEXT NOT NULL UNIQUE,
+            exchange_order_id TEXT,
+            pair TEXT NOT NULL,
+            side TEXT NOT NULL,
+            quantity TEXT NOT NULL,
+            fill_price TEXT,
+            filled_quantity TEXT,
+            fees_usdt TEXT,
+            order_type TEXT NOT NULL DEFAULT 'market_entry',
+            state TEXT NOT NULL DEFAULT 'pending',
+            position_id INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_orders_client_id ON orders(client_order_id);
+          CREATE INDEX IF NOT EXISTS idx_orders_exchange_id ON orders(exchange_order_id);
+          CREATE INDEX IF NOT EXISTS idx_orders_position_id ON orders(position_id);
+        SQL
       end
 
       def migrate_smc_trade_setups_table

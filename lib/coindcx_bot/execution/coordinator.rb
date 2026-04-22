@@ -6,18 +6,54 @@ require 'securerandom'
 module CoindcxBot
   module Execution
     class Coordinator
-      def initialize(broker:, journal:, config:, exposure_guard:, logger:, fx:)
-        @broker = broker
-        @journal = journal
-        @config = config
-        @exposure = exposure_guard
-        @logger = logger
-        @fx = fx
-        @dry = config.dry_run?
+      def initialize(broker:, journal:, config:, exposure_guard:, logger:, fx:, order_tracker: nil)
+        @broker        = broker
+        @journal       = journal
+        @config        = config
+        @exposure      = exposure_guard
+        @logger        = logger
+        @fx            = fx
+        @dry           = config.dry_run?
+        @order_tracker = order_tracker
       end
 
       def flatten_all(pairs, ltps: {})
         pairs.each { |pair| flatten_pair(pair, ltp: ltps[pair] || ltps[pair.to_s] || ltps[pair.to_sym]) }
+      end
+
+      # Live-mode startup reconciliation: close journal positions that no longer exist on the exchange.
+      # Skipped unless `runtime.reconcile_on_startup: true` in bot.yml.
+      def reconcile_live_state!
+        return if @broker.paper?
+        return unless @config.reconcile_on_startup?
+
+        journal_positions = @journal.open_positions
+        return if journal_positions.empty?
+
+        unless @broker.respond_to?(:list_open_pairs)
+          @logger&.warn('[reconcile:live] broker does not support list_open_pairs — skipping')
+          return
+        end
+
+        exchange_pairs = @broker.list_open_pairs
+        journal_positions.each do |j_pos|
+          pair = j_pos[:pair].to_s
+          next if exchange_pairs.include?(pair)
+
+          @logger&.warn(
+            "[reconcile:live] #{pair} open in journal (id=#{j_pos[:id]}) but absent on exchange — closing orphan"
+          )
+          @journal.close_position(j_pos[:id])
+          record_meta_first_win_entry_cooldown(pair)
+          @journal.log_event(
+            'reconcile_orphan_closed',
+            pair: pair,
+            position_id: j_pos[:id],
+            reason: 'not_on_exchange_at_startup'
+          )
+        end
+      rescue StandardError => e
+        @logger&.warn("[reconcile:live] failed: #{e.message}")
       end
 
       def reconcile_paper_state!
@@ -155,10 +191,13 @@ module CoindcxBot
 
           if signal.stop_price && @broker.respond_to?(:place_bracket_order)
             tp_price = compute_take_profit(signal.side, entry_price, signal.stop_price)
+            tp_for_book = @config.paper_place_working_take_profit? ? tp_price : nil
             result = @broker.place_bracket_order(
               order_params,
               sl_price: signal.stop_price,
-              tp_price: tp_price
+              tp_price: tp_for_book,
+              place_sl: @config.paper_place_working_stop?,
+              place_tp: @config.paper_place_working_take_profit?
             )
             ok = result.is_a?(Hash) && result[:ok]
           else
@@ -211,8 +250,24 @@ module CoindcxBot
           return :failed
         end
 
-        result = @broker.place_order(rest_futures_open_order(signal, quantity, leverage))
-        if result == :failed
+        order = rest_futures_open_order(signal, quantity, leverage)
+        coid  = order[:client_order_id]
+
+        # Register order as pending BEFORE sending to exchange (idempotency anchor).
+        # If the bot crashes between place_order and journal_open, this row will be
+        # in `pending`/`submitted` state with no linked position — visible on restart.
+        @order_tracker&.begin_entry(
+          client_order_id: coid,
+          pair:            signal.pair,
+          side:            signal.side.to_s,
+          quantity:        quantity.to_s('F')
+        )
+
+        result = @broker.place_order(order)
+        ok     = result.is_a?(Hash) ? result[:ok] : (result == :ok)
+
+        unless ok
+          @order_tracker&.on_rejected(client_order_id: coid)
           @journal.log_event(
             'open_failed',
             pair: signal.pair,
@@ -221,21 +276,31 @@ module CoindcxBot
             leverage: leverage,
             detail: 'broker_rejected'
           )
-          @logger&.error("Live order failed for #{signal.pair}")
+          @logger&.error("[live] order rejected for #{signal.pair}")
           return :failed
         end
 
+        exchange_order_id = result.is_a?(Hash) ? result[:order_id] : nil
+        @order_tracker&.on_submitted(client_order_id: coid, exchange_order_id: exchange_order_id)
+
+        journal_id = nil
         @journal.within_transaction do
-          journal_open(signal, quantity, entry_price)
+          journal_id = journal_open(signal, quantity, entry_price)
           @journal.log_event(
             'signal_open',
             action: signal.action.to_s,
             pair: signal.pair,
             reason: signal.reason.to_s,
-            leverage: leverage
+            leverage: leverage,
+            client_order_id: coid,
+            exchange_order_id: exchange_order_id.to_s
           )
         end
-        @logger&.info("Opened #{signal.side} #{signal.pair} qty=#{quantity}")
+
+        # Link order → position so WS fills can back-fill entry_price.
+        @order_tracker&.link_position(client_order_id: coid, position_id: journal_id) if journal_id
+
+        @logger&.info("[live] opened #{signal.side} #{signal.pair} qty=#{quantity} coid=#{coid}")
         :ok
       end
 
@@ -362,21 +427,21 @@ module CoindcxBot
           return :failed
         end
 
+        row = @journal.open_positions.find { |r| r[:id] == close_id }
         result = @broker.close_position(
           pair: signal.pair.to_s,
           side: nil,
           quantity: 0,
           ltp: exit_price || 0
         )
-        row = @journal.open_positions.find { |r| r[:id] == close_id }
         pnl_path = paper_broker_close_result?(result) && result[:ok]
         if pnl_path
-          book_inr_from_paper_close(
-            result,
-            row: row,
-            pair: signal.pair.to_s,
-            source: :strategy_close
-          )
+          book_inr_from_paper_close(result, row: row, pair: signal.pair.to_s, source: :strategy_close)
+        elsif row && exit_price
+          # Live market exit: no fill confirmation from broker, estimate PnL from LTP at signal time.
+          book_inr_from_live_close(row: row, exit_price: exit_price, pair: signal.pair.to_s,
+                                   reason: signal.reason.to_s)
+          pnl_path = true
         end
         @journal.within_transaction do
           @journal.close_position(close_id)
@@ -503,6 +568,45 @@ module CoindcxBot
         BigDecimal(ltp.to_s)
       rescue ArgumentError, TypeError
         nil
+      end
+
+      # Estimated live PnL: uses PnlCalculator with round-trip fees and accumulated funding.
+      # Fill price is LTP at signal time (actual WS fill may differ slightly).
+      # Marked `estimated: true` in the event so it can be audited. Still feeds daily_pnl_inr so
+      # the daily-loss circuit breaker fires correctly in live mode.
+      def book_inr_from_live_close(row:, exit_price:, pair:, reason:)
+        entry        = BigDecimal(row[:entry_price].to_s)
+        qty          = BigDecimal(row[:quantity].to_s)
+        ep           = BigDecimal(exit_price.to_s)
+        side         = row[:side].to_s.to_sym
+        funding_paid = BigDecimal((row[:funding_paid_usdt] || '0').to_s)
+        fee_bps      = BigDecimal(@config.taker_fee_bps.to_s)
+
+        pnl_usdt = Risk::PnlCalculator.realized_usdt(
+          entry_price:       entry,
+          exit_price:        ep,
+          size:              qty,
+          side:              side,
+          funding_paid_usdt: funding_paid,
+          entry_fee_bps:     fee_bps,
+          exit_fee_bps:      fee_bps
+        )
+        inr = pnl_usdt * @fx.inr_per_usdt
+
+        @journal.add_daily_pnl_inr(inr)
+        @journal.log_event(
+          'live_realized',
+          pair:        pair,
+          pnl_usdt:    pnl_usdt.to_s('F'),
+          pnl_inr:     inr.to_s('F'),
+          exit_price:  ep.to_s('F'),
+          entry_price: entry.to_s('F'),
+          reason:      reason,
+          estimated:   true
+        )
+        @logger&.info("[live] est. PnL ~₹#{inr.round(2)} (#{pnl_usdt.round(4)} USDT) #{pair}")
+      rescue StandardError => e
+        @logger&.warn("[live] PnL booking failed #{pair}: #{e.message}")
       end
 
       def book_inr_from_paper_close(result, row:, pair:, source:)

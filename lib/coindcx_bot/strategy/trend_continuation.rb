@@ -190,7 +190,7 @@ module CoindcxBot
         end
 
         if side == :long
-          return close_signal(pair, side, id, 'stop') if price <= stop
+          return close_signal(pair, side, id, 'stop') if hard_stop_exits_enabled? && price <= stop
 
           hwm = HwmGiveback.check(pair: pair, position: position, ltp: price, strategy_cfg: @cfg)
           return hwm if hwm
@@ -228,7 +228,7 @@ module CoindcxBot
             )
           end
         else
-          return close_signal(pair, side, id, 'stop') if price >= stop
+          return close_signal(pair, side, id, 'stop') if hard_stop_exits_enabled? && price >= stop
 
           hwm = HwmGiveback.check(pair: pair, position: position, ltp: price, strategy_cfg: @cfg)
           return hwm if hwm
@@ -268,6 +268,11 @@ module CoindcxBot
         end
 
         hold(pair, 'position_ok')
+      end
+
+      def hard_stop_exits_enabled?
+        v = @cfg.fetch(:exit_on_hard_stop, true)
+        !(v == false || v.to_s.strip.casecmp('false').zero? || v.to_s.strip == '0')
       end
 
       def close_signal(pair, side, id, reason)

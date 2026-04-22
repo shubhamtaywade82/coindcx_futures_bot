@@ -125,9 +125,10 @@ module CoindcxBot
         :ok
       end
 
-      # Places an entry order and automatically creates SL (and optional TP) working orders as an OCO group.
+      # Places an entry order and optionally creates SL / TP working orders as an OCO group.
+      # When +place_sl+ / +place_tp+ are false, the broker skips those legs (strategy or liquidation exits only).
       # Returns { ok: true, entry_order_id:, group_id:, fill: } on success.
-      def place_bracket_order(order, sl_price:, tp_price: nil)
+      def place_bracket_order(order, sl_price:, tp_price: nil, place_sl: true, place_tp: true)
         pair = order[:pair].to_s
         side = order[:side].to_s
         quantity = BigDecimal(order[:quantity].to_s)
@@ -161,21 +162,25 @@ module CoindcxBot
         # 2. Create OCO group
         group_id = @store.insert_order_group(pair: pair, entry_order_id: entry_order_id)
 
-        # 3. Place SL working order (opposite side)
         exit_side = opposite_side(side)
-        sl_order_id = place_working_stop(
-          pair: pair,
-          side: exit_side,
-          quantity: quantity,
-          stop_price: BigDecimal(sl_price.to_s),
-          group_id: group_id,
-          group_role: 'stop_loss'
-        )
-        @store.update_order_group_sl(group_id, sl_order_id)
 
-        # 4. Place TP working order if tp_price provided
+        # 3. Optional SL working order
+        sl_order_id = nil
+        if place_sl && sl_price
+          sl_order_id = place_working_stop(
+            pair: pair,
+            side: exit_side,
+            quantity: quantity,
+            stop_price: BigDecimal(sl_price.to_s),
+            group_id: group_id,
+            group_role: 'stop_loss'
+          )
+          @store.update_order_group_sl(group_id, sl_order_id)
+        end
+
+        # 4. Optional TP working order
         tp_order_id = nil
-        if tp_price
+        if place_tp && tp_price
           tp_order_id = place_working_take_profit(
             pair: pair,
             side: exit_side,
@@ -187,15 +192,17 @@ module CoindcxBot
           @store.update_order_group_tp(group_id, tp_order_id)
         end
 
-        # 5. Store stop/trail on position
+        # 5. Store stop/trail on position when a working SL exists
         pos = @store.open_position_for(pair)
-        if pos
+        if pos && sl_order_id
           sl_bd = BigDecimal(sl_price.to_s)
           @store.update_position_stop_price(pos[:id], stop_price: sl_bd)
           @store.update_position_initial_stop_price(pos[:id], initial_stop_price: sl_bd)
         end
 
-        @logger&.info("[paper] bracket #{side} #{pair} qty=#{quantity.to_s('F')} @ #{fill[:fill_price].to_s('F')} SL=#{sl_price} TP=#{tp_price || 'none'} group=#{group_id}")
+        sl_log = sl_order_id ? sl_price.to_s : 'none'
+        tp_log = tp_order_id ? tp_price.to_s : 'none'
+        @logger&.info("[paper] bracket #{side} #{pair} qty=#{quantity.to_s('F')} @ #{fill[:fill_price].to_s('F')} SL=#{sl_log} TP=#{tp_log} group=#{group_id}")
 
         {
           ok: true,

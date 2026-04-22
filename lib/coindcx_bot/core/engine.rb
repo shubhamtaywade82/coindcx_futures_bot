@@ -69,15 +69,19 @@ module CoindcxBot
         @account = Gateways::AccountGateway.new(client: @order_account_client)
         @ws = Gateways::WsGateway.new(client: @client, logger: @logger)
         @broker = build_broker(config)
+
+        @order_tracker = Execution::OrderTracker.new(journal: @journal, logger: @logger)
+        @ws_fill_handler = Execution::WsFillHandler.new(order_tracker: @order_tracker, logger: @logger)
+
         @coord = Execution::Coordinator.new(
           broker: @broker,
           journal: @journal,
           config: config,
           exposure_guard: @exposure,
           logger: @logger,
-          fx: @fx
+          fx: @fx,
+          order_tracker: @order_tracker
         )
-        @coord.reconcile_paper_state!
 
         @candles_htf = {}
         @candles_exec = {}
@@ -94,6 +98,7 @@ module CoindcxBot
         @regime_ai_brain = nil
         @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
         @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
+        @margin_sim = Risk::MarginSimulator.new(config: @config, logger: @logger)
         @daily_loss_flatten_warned = false
         @engine_loop_crashed = false
         @tui_focus_pair = nil # TUI sets each frame; regime strip + regime AI use it
@@ -121,11 +126,18 @@ module CoindcxBot
         @smc_setup_mutexes = Hash.new { |h, k| h[k] = Mutex.new }
         init_smc_setup_stack! if @config.smc_setup_enabled?
 
+        @stop_breach_queue = {}
+        @stop_breach_mutex = Mutex.new
+
+        @runtime_reconcile_at    = nil
+        @runtime_reconcile_mutex = Mutex.new
+
         @bus.subscribe(:tick) do |tick|
           @ws_tick_at[tick.pair] = Time.now
           @tracker.record_tick(tick)
           forward_tick_to_store(tick)
           @logger&.info("[ws] tick #{tick.pair} #{tick.price}") if ENV['COINDCX_WS_TRACE'].to_s == '1'
+          check_and_queue_stop_breach(tick) if !@config.dry_run? && @config.exit_on_hard_stop?
           @on_tick&.call(tick)
         end
 
@@ -240,9 +252,24 @@ module CoindcxBot
             'NO orders placed (runtime.place_orders: false / PLACE_ORDER=0)'
           )
         end
+
+        # SIGHUP: graceful stop so the process manager (systemd, supervisord) can restart
+        # with fresh config. Only minimal work is safe inside a signal handler.
+        @sighup_received = false
+        Signal.trap('HUP') { @sighup_received = true; @stop = true }
+
+        # Reconcile journal against broker state before the first tick cycle.
+        @coord.reconcile_paper_state!
+        @coord.reconcile_live_state!
+
         ws_thread = Thread.new { run_ws_loop }
         loop do
           break if @stop
+
+          if @sighup_received
+            @logger.info('[engine] SIGHUP received — stopping for graceful restart')
+            break
+          end
 
           tick_cycle
           break if @stop
@@ -851,7 +878,34 @@ module CoindcxBot
         nil
       end
 
+      # Outer reconnect loop: on an unexpected WS session end, wait with exponential backoff
+      # and restart subscriptions. Caps at ws_reconnect_attempts (0 = unlimited retries).
       def run_ws_loop
+        max_attempts = @config.ws_reconnect_attempts
+        base_delay   = @config.ws_reconnect_base_seconds
+        attempt      = 0
+
+        until @stop
+          run_ws_once
+          break if @stop
+
+          attempt += 1
+          if max_attempts > 0 && attempt >= max_attempts
+            @logger.error("[ws] max reconnect attempts (#{max_attempts}) reached — WS feed offline")
+            @engine_loop_crashed = true
+            break
+          end
+
+          delay = [base_delay * (2**(attempt - 1)), 60.0].min
+          @logger.warn("[ws] session ended — reconnecting in #{delay.round(1)}s (attempt #{attempt})")
+          interruptible_sleep(delay)
+        end
+      rescue StandardError => e
+        @last_error = e.message
+        @logger.error("[ws] fatal: #{e.full_message}")
+      end
+
+      def run_ws_once
         conn = @ws.connect
         unless conn.ok?
           @last_error = "ws connect: #{conn.message}"
@@ -868,6 +922,7 @@ module CoindcxBot
 
         ou = @ws.subscribe_order_updates do |payload|
           @journal.log_event('ws_order_update', ws_order_snippet(payload))
+          @ws_fill_handler.handle(payload)
         rescue StandardError => e
           @logger.warn("order ws: #{e.message}")
         end
@@ -896,7 +951,7 @@ module CoindcxBot
         end
       rescue StandardError => e
         @last_error = e.message
-        @logger.error("WS loop: #{e.full_message}")
+        @logger.error("[ws] session error: #{e.message}")
       end
 
       def tick_cycle
@@ -909,6 +964,8 @@ module CoindcxBot
         refresh_tracker_from_exec_candle_when_ws_stale
         mirror_tracker_into_tick_store
         run_paper_process_tick if @broker.paper?
+        # Drain WS-tick-detected stop breaches before strategy (avoids double-close race).
+        drain_stop_breach_queue
         maybe_flatten_on_daily_loss_breach
         # Entry gating must be **per pair**: if ETH has no WS ticks, SOL must still be allowed to open.
         # (TUI `snapshot.stale` remains `any?` so you still see a warning when any feed is dead.)
@@ -919,6 +976,9 @@ module CoindcxBot
         refresh_regime_ai_if_due
         refresh_exchange_positions_for_tui_if_due
         refresh_futures_wallet_for_tui_if_due
+        refresh_runtime_reconcile_if_due
+        apply_funding_for_live_positions!
+        check_liquidation_risks
       rescue StandardError => e
         @last_error = e.message
         @logger.error(e.full_message)
@@ -1049,6 +1109,138 @@ module CoindcxBot
         end
       end
 
+      # Periodic live position reconciliation: runs in a background thread to avoid blocking
+      # tick_cycle. Cadence controlled by `runtime.runtime_reconcile_interval_seconds`.
+      def refresh_runtime_reconcile_if_due
+        return if @config.dry_run?
+        return unless @config.runtime_reconcile_enabled?
+
+        interval = @config.runtime_reconcile_interval_seconds
+        now      = Time.now
+        should_run = @runtime_reconcile_mutex.synchronize do
+          at = @runtime_reconcile_at
+          if at.nil? || (now - at) >= interval
+            @runtime_reconcile_at = now
+            true
+          else
+            false
+          end
+        end
+        return unless should_run
+
+        Thread.new do
+          Thread.current.name = 'runtime_reconcile'
+          @coord.reconcile_live_state!
+        rescue StandardError => e
+          @logger&.warn("[reconcile:runtime] #{e.message}")
+        end
+      end
+
+      # For live open positions, estimate and deduct the CoinDCX 8-hour funding cost.
+      # Marked as estimated because actual funding rates fluctuate; the default rate from
+      # `risk.default_funding_rate_bps` (default 1 bps = 0.01 %) is a conservative estimate.
+      def apply_funding_for_live_positions!
+        return if @config.dry_run?
+        return unless @config.track_funding_rate?
+
+        rate_bps = @config.default_funding_rate_bps
+        now      = Time.now.to_i
+
+        @journal.open_positions.each do |pos|
+          opened_at   = pos[:opened_at].to_i
+          last_funded = pos[:last_funded_at]&.to_i || opened_at
+          hours_since = (now - last_funded) / 3600.0
+          next if hours_since < 8.0
+
+          entry    = BigDecimal(pos[:entry_price].to_s)
+          qty      = BigDecimal(pos[:quantity].to_s)
+          notional = entry * qty
+          funding_usdt = (notional * BigDecimal(rate_bps.to_s) / 10_000).round(8, BigDecimal::ROUND_UP)
+
+          # Longs pay funding; shorts receive it.
+          debit_usdt = pos[:side].to_s == 'long' ? funding_usdt : -funding_usdt
+          debit_inr  = debit_usdt * @fx.inr_per_usdt
+
+          @journal.apply_funding_to_position(id: pos[:id], funding_usdt: debit_usdt)
+          @journal.add_daily_pnl_inr(-debit_inr)
+          @journal.log_event(
+            'funding_payment',
+            pair:         pos[:pair],
+            position_id:  pos[:id],
+            funding_usdt: debit_usdt.to_s('F'),
+            funding_inr:  debit_inr.to_s('F'),
+            rate_bps:     rate_bps,
+            estimated:    true
+          )
+          @logger&.info(
+            "[funding] #{pos[:pair]} id=#{pos[:id]} debit=#{debit_usdt.to_s('F')} USDT (est. #{rate_bps} bps/8h)"
+          )
+        rescue StandardError => e
+          @logger&.warn("[funding] pos #{pos[:id]}: #{e.message}")
+        end
+      end
+
+      # Called from the WS-tick event (WS thread). Enqueues a stop breach without touching the
+      # journal or coordinator (not thread-safe from the WS thread). The main tick_cycle thread
+      # drains the queue and issues the close order atomically.
+      def check_and_queue_stop_breach(tick)
+        pos = @tracker.open_position_for(tick.pair)
+        return unless pos
+
+        stop_raw = pos[:stop_price]
+        return unless stop_raw
+
+        stop = BigDecimal(stop_raw.to_s)
+        side = pos[:side].to_s
+        ltp  = tick.price
+
+        breached = (side == 'long' && ltp <= stop) || (side == 'short' && ltp >= stop)
+        return unless breached
+
+        @stop_breach_mutex.synchronize do
+          @stop_breach_queue[tick.pair.to_s] ||= {
+            position_id: pos[:id],
+            stop_price:  stop,
+            ltp:         ltp,
+            side:        side,
+            queued_at:   Time.now
+          }
+        end
+      rescue StandardError => e
+        @logger&.warn("[tick_stop] queue error #{tick.pair}: #{e.message}")
+      end
+
+      # Drain and process stop breaches queued by WS-tick callbacks.
+      # Runs on the main engine thread — safe to call coordinator and journal.
+      def drain_stop_breach_queue
+        return if @config.dry_run? || !@config.exit_on_hard_stop?
+
+        pending = @stop_breach_mutex.synchronize { @stop_breach_queue.dup.tap { @stop_breach_queue.clear } }
+        return if pending.empty?
+
+        pending.each do |pair, breach|
+          next if @journal.paused? || @journal.kill_switch?
+
+          pos = @journal.open_positions.find { |r| r[:id] == breach[:position_id] }
+          next unless pos
+
+          @logger&.warn(
+            "[tick_stop] #{pair} stop breached: ltp=#{breach[:ltp]} stop=#{breach[:stop_price]} side=#{breach[:side]}"
+          )
+          sig = Strategy::Signal.new(
+            action:     :close,
+            pair:       pair,
+            side:       breach[:side].to_sym,
+            stop_price: nil,
+            reason:     'tick_stop_breached',
+            metadata:   { position_id: breach[:position_id] }
+          )
+          @coord.apply(sig, exit_price: breach[:ltp])
+        rescue StandardError => e
+          @logger&.error("[tick_stop] close failed #{pair}: #{e.message}")
+        end
+      end
+
       def process_pair(pair, stale)
         return if @journal.paused? || @journal.kill_switch?
 
@@ -1076,6 +1268,8 @@ module CoindcxBot
             peak = @journal.bump_peak_unrealized_usdt(pos[:id], u)
             pos = pos.merge(peak_unrealized_usdt: peak.to_s('F')) if peak
           end
+          pk = @journal.bump_peak_ltp(pos[:id], ltp)
+          pos = pos.merge(peak_ltp: pk.to_s('F')) if pk
         end
 
         sig = @strategy.evaluate(
@@ -1126,10 +1320,73 @@ module CoindcxBot
             return
           end
 
+          unless @config.dry_run?
+            lev = resolved_leverage
+            margin_gate = @margin_sim.pre_trade_ok?(entry_price: entry, quantity: qty, leverage: lev)
+            unless margin_gate.first == :ok
+              @logger&.info("[engine] #{pair} #{sig.action} blocked: #{margin_gate.last}") if @strategy_signal_trace
+              return
+            end
+          end
+
           @coord.apply(sig, quantity: qty, entry_price: entry)
         else
           exit_for_close = sig.action == :close ? ltp : nil
           @coord.apply(sig, exit_price: exit_for_close)
+        end
+      end
+
+      # Effective leverage: coordinator config capped by ExposureGuard.max_leverage.
+      def resolved_leverage
+        defaults = @config.execution.fetch(:order_defaults, {})
+        raw = defaults[:leverage] || defaults['leverage'] || @config.risk.fetch(:max_leverage, 5)
+        requested = BigDecimal(raw.to_s).to_i
+        [[requested, 1].max, @exposure.max_leverage].min
+      rescue ArgumentError, TypeError
+        1
+      end
+
+      # Scan open journal positions for liquidation proximity; log alerts and optionally
+      # emergency-close positions where mark price is dangerously close to liquidation price.
+      def check_liquidation_risks
+        return if @config.dry_run?
+
+        alert_pct     = @config.liquidation_alert_pct
+        emergency_pct = @config.emergency_close_pct
+
+        @journal.open_positions.each do |pos|
+          ltp     = @tracker.ltp(pos[:pair])
+          liq_raw = pos[:liquidation_price]
+          next unless ltp && liq_raw
+
+          liq = BigDecimal(liq_raw.to_s)
+          mp  = BigDecimal(ltp.to_s)
+          next unless liq.positive? && mp.positive?
+
+          distance_pct = ((mp - liq).abs / mp * 100).round(2)
+
+          if distance_pct < emergency_pct
+            @logger&.error(
+              "[liq_risk] EMERGENCY #{pos[:pair]} id=#{pos[:id]} " \
+              "liq=#{liq.to_s('F')} mark=#{mp.to_s('F')} dist=#{distance_pct}% — force-closing"
+            )
+            sig = Strategy::Signal.new(
+              action:     :close,
+              pair:       pos[:pair],
+              side:       pos[:side]&.to_sym,
+              stop_price: nil,
+              reason:     'liquidation_emergency',
+              metadata:   { position_id: pos[:id] }
+            )
+            @coord.apply(sig, exit_price: ltp)
+          elsif distance_pct < alert_pct
+            @logger&.warn(
+              "[liq_risk] #{pos[:pair]} id=#{pos[:id]} " \
+              "liq=#{liq.to_s('F')} mark=#{mp.to_s('F')} dist=#{distance_pct}% — monitor closely"
+            )
+          end
+        rescue StandardError => e
+          @logger&.warn("[liq_risk] pos #{pos[:id]}: #{e.message}")
         end
       end
 
@@ -1227,6 +1484,8 @@ module CoindcxBot
             @config.margin_currency_short_name,
             inr_per_usdt: inr_per_usdt
           )
+          account_state = Models::AccountState.from_wallet_snapshot(snap)
+          @margin_sim.update(account_state)
         else
           err = res.message.to_s
         end

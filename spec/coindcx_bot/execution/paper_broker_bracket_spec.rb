@@ -80,6 +80,22 @@ RSpec.describe CoindcxBot::Execution::PaperBroker, 'bracket orders & OCO' do
       expect(BigDecimal(pos[:stop_price])).to eq(BigDecimal('90'))
     end
 
+    it 'skips working SL/TP when place_sl and place_tp are false' do
+      result = broker.place_bracket_order(
+        { pair: 'B-SOL_USDT', side: 'long', quantity: BigDecimal('1'), ltp: BigDecimal('100') },
+        sl_price: BigDecimal('90'),
+        tp_price: BigDecimal('130'),
+        place_sl: false,
+        place_tp: false
+      )
+
+      expect(result[:sl_order_id]).to be_nil
+      expect(result[:tp_order_id]).to be_nil
+      expect(broker.order_book.size).to eq(0)
+      pos = store.open_position_for('B-SOL_USDT')
+      expect(pos[:stop_price]).to be_nil
+    end
+
     it 'works for short entries with inverted SL/TP sides' do
       result = broker.place_bracket_order(
         { pair: 'B-SOL_USDT', side: 'short', quantity: BigDecimal('1'), ltp: BigDecimal('100') },

@@ -419,6 +419,33 @@ module CoindcxBot
       raw.fetch(:paper, {})
     end
 
+    # Paper bracket: place a working stop-loss order (in-process PaperBroker). When false, exits
+    # rely on strategy / liquidation paths instead of simulated stop fills.
+    def paper_place_working_stop?
+      v = paper_config[:place_working_stop]
+      return true if v.nil?
+
+      truthy?(v)
+    end
+
+    # Paper bracket: place a working take-profit limit. When false, TP is strategy-driven only.
+    def paper_place_working_take_profit?
+      v = paper_config[:place_working_take_profit]
+      return true if v.nil?
+
+      truthy?(v)
+    end
+
+    # When false, the engine does not enqueue WS tick stop breaches and strategies ignore hard stop exits.
+    # Liquidation emergency handling in the engine is unchanged.
+    def exit_on_hard_stop?
+      sec = raw[:strategy]
+      return true unless sec.is_a?(Hash)
+
+      v = sec.fetch(:exit_on_hard_stop, true)
+      !(v == false || v.to_s.strip.casecmp('false').zero? || v.to_s.strip == '0')
+    end
+
     def paper_exchange_enabled?
       dry_run? && truthy?(raw.dig(:paper_exchange, :enabled))
     end
@@ -434,6 +461,109 @@ module CoindcxBot
 
     def journal_path
       File.expand_path(runtime.fetch(:journal_path, './data/bot_journal.sqlite3'), Dir.pwd)
+    end
+
+    # Cross-pair correlation groups: array-of-arrays from `risk.correlation_groups`.
+    # Each inner array is a set of pair strings that share directional exposure.
+    # Default: empty (no correlation gating).
+    def correlation_groups
+      raw_groups = risk.fetch(:correlation_groups, [])
+      return [] unless raw_groups.is_a?(Array)
+
+      raw_groups.filter_map do |g|
+        next unless g.is_a?(Array)
+
+        g.map(&:to_s).reject(&:empty?)
+      end.reject(&:empty?)
+    end
+
+    # On startup, compare journal open positions against the live exchange and close orphans.
+    # Opt-in only: `runtime.reconcile_on_startup: true`.
+    def reconcile_on_startup?
+      truthy?(runtime[:reconcile_on_startup])
+    end
+
+    # Periodic runtime reconciliation: re-check journal positions against the exchange
+    # during a live session (not only at startup). Opt-in via `runtime.runtime_reconcile: true`.
+    def runtime_reconcile_enabled?
+      truthy?(runtime[:runtime_reconcile])
+    end
+
+    def runtime_reconcile_interval_seconds
+      v = runtime.fetch(:runtime_reconcile_interval_seconds, 300).to_i
+      v < 30 ? 30 : v
+    rescue ArgumentError, TypeError
+      300
+    end
+
+    # Funding rate estimation for live open positions (every 8 h).
+    # Enable with `risk.track_funding_rate: true`.
+    def track_funding_rate?
+      truthy?(risk[:track_funding_rate])
+    end
+
+    # Safety buffer applied to available margin before allowing new entries (%).
+    # A 20% buffer means only 80% of available margin can be consumed.
+    def margin_safety_buffer_pct
+      v = risk.fetch(:margin_safety_buffer_pct, 20).to_f
+      [[v, 0].max, 50].min
+    rescue ArgumentError, TypeError
+      20.0
+    end
+
+    # Block new entries when used_margin / equity exceeds this threshold (%).
+    def max_margin_ratio_pct
+      v = risk.fetch(:max_margin_ratio_pct, 80).to_f
+      [[v, 10].max, 100].min
+    rescue ArgumentError, TypeError
+      80.0
+    end
+
+    # Log a warning when liquidation is within this % of mark price.
+    def liquidation_alert_pct
+      v = risk.fetch(:liquidation_alert_pct, 5).to_f
+      [[v, 1].max, 20].min
+    rescue ArgumentError, TypeError
+      5.0
+    end
+
+    # Emergency-close threshold: force-close when liquidation is within this % of mark price.
+    def emergency_close_pct
+      v = risk.fetch(:emergency_close_pct, 2).to_f
+      [[v, 0.5].max, 10].min
+    rescue ArgumentError, TypeError
+      2.0
+    end
+
+    # CoinDCX futures taker fee in basis points (default 5 bps = 0.05 %).
+    def taker_fee_bps
+      v = risk.fetch(:taker_fee_bps, 5).to_f
+      [v, 0].max
+    rescue ArgumentError, TypeError
+      5.0
+    end
+
+    # Estimated per-8h funding rate in basis points (default 1 bps = 0.01 %).
+    # Longs pay this; shorts receive it. Used when real-time rate is not fetched.
+    def default_funding_rate_bps
+      v = risk.fetch(:default_funding_rate_bps, 1).to_f
+      v < 0 ? 0 : v
+    rescue ArgumentError, TypeError
+      1.0
+    end
+
+    # Maximum reconnect attempts before the WS loop gives up (0 = unlimited).
+    def ws_reconnect_attempts
+      v = runtime.fetch(:ws_reconnect_attempts, 5).to_i
+      v.negative? ? 5 : v
+    end
+
+    # Base delay (seconds) for exponential backoff between WS reconnects.
+    def ws_reconnect_base_seconds
+      f = Float(runtime.fetch(:ws_reconnect_base_seconds, 3.0))
+      f < 0.5 ? 0.5 : f
+    rescue ArgumentError, TypeError
+      3.0
     end
 
     # Read-only TUI: poll CoinDCX futures positions (list only — no orders/exits).

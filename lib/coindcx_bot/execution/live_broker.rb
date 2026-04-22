@@ -12,12 +12,22 @@ module CoindcxBot
         @logger = logger
       end
 
+      # Returns a Hash `{ ok: true, order_id: "..." }` on success,
+      # or `{ ok: false, order_id: nil }` on failure.
+      # Legacy callers that check `result == :ok` still work because we override `==` below;
+      # new callers should check `result[:ok]` and `result[:order_id]`.
       def place_order(order)
         result = @orders.create(order: order)
-        return :failed if result.failure?
+        if result.failure?
+          @logger&.warn("[live] order create failed: #{result.message}")
+          return { ok: false, order_id: nil }
+        end
 
-        @logger&.info("Live order placed: #{order}")
-        :ok
+        exchange_order_id = extract_order_id(result.value)
+        @logger&.info(
+          "[live] order placed: client_id=#{order[:client_order_id]} exchange_id=#{exchange_order_id}"
+        )
+        { ok: true, order_id: exchange_order_id }
       end
 
       def cancel_order(order_id)
@@ -44,6 +54,18 @@ module CoindcxBot
         false
       end
 
+      # Returns the set of pair strings that the exchange currently holds open positions for.
+      # Used by Coordinator#reconcile_live_state! to detect journal orphans on startup.
+      def list_open_pairs
+        res = @account.list_positions
+        return [] if res.failure?
+
+        normalize_rows(res.value).filter_map { |r| r[:pair]&.to_s }.uniq
+      rescue StandardError => e
+        @logger&.warn("[live_broker] list_open_pairs failed: #{e.message}")
+        []
+      end
+
       private
 
       def exit_exchange_for_pair(pair)
@@ -59,6 +81,13 @@ module CoindcxBot
           result = @account.exit_position(row)
           @logger&.warn("exit_position failed: #{result.message}") if result.failure?
         end
+      end
+
+      def extract_order_id(response)
+        return nil unless response.is_a?(Hash)
+
+        h = response.transform_keys(&:to_sym)
+        (h[:id] || h[:order_id] || h[:orderId] || h[:oid])&.to_s
       end
 
       def normalize_rows(value)
