@@ -22,7 +22,7 @@ capital_inr: 2_00_000
 
 risk:
   max_open_positions: 4
-  max_leverage: 5
+  max_leverage: 10
   flatten_on_daily_loss_breach: true
   pause_after_daily_loss_flatten: true
 
@@ -40,6 +40,9 @@ risk:
 
 strategy:
   name: meta_first_win
+
+  # When false, strategies do not close on the entry risk stop (exchange liquidation / emergency paths still apply).
+  exit_on_hard_stop: false
 
   # Both children share these timeframes (per-child resolutions not yet supported).
   execution_resolution: 15m
@@ -82,13 +85,17 @@ strategy:
 
       # --- Child 2: SupertrendProfit ---
       # Entry: Supertrend band flip (bearish->bullish or bullish->bearish).
-      # Exit:  2% fixed TP + DynamicTrail + HWM giveback + stop.
+      # Exit:  price HWM trail (+ optional USDT hwm_giveback above) — no fixed TP / no DynamicTrail while hwm_price_trail is on.
       # Fires when TrendContinuation holds (compression not yet resolved, etc.).
       - name: supertrend_profit
         supertrend_atr_period: 10
         supertrend_multiplier: 3
-        take_profit_pct: 0.02 # 2% TP for 15m swing timeframe
+        take_profit_pct: 0 # fixed % TP off — use hwm_price_trail
         stop_distance_pct_for_sizing: 0.015
+        hwm_price_trail:
+          enabled: true
+          activate_gain_pct: 0.15 # trail arms only after +15% favorable move from entry (peak price)
+          pullback_from_peak_pct: 0.05 # then exit if price gives back 5% from session peak (HWM for longs)
 
       # --- Child 3: SmcConfluence ---
       # Entry: CHoCH / BOS + FVG + OB + liquidity sweep confluence score ≥ min_score.
@@ -147,7 +154,7 @@ runtime:
   ws_shutdown_join_seconds: 45
 
   # Paper mode: in-process PaperBroker, no exchange order/account REST calls.
-  dry_run: true
+  dry_run: false
 
   # Live only (dry_run: false): false = read-only account APIs, NO order placement.
   # Override via env: PLACE_ORDER=0 or PLACE_ORDER=false
@@ -217,6 +224,9 @@ paper:
   slippage_bps: 5 # 5 bps market-order slippage per side
   fee_bps: 4 # 4 bps taker fee (CoinDCX futures taker)
   db_path: ./data/paper_trading.sqlite3
+  # No simulated working SL/TP orders — exits are strategy-driven (e.g. hwm_price_trail) or engine liquidation handling.
+  place_working_stop: false
+  place_working_take_profit: false
 
 # In-process PaperBroker when paper_exchange.enabled: false (default).
 # When true: run `bin/paper-exchange`; orders/positions REST use api_base_url, while candles/WS/FX stay on CoinDCX production.

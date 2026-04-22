@@ -56,6 +56,9 @@ risk:
   # max_daily_loss_inr: 1500
 
 strategy:
+  # When false, leaf strategies skip closes on the entry risk stop (simulated SL / journal stop breach); use with
+  # paper.place_working_stop: false and/or hwm_price_trail. Exchange liquidation handling is unchanged.
+  # exit_on_hard_stop: true
   # Engine strategy: trend_continuation (default), supertrend_profit, smc_confluence, regime_vol_tier (wraps inner_strategy),
   # or meta_first_win (priority scan of leaf children — MVP: all children share this block's execution_resolution / HTF).
   #
@@ -123,6 +126,11 @@ strategy:
   # supertrend_multiplier: 3
   # take_profit_pct: 0.10
   # stop_distance_pct_for_sizing: 0.02
+  # Optional: price HWM trail (engine bumps journal peak_ltp). Requires take_profit_pct: 0 if you want only this exit.
+  # hwm_price_trail:
+  #   enabled: true
+  #   activate_gain_pct: 0.15          # arm after peak price is this far in favor vs entry
+  #   pullback_from_peak_pct: 0.05     # then close if price gives back this fraction from peak
 
   # --- smc_confluence (SMC-CE: Smart Money Confluence engine, Pine-parity bar replay) ---
   # Set name: smc_confluence. Uses execution_resolution (+ higher_timeframe_resolution if htf_alignment).
@@ -278,6 +286,8 @@ paper:
   db_path: ./data/paper_trading.sqlite3
   # Bracket take-profit distance as multiple of entry-vs-stop risk (coordinator / paper bracket orders).
   # take_profit_r_multiple: 3
+  # place_working_stop: true          # false = no simulated stop-loss working order (strategy exits only)
+  # place_working_take_profit: true   # false = no simulated TP working order
 
 # CoinDCX-compatible paper exchange (run `bin/paper-exchange` in another shell). With
 # `runtime.dry_run: true`, orders/positions REST use this base URL; candles, WS, and FX still use CoinDCX production.

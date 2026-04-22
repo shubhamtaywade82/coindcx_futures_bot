@@ -419,6 +419,33 @@ module CoindcxBot
       raw.fetch(:paper, {})
     end
 
+    # Paper bracket: place a working stop-loss order (in-process PaperBroker). When false, exits
+    # rely on strategy / liquidation paths instead of simulated stop fills.
+    def paper_place_working_stop?
+      v = paper_config[:place_working_stop]
+      return true if v.nil?
+
+      truthy?(v)
+    end
+
+    # Paper bracket: place a working take-profit limit. When false, TP is strategy-driven only.
+    def paper_place_working_take_profit?
+      v = paper_config[:place_working_take_profit]
+      return true if v.nil?
+
+      truthy?(v)
+    end
+
+    # When false, the engine does not enqueue WS tick stop breaches and strategies ignore hard stop exits.
+    # Liquidation emergency handling in the engine is unchanged.
+    def exit_on_hard_stop?
+      sec = raw[:strategy]
+      return true unless sec.is_a?(Hash)
+
+      v = sec.fetch(:exit_on_hard_stop, true)
+      !(v == false || v.to_s.strip.casecmp('false').zero? || v.to_s.strip == '0')
+    end
+
     def paper_exchange_enabled?
       dry_run? && truthy?(raw.dig(:paper_exchange, :enabled))
     end

@@ -3,6 +3,7 @@
 require 'bigdecimal'
 require_relative 'dynamic_trail'
 require_relative 'hwm_giveback'
+require_relative 'hwm_price_trail'
 
 module CoindcxBot
   module Strategy
@@ -62,7 +63,7 @@ module CoindcxBot
 
         # Stop-loss check (safety net; paper broker OCO also handles this via FillEngine).
         stop = position[:stop_price] ? BigDecimal(position[:stop_price].to_s) : nil
-        if stop&.positive?
+        if hard_stop_exits_enabled? && stop&.positive?
           if side == 'long' && ltp_bd <= stop
             return Signal.new(action: :close, pair: pair, side: :long, stop_price: nil,
                               reason: 'stop', metadata: { position_id: id })
@@ -81,16 +82,20 @@ module CoindcxBot
             return hold(pair, 'unknown_side')
           end
 
+        trail = HwmPriceTrail.check(pair: pair, position: position, ltp: ltp, strategy_cfg: @cfg)
+        return trail if trail
+
         hwm = HwmGiveback.check(pair: pair, position: position, ltp: ltp, strategy_cfg: @cfg)
         return hwm if hwm
 
-        if gain >= take_profit_pct
+        tp_pct = take_profit_pct
+        if tp_pct.positive? && gain >= tp_pct
           return Signal.new(action: :close, pair: pair, side: side.to_sym, stop_price: nil,
                             reason: 'take_profit_pct', metadata: { position_id: id })
         end
 
         # Trailing stop — activates once in profit; uses same DynamicTrail tiers as TrendContinuation.
-        if exec.size >= 2
+        if exec.size >= 2 && dynamic_trail_enabled?
           initial_stop = BigDecimal((position[:initial_stop_price] || position[:stop_price]).to_s)
           current_stop = stop || initial_stop
           out = trail_calculator.call(
@@ -159,6 +164,23 @@ module CoindcxBot
 
       def trail_calculator
         @trail_calculator ||= DynamicTrail::Calculator.new(@cfg)
+      end
+
+      def hard_stop_exits_enabled?
+        v = @cfg.fetch(:exit_on_hard_stop, true)
+        !(v == false || v.to_s.strip.casecmp('false').zero? || v.to_s.strip == '0')
+      end
+
+      def hwm_price_trail_enabled?
+        raw = @cfg[:hwm_price_trail] || @cfg['hwm_price_trail']
+        raw.is_a?(Hash) && HwmPriceTrail.truthy?(raw[:enabled] || raw['enabled'])
+      end
+
+      def dynamic_trail_enabled?
+        return false if hwm_price_trail_enabled?
+
+        v = @cfg.fetch(:dynamic_trail_enabled, true)
+        !(v == false || v.to_s.strip.casecmp('false').zero? || v.to_s.strip == '0')
       end
     end
   end

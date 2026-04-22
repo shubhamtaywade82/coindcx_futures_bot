@@ -10,11 +10,14 @@ module CoindcxBot
     class PaperStore
       WORKING_ORDER_STATUSES = %w[new working accepted].freeze
       MIGRATE_TABLE_ALLOWLIST = %w[paper_orders paper_fills paper_positions].freeze
+      SQLITE_BUSY_TIMEOUT_MS = 10_000
 
       def initialize(path)
         FileUtils.mkdir_p(File.dirname(path))
         @db = SQLite3::Database.new(path)
         @db.results_as_hash = true
+        @db.busy_timeout = SQLITE_BUSY_TIMEOUT_MS
+        @db.execute('PRAGMA journal_mode=WAL;')
         migrate
       end
 

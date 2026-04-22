@@ -104,6 +104,43 @@ RSpec.describe CoindcxBot::Strategy::SupertrendProfit do
     end
   end
 
+  describe 'hwm_price_trail exit' do
+    let(:trail_cfg) do
+      cfg.merge(
+        exit_on_hard_stop: false,
+        take_profit_pct: 0,
+        hwm_price_trail: { enabled: true, activate_gain_pct: 0.15, pullback_from_peak_pct: 0.05 }
+      )
+    end
+
+    it 'emits close when peak was +18% and price pulls back 5% from peak' do
+      strat = described_class.new(trail_cfg)
+      position = { id: 10, side: 'long', entry_price: '100', stop_price: '95', peak_ltp: '118' }
+      sig = strat.evaluate(
+        pair: 'B-X_USDT',
+        candles_htf: [],
+        candles_exec: [c(0, 1, 2, 1, 1)],
+        position: position,
+        ltp: BigDecimal('111')
+      )
+      expect(sig.action).to eq(:close)
+      expect(sig.reason).to eq('hwm_price_trail')
+    end
+
+    it 'does not close on stop_price when exit_on_hard_stop is false' do
+      strat = described_class.new(cfg.merge(exit_on_hard_stop: false))
+      position = { id: 11, side: 'long', entry_price: '100', stop_price: '99', peak_ltp: '100' }
+      sig = strat.evaluate(
+        pair: 'B-X_USDT',
+        candles_htf: [],
+        candles_exec: [c(0, 1, 2, 1, 1)],
+        position: position,
+        ltp: BigDecimal('98')
+      )
+      expect(sig.reason).not_to eq('stop')
+    end
+  end
+
   describe 'Supertrend flip entry' do
     let(:closed) { 20.times.map { |i| c(i, 100, 101, 99, 100, 1000) } }
     let(:exec) { closed + [c(99, 100, 101, 99, 100, 1000)] }

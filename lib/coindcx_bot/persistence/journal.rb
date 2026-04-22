@@ -8,12 +8,16 @@ require 'monitor'
 module CoindcxBot
   module Persistence
     class Journal
+      SQLITE_BUSY_TIMEOUT_MS = 10_000
+
       def initialize(path, event_sink: nil)
         @path = path
         @event_sink = event_sink
         FileUtils.mkdir_p(File.dirname(path))
         @db = SQLite3::Database.new(path)
         @db.results_as_hash = true
+        @db.busy_timeout = SQLITE_BUSY_TIMEOUT_MS
+        @db.execute('PRAGMA journal_mode=WAL;')
         @db_mutex = Monitor.new
         migrate
       end
@@ -101,7 +105,7 @@ module CoindcxBot
       end
 
       def insert_position(pair:, side:, entry_price:, quantity:, stop_price:, trail_price: nil,
-                          initial_stop_price: nil, smc_setup_id: nil, entry_lane: nil)
+                          initial_stop_price: nil, smc_setup_id: nil, entry_lane: nil, peak_ltp: nil)
         db_sync do
           now = Time.now.to_i
           initial = (initial_stop_price || stop_price)&.to_s('F')
@@ -109,13 +113,14 @@ module CoindcxBot
           sid = nil if sid&.strip&.empty?
           lane = entry_lane&.to_s&.strip
           lane = nil if lane&.empty?
+          peak = (peak_ltp || entry_price).to_s('F')
           @db.execute(
             <<~SQL,
-              INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id, entry_lane)
-              VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?)
+              INSERT INTO positions(pair, side, entry_price, quantity, stop_price, trail_price, initial_stop_price, partial_done, opened_at, state, smc_setup_id, entry_lane, peak_ltp)
+              VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?)
             SQL
             [pair, side.to_s, entry_price.to_s('F'), quantity.to_s('F'),
-             stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid, lane]
+             stop_price&.to_s('F'), trail_price&.to_s('F'), initial, now, sid, lane, peak]
           )
           @db.last_insert_row_id
         end
@@ -161,6 +166,48 @@ module CoindcxBot
 
           @db.execute(
             'UPDATE positions SET peak_unrealized_usdt = ? WHERE id = ? AND state = ?',
+            [new_peak.to_s('F'), id, 'open']
+          )
+          new_peak
+        end
+      end
+
+      # Monotonic favorable extreme since open (high for longs, low for shorts) for HWM price trail exits.
+      def bump_peak_ltp(id, ltp)
+        return nil if id.nil?
+
+        db_sync do
+          mark = BigDecimal(ltp.to_s)
+          row = @db.get_first_row(
+            'SELECT side, entry_price, peak_ltp FROM positions WHERE id = ? AND state = ?',
+            [id, 'open']
+          )
+          return nil unless row
+
+          side = row['side'].to_s.downcase
+          entry = BigDecimal(row['entry_price'].to_s)
+          raw_peak = row['peak_ltp']
+          cur_peak =
+            if blank?(raw_peak)
+              entry
+            else
+              BigDecimal(raw_peak.to_s)
+            end
+
+          new_peak =
+            case side
+            when 'long', 'buy'
+              [cur_peak, mark].max
+            when 'short', 'sell'
+              [cur_peak, mark].min
+            else
+              cur_peak
+            end
+
+          return new_peak if new_peak == cur_peak && !blank?(raw_peak)
+
+          @db.execute(
+            'UPDATE positions SET peak_ltp = ? WHERE id = ? AND state = ?',
             [new_peak.to_s('F'), id, 'open']
           )
           new_peak
@@ -563,6 +610,10 @@ module CoindcxBot
         end
         unless cols.include?('funding_paid_usdt')
           @db.execute("ALTER TABLE positions ADD COLUMN funding_paid_usdt TEXT DEFAULT '0'")
+          cols = @db.table_info('positions').map { |r| r['name'] }
+        end
+        unless cols.include?('peak_ltp')
+          @db.execute('ALTER TABLE positions ADD COLUMN peak_ltp TEXT')
           cols = @db.table_info('positions').map { |r| r['name'] }
         end
         return if cols.include?('last_funded_at')

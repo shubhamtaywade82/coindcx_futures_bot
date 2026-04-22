@@ -136,7 +136,7 @@ module CoindcxBot
           @tracker.record_tick(tick)
           forward_tick_to_store(tick)
           @logger&.info("[ws] tick #{tick.pair} #{tick.price}") if ENV['COINDCX_WS_TRACE'].to_s == '1'
-          check_and_queue_stop_breach(tick) unless @config.dry_run?
+          check_and_queue_stop_breach(tick) if !@config.dry_run? && @config.exit_on_hard_stop?
           @on_tick&.call(tick)
         end
 
@@ -1203,6 +1203,8 @@ module CoindcxBot
       # Drain and process stop breaches queued by WS-tick callbacks.
       # Runs on the main engine thread — safe to call coordinator and journal.
       def drain_stop_breach_queue
+        return if @config.dry_run? || !@config.exit_on_hard_stop?
+
         pending = @stop_breach_mutex.synchronize { @stop_breach_queue.dup.tap { @stop_breach_queue.clear } }
         return if pending.empty?
 
@@ -1256,6 +1258,8 @@ module CoindcxBot
             peak = @journal.bump_peak_unrealized_usdt(pos[:id], u)
             pos = pos.merge(peak_unrealized_usdt: peak.to_s('F')) if peak
           end
+          pk = @journal.bump_peak_ltp(pos[:id], ltp)
+          pos = pos.merge(peak_ltp: pk.to_s('F')) if pk
         end
 
         sig = @strategy.evaluate(

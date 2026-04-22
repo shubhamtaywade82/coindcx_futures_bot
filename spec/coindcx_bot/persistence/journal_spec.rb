@@ -137,6 +137,38 @@ RSpec.describe CoindcxBot::Persistence::Journal do
     expect(journal.bump_peak_unrealized_usdt(99_999, BigDecimal('1'))).to be_nil
   end
 
+  it 'bumps peak_ltp up for longs and down for shorts' do
+    journal = described_class.new(path)
+    long_id = journal.insert_position(
+      pair: 'B-SOL_USDT',
+      side: 'long',
+      entry_price: BigDecimal('100'),
+      quantity: BigDecimal('0.1'),
+      stop_price: BigDecimal('95'),
+      trail_price: nil
+    )
+    expect(journal.bump_peak_ltp(long_id, BigDecimal('101'))).to eq(BigDecimal('101'))
+    expect(journal.bump_peak_ltp(long_id, BigDecimal('99'))).to eq(BigDecimal('101'))
+    row = journal.open_positions.find { |r| r[:id] == long_id }
+    expect(BigDecimal(row[:peak_ltp])).to eq(BigDecimal('101'))
+
+    short_id = journal.insert_position(
+      pair: 'B-ETH_USDT',
+      side: 'short',
+      entry_price: BigDecimal('2000'),
+      quantity: BigDecimal('0.01'),
+      stop_price: BigDecimal('2100'),
+      trail_price: nil
+    )
+    expect(journal.bump_peak_ltp(short_id, BigDecimal('1990'))).to eq(BigDecimal('1990'))
+    expect(journal.bump_peak_ltp(short_id, BigDecimal('1995'))).to eq(BigDecimal('1990'))
+  end
+
+  it 'returns nil from bump_peak_ltp when position is missing' do
+    journal = described_class.new(path)
+    expect(journal.bump_peak_ltp(99_999, BigDecimal('1'))).to be_nil
+  end
+
   it 'stores initial_stop_price and leaves it unchanged when stop is trailed' do
     journal = described_class.new(path)
     id = journal.insert_position(

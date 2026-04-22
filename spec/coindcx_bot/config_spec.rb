@@ -129,6 +129,30 @@ RSpec.describe CoindcxBot::Config do
     expect(cfg.place_orders?).to be(true)
   end
 
+  it 'defaults exit_on_hard_stop? to true' do
+    expect(described_class.new(minimal_bot_config).exit_on_hard_stop?).to be(true)
+  end
+
+  it 'is false when strategy.exit_on_hard_stop is false' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        strategy: minimal_bot_config[:strategy].merge(exit_on_hard_stop: false)
+      )
+    )
+    expect(cfg.exit_on_hard_stop?).to be(false)
+  end
+
+  it 'defaults paper_place_working_stop? to true' do
+    expect(described_class.new(minimal_bot_config).paper_place_working_stop?).to be(true)
+  end
+
+  it 'is false when paper.place_working_stop is false' do
+    cfg = described_class.new(
+      minimal_bot_config(paper: minimal_bot_config[:paper].merge(place_working_stop: false))
+    )
+    expect(cfg.paper_place_working_stop?).to be(false)
+  end
+
   it 'enables tui_exchange_mirror when live and place_orders is false' do
     cfg = described_class.new(
       minimal_bot_config(

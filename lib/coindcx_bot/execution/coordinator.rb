@@ -191,10 +191,13 @@ module CoindcxBot
 
           if signal.stop_price && @broker.respond_to?(:place_bracket_order)
             tp_price = compute_take_profit(signal.side, entry_price, signal.stop_price)
+            tp_for_book = @config.paper_place_working_take_profit? ? tp_price : nil
             result = @broker.place_bracket_order(
               order_params,
               sl_price: signal.stop_price,
-              tp_price: tp_price
+              tp_price: tp_for_book,
+              place_sl: @config.paper_place_working_stop?,
+              place_tp: @config.paper_place_working_take_profit?
             )
             ok = result.is_a?(Hash) && result[:ok]
           else
