@@ -233,6 +233,24 @@ paper:
 paper_exchange:
   enabled: false
 
+# Multi-level analysis alerts: journal +event_log+ rows always; Telegram when COINDCX_TELEGRAM_* are set.
+# With filter_telegram: true, delivery is throttled (journal is never dropped).
+alerts:
+  filter_telegram: true
+  analysis:
+    strategy_transitions: true # analysis_strategy_transition when strategy action/reason changes (per pair)
+    regime_hmm_transitions: true # analysis_regime_change when HMM decoded state/label changes
+    regime_ai_updates: true # analysis_regime_ai_update when Ollama regime label or probability jumps enough
+    regime_ai_min_probability_delta: 10 # percentage points (vs previous AI payload)
+  telegram:
+    default_throttle_seconds: 60
+    critical_throttle_seconds: 30
+    throttle_by_type:
+      analysis_regime_ai_update: 900
+      analysis_regime_change: 300
+      analysis_strategy_transition: 120
+      analysis_price_cross: 180
+
 # Optional Telegram: mirror +event_log+ rows (ENV only — no bot.yml). Off unless both are set:
 #   COINDCX_TELEGRAM_BOT_TOKEN  COINDCX_TELEGRAM_CHAT_ID
 # Optional second chat: COINDCX_TELEGRAM_OPS_CHAT_ID, COINDCX_TELEGRAM_OPS_BOT_TOKEN (if another bot),
