@@ -183,10 +183,21 @@ module CoindcxBot
         end
 
         def format_analysis_price_cross(h)
-          lines = ['Price rule']
+          lines = ['Price level cross (LTP)']
           lines << "#{fetch_s(h, :label)} (#{fetch_s(h, :rule_id)})" if fetch_s(h, :label) != '' || fetch_s(h, :rule_id) != ''
           lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
-          lines << "Cross: #{fetch_s(h, :direction)} @ #{fetch_s(h, :price)} vs #{fetch_s(h, :level)}" if fetch_s(h, :price) != ''
+          lines << "Thresholds: #{fetch_s(h, :threshold_summary)}" if fetch_s(h, :threshold_summary) != ''
+          lines << "Cross: #{fetch_s(h, :direction)} @ #{fetch_s(h, :price)} — #{fetch_s(h, :level)}" if fetch_s(h, :price) != ''
+          if fetch_s(h, :strategy_action) != ''
+            lines << "Strategy: #{fetch_s(h, :strategy_action)} (#{fetch_s(h, :strategy_reason)})"
+          end
+          if fetch_s(h, :hmm_label) != ''
+            lines << "HMM: #{fetch_s(h, :hmm_label)} s#{fetch_s(h, :hmm_state_id)} p=#{fetch_s(h, :hmm_posterior_pct)}% " \
+                     "vol #{fetch_s(h, :hmm_vol_rank)} uncertain=#{truthy_phrase(fetch_s(h, :hmm_uncertain))}"
+          end
+          if fetch_s(h, :regime_ai_label) != ''
+            lines << "Regime AI (book-wide): #{fetch_s(h, :regime_ai_label)} (#{fetch_s(h, :regime_ai_probability_pct)}%)"
+          end
           lines.join("\n")
         end
 

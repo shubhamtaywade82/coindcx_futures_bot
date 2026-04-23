@@ -39,12 +39,17 @@ module CoindcxBot
           direction = "#{prev}→#{zone}"
           level =
             if above && below
-              "between #{below.to_s('F')} and #{above.to_s('F')}"
+              "between #{format_price(below)} and #{format_price(above)}"
             elsif above
-              "above #{above.to_s('F')}"
+              "above #{format_price(above)}"
             else
-              "below #{below.to_s('F')}"
+              "below #{format_price(below)}"
             end
+
+          threshold_bits = []
+          threshold_bits << "above #{format_price(above)}" if above
+          threshold_bits << "below #{format_price(below)}" if below
+          threshold_summary = threshold_bits.join('; ')
 
           out << {
             rule_id: rid,
@@ -55,6 +60,7 @@ module CoindcxBot
             label: (r[:label] || r['label']).to_s.strip,
             from_zone: prev.to_s,
             to_zone: zone.to_s,
+            threshold_summary: threshold_summary,
             dedupe_key: "#{state_key}:#{zone}"
           }
         end
@@ -82,6 +88,11 @@ module CoindcxBot
         BigDecimal(v.to_s)
       rescue ArgumentError, TypeError
         nil
+      end
+
+      def self.format_price(bd)
+        s = bd.to_s('F')
+        s.sub(/\.0+\z/, '')
       end
     end
   end

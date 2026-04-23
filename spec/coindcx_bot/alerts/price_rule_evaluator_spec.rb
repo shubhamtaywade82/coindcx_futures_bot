@@ -13,6 +13,7 @@ RSpec.describe CoindcxBot::Alerts::PriceRuleEvaluator do
     expect(e2.size).to eq(1)
     expect(e2.first[:direction]).to include('at_or_below')
     expect(e2.first[:to_zone]).to eq('above')
+    expect(e2.first[:threshold_summary]).to eq('above 100')
   end
 
   it 'does not emit before first zone is established' do

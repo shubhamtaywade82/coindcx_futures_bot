@@ -119,10 +119,22 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         direction: 'below→above',
         price: '101',
         level: 'above 100',
-        label: 'test'
+        label: 'test',
+        threshold_summary: 'above 100',
+        strategy_action: 'hold',
+        strategy_reason: 'no_signal',
+        hmm_label: 'S2',
+        hmm_state_id: '2',
+        hmm_posterior_pct: '72.5',
+        hmm_vol_rank: '2/4',
+        hmm_uncertain: 'false',
+        regime_ai_label: 'RANGING',
+        regime_ai_probability_pct: '40.0'
       )
-      expect(s).to include('Price rule')
+      expect(s).to include('Price level cross (LTP)')
       expect(s).to include('101')
+      expect(s).to include('HMM:')
+      expect(s).to include('Regime AI (book-wide):')
     end
 
     it 'formats analysis_regime_change' do

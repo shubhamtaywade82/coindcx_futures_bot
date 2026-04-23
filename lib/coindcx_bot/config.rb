@@ -714,6 +714,17 @@ module CoindcxBot
       10.0
     end
 
+    # Minimum seconds between +analysis_price_cross+ journal rows for the same pair and rule id
+    # (LTP can chop across a level on every WS tick).
+    def alerts_analysis_price_cross_cooldown_seconds
+      v = alerts_analysis_section[:price_cross_cooldown_seconds]
+      return 0.0 if v.nil? || v.to_s.strip.empty?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      0.0
+    end
+
     def alerts_price_rules
       Array(alerts_section[:price_rules]).select { |r| r.is_a?(Hash) }
     end

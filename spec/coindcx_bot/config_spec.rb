@@ -77,6 +77,14 @@ RSpec.describe CoindcxBot::Config do
     expect(off.regime_enabled?).to be(false)
   end
 
+  it 'reads alerts.analysis.price_cross_cooldown_seconds' do
+    cfg = described_class.new(
+      minimal_bot_config(alerts: { analysis: { price_cross_cooldown_seconds: 120 } })
+    )
+    expect(cfg.alerts_analysis_price_cross_cooldown_seconds).to eq(120.0)
+    expect(described_class.new(minimal_bot_config).alerts_analysis_price_cross_cooldown_seconds).to eq(0.0)
+  end
+
   it 'defaults tui exchange position margins to [USDT, INR] when margin_currency_short_name is blank' do
     cfg = described_class.new(minimal_bot_config.merge(margin_currency_short_name: ''))
     expect(cfg.tui_exchange_positions_margin_currencies).to eq(%w[USDT INR])

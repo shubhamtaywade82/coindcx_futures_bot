@@ -219,6 +219,7 @@ runtime:
 #     regime_hmm_transitions: false    # analysis_regime_change after HMM decode changes
 #     regime_ai_updates: false         # analysis_regime_ai_update when Ollama label/prob delta exceeds threshold
 #     regime_ai_min_probability_delta: 10   # percentage points
+#     price_cross_cooldown_seconds: 300     # per pair + price rule: suppress analysis_price_cross while LTP chops one level
 #   price_rules:
 #     - pair: B-SOL_USDT
 #       id: sol_above_100

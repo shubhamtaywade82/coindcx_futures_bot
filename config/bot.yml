@@ -242,6 +242,8 @@ alerts:
     regime_hmm_transitions: true # analysis_regime_change when HMM decoded state/label changes
     regime_ai_updates: true # analysis_regime_ai_update when Ollama regime label or probability jumps enough
     regime_ai_min_probability_delta: 10 # percentage points (vs previous AI payload)
+    # Per pair + price rule id: skip further analysis_price_cross journal/Telegram rows while LTP chops the same level.
+    price_cross_cooldown_seconds: 300
   telegram:
     default_throttle_seconds: 60
     critical_throttle_seconds: 30

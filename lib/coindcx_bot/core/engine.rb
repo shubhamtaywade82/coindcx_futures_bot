@@ -104,6 +104,7 @@ module CoindcxBot
         @analysis_last_sig_fingerprint = {}
         @analysis_last_hmm_state = {}
         @analysis_price_rule_zone = {}
+        @price_cross_cooldown = Alerts::PriceCrossCooldown.new
         @regime_ai_mutex = Mutex.new
         @regime_ai_state = { updated_at: nil, payload: nil, error: nil }
         @regime_ai_brain = nil
@@ -1648,21 +1649,59 @@ module CoindcxBot
             ltp: ltp,
             last_side: @analysis_price_rule_zone
           )
+          cd = @config.alerts_analysis_price_cross_cooldown_seconds
+          now = Time.now
           events.each do |ev|
-            @journal.log_event(
-              'analysis_price_cross',
+            next unless @price_cross_cooldown.permit_emit?(
               pair: ev[:pair],
               rule_id: ev[:rule_id],
-              direction: ev[:direction],
-              price: ev[:price],
-              level: ev[:level],
-              label: ev[:label],
-              from_zone: ev[:from_zone],
-              to_zone: ev[:to_zone],
-              dedupe_key: "#{ev[:pair]}|#{ev[:rule_id]}|#{ev[:to_zone]}"
+              cooldown_seconds: cd,
+              now: now
+            )
+
+            ctx = analysis_context_for_price_cross(ev[:pair])
+            @journal.log_event(
+              'analysis_price_cross',
+              ev.merge(ctx).merge(dedupe_key: "#{ev[:pair]}|#{ev[:rule_id]}")
             )
           end
         end
+      end
+
+      def analysis_context_for_price_cross(pair)
+        pair_s = pair.to_s
+        out = {}
+        ls = @last_strategy_by_pair[pair_s]
+        if ls
+          out[:strategy_action] = ls[:action].to_s
+          out[:strategy_reason] = ls[:reason].to_s
+        end
+        if @hmm_runtime
+          st = @hmm_runtime.state_for(pair_s)
+          if st
+            out[:hmm_state_id] = st.state_id.to_s
+            out[:hmm_label] = st.label.to_s
+            out[:hmm_posterior_pct] = (st.probability * 100.0).round(2).to_s
+            out[:hmm_vol_rank] = "#{st.vol_rank}/#{st.vol_rank_total}"
+            out[:hmm_uncertain] = st.uncertainty ? 'true' : 'false'
+          end
+        end
+        snap = @regime_ai_mutex.synchronize { @regime_ai_state[:payload] }
+        if snap.is_a?(Hash)
+          ph = snap.transform_keys(&:to_sym)
+          lab = ph[:regime_label].to_s.strip
+          out[:regime_ai_label] = lab unless lab.empty?
+          pct = ph[:probability_pct]
+          unless pct.nil?
+            out[:regime_ai_probability_pct] =
+              if pct.is_a?(Numeric)
+                pct.round(2).to_s('F')
+              else
+                pct.to_s.strip
+              end
+          end
+        end
+        out
       end
 
       def maybe_log_regime_ai_transition!(prev_payload, new_payload)
