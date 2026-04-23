@@ -175,6 +175,7 @@ execution:
     # leverage: 5   # optional; TUI/header fall back to risk.max_leverage when omitted
 
 # Three ways to run: paper (dry_run true) vs live observe (dry_run false + place_orders false) vs live trading — docs/operating_modes.md
+# Convenience (always `bin/bot tui`): bin/start-dry-run (COINDCX_DRY_RUN=1) and bin/start-live (COINDCX_DRY_RUN=0, PLACE_ORDERS=0 unless set).
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 120
@@ -191,9 +192,10 @@ runtime:
   ws_shutdown_join_seconds: 45
   # Paper trading: no futures orders / account exits (set false only for live after risk checks).
   dry_run: true
-  # Live only (dry_run: false): false = live feeds + read-only APIs, no order/exit REST. Default true. Override: PLACE_ORDER=0
+  # Live only (dry_run: false): false = live feeds + read-only APIs, no order/exit REST. Default true if omitted.
+  # Override env (live only): PLACE_ORDER=0/1 or PLACE_ORDERS=0/1 (PLACE_ORDER wins if both set). bin/start-live defaults PLACE_ORDERS=0.
   # place_orders: true
-  # With place_orders false (or PLACE_ORDER=0), TUI mirrors CoinDCX futures positions + wallet into the desk (needs tui_exchange_positions: true).
+  # With place_orders false (or PLACE_ORDER/PLACE_ORDERS=0), TUI mirrors CoinDCX futures positions + wallet into the desk (needs tui_exchange_positions: true).
   # Live + place_orders true: set true to mirror exchange rows anyway (optional).
   # tui_exchange_mirror: true
   # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.

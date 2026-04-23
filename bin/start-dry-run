@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Paper mode: always starts the TUI. Sets COINDCX_DRY_RUN=1 (overrides bot.yml).
+# Usage: bin/start-dry-run
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+export COINDCX_DRY_RUN=1
+
+if [ "$#" -gt 0 ]; then
+  echo "[start-dry-run] ignoring extra arguments (this launcher always runs tui): $*" >&2
+fi
+
+exec bundle exec ruby "$ROOT/bin/bot" tui

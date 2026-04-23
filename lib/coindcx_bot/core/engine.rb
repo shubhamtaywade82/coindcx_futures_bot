@@ -402,16 +402,13 @@ module CoindcxBot
         features_by_pair = build_regime_ai_features_by_pair(pairs)
         omit_raw = @config.regime_ai_omit_raw_bars_when_feature_packet?
         candles_by_pair =
-          if omit_raw && features_by_pair.any?
-            pairs.to_h { |p| [p, []] }
-          else
-            pairs.to_h do |p|
-              arr = Array(@candles_exec[p]).last(n)
-              rows = arr.map do |c|
-                { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
-              end
-              [p, rows]
+          pairs.to_h do |p|
+            arr = Array(@candles_exec[p]).last(n)
+            rows = arr.map do |c|
+              { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
             end
+            rows = [] if omit_raw && features_by_pair.key?(p)
+            [p, rows]
           end
         {
           pairs: pairs,

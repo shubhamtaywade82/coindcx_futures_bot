@@ -262,8 +262,8 @@ module CoindcxBot
 
         Environment: COINDCX_API_KEY, COINDCX_API_SECRET (optional: .env / .env.local in repo root)
         Config: config/bot.yml (see config/bot.yml.example)
-        Paper trading: runtime.dry_run: true — journals positions, no exchange orders
-        Live observe: runtime.dry_run: false and runtime.place_orders: false (or PLACE_ORDER=0) — live feeds + read-only APIs; no order/exit REST
+        Paper trading: runtime.dry_run: true — journals positions, no exchange orders (or: bin/start-dry-run → always tui)
+        Live observe: runtime.dry_run: false and runtime.place_orders: false (or PLACE_ORDER=0 / PLACE_ORDERS=0) — live feeds + read-only APIs; no order/exit REST (or: bin/start-live → always tui; PLACE_ORDERS=1 to allow orders)
         TUI: runtime.tui_exchange_positions: true — read-only CoinDCX futures positions strip (list API only; see bot.yml.example)
         CoinDCX-shaped paper exchange: run bin/paper-exchange (see config/bot.yml.example paper_exchange)
 

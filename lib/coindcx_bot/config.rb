@@ -39,6 +39,7 @@ module CoindcxBot
       validate_risk_capital_pct!
       validate_runtime_no_legacy_paper_flag!
       validate_meta_first_win!
+      apply_coindcx_env_runtime_overrides!
     end
 
     def scalper_mode?
@@ -439,12 +440,13 @@ module CoindcxBot
 
     # Live (+dry_run: false+) only: when false, the engine uses live feeds and read-only account APIs but does not
     # place or exit futures orders. Ignored in paper (+dry_run: true+). YAML +runtime.place_orders+; env +PLACE_ORDER+
-    # overrides when set (true/false/1/0).
+    # or +PLACE_ORDERS+ overrides when set (true/false/1/0). +PLACE_ORDER+ wins if both are set.
     def place_orders?
       return true if dry_run?
 
       raw_place = runtime[:place_orders]
       env_place = ENV['PLACE_ORDER'].to_s.strip
+      env_place = ENV['PLACE_ORDERS'].to_s.strip if env_place.empty?
       v = env_place.empty? ? raw_place : env_place
       return true if v.nil?
 
@@ -776,6 +778,15 @@ module CoindcxBot
     class ConfigurationError < StandardError; end
 
     private
+
+    # Startup helpers (+bin/start-dry-run+, +bin/start-live+; both always run +bin/bot tui+): overrides +runtime.dry_run+ from YAML.
+    def apply_coindcx_env_runtime_overrides!
+      v = ENV['COINDCX_DRY_RUN'].to_s.strip
+      return if v.empty?
+
+      @raw[:runtime] ||= {}
+      @raw[:runtime][:dry_run] = truthy?(v)
+    end
 
     # Fills in missing keys only (user YAML always wins on explicit keys).
     def deep_merge_defaults(base, defaults)

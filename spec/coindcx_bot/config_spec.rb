@@ -248,6 +248,43 @@ RSpec.describe CoindcxBot::Config do
     prev.nil? ? ENV.delete('PLACE_ORDER') : ENV['PLACE_ORDER'] = prev
   end
 
+  it 'lets PLACE_ORDERS env override YAML when live and PLACE_ORDER is unset' do
+    prev_o = ENV['PLACE_ORDER']
+    prev_os = ENV['PLACE_ORDERS']
+    ENV.delete('PLACE_ORDER')
+    ENV['PLACE_ORDERS'] = '0'
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3', place_orders: true })
+    )
+    expect(cfg.place_orders?).to be(false)
+  ensure
+    prev_o.nil? ? ENV.delete('PLACE_ORDER') : ENV['PLACE_ORDER'] = prev_o
+    prev_os.nil? ? ENV.delete('PLACE_ORDERS') : ENV['PLACE_ORDERS'] = prev_os
+  end
+
+  it 'prefers PLACE_ORDER over PLACE_ORDERS when both are set' do
+    prev_o = ENV['PLACE_ORDER']
+    prev_os = ENV['PLACE_ORDERS']
+    ENV['PLACE_ORDER'] = '0'
+    ENV['PLACE_ORDERS'] = '1'
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3', place_orders: true })
+    )
+    expect(cfg.place_orders?).to be(false)
+  ensure
+    prev_o.nil? ? ENV.delete('PLACE_ORDER') : ENV['PLACE_ORDER'] = prev_o
+    prev_os.nil? ? ENV.delete('PLACE_ORDERS') : ENV['PLACE_ORDERS'] = prev_os
+  end
+
+  it 'lets COINDCX_DRY_RUN override runtime.dry_run from YAML' do
+    prev = ENV['COINDCX_DRY_RUN']
+    ENV['COINDCX_DRY_RUN'] = '1'
+    cfg = described_class.new(minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3' }))
+    expect(cfg.dry_run?).to be(true)
+  ensure
+    prev.nil? ? ENV.delete('COINDCX_DRY_RUN') : ENV['COINDCX_DRY_RUN'] = prev
+  end
+
   it 'fx_enabled? defaults true when fx section absent' do
     cfg = described_class.new(minimal_bot_config)
     expect(cfg.fx_enabled?).to be(true)

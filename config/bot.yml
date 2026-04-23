@@ -5,7 +5,7 @@
 # Live trading:     runtime.dry_run: false + runtime.place_orders: true
 #                   (ONLY enable after paper validation + risk checks)
 #
-# Env overrides: COINDCX_BOT_CONFIG, PLACE_ORDER=0/1, COINDCX_STRATEGY_SIGNALS=1
+# Env overrides: COINDCX_BOT_CONFIG, COINDCX_DRY_RUN=0/1, PLACE_ORDER / PLACE_ORDERS=0/1, COINDCX_STRATEGY_SIGNALS=1
 
 margin_currency_short_name: USDT
 
@@ -154,7 +154,7 @@ runtime:
   ws_shutdown_join_seconds: 45
 
   # Paper mode: in-process PaperBroker, no exchange order/account REST calls.
-  dry_run: true
+  dry_run: false
 
   # Live only (dry_run: false): false = read-only account APIs, NO order placement.
   # Override via env: PLACE_ORDER=0 or PLACE_ORDER=false
