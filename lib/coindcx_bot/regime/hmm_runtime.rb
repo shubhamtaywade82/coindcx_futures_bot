@@ -38,7 +38,7 @@ module CoindcxBot
         return {} if pair.nil?
 
         st = state_for(pair)
-        return {} if st.nil?
+        return tui_overlay_waiting(pair) if st.nil?
 
         tier = Allocation.vol_tier(st.vol_rank, st.vol_rank_total)
         {
@@ -86,12 +86,32 @@ module CoindcxBot
 
       private
 
+      # Prefer the TUI focus pair when it is a configured instrument — do not substitute another pair's
+      # HMM state (that caused FOCUS: ETH while the strip showed SOL's regime).
       def resolve_overlay_primary_pair(primary_pair)
-        candidates = []
         p = primary_pair.to_s.strip
-        candidates << p unless p.empty?
-        @config.pairs.each { |x| candidates << x.to_s }
-        candidates.compact.uniq.find { |pair| state_for(pair) }
+        configured = @config.pairs.map(&:to_s)
+        return p if !p.empty? && configured.include?(p)
+
+        configured.find { |pair| state_for(pair) }
+      end
+
+      def tui_overlay_waiting(pair)
+        {
+          active: false,
+          enabled: true,
+          regime_pair: pair,
+          label: '—',
+          probability_pct: nil,
+          stability_bars: nil,
+          flicker_display: 'n/a',
+          confirmed: nil,
+          vol_rank_display: 'n/a',
+          transition_display: 'n/a',
+          quant_display: '—',
+          hmm_display: 'HMM: warming up (need bars)',
+          status: 'PIPE:WAIT'
+        }
       end
 
       def hmm_state_slice(st)
