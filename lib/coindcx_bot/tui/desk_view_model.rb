@@ -274,10 +274,18 @@ module CoindcxBot
         @config.respond_to?(:tui_exchange_mirror?) && @config.tui_exchange_mirror? && !@snap.dry_run
       end
 
+      # Live + +tui_exchange_mirror?+: the grid reflects **CoinDCX list_positions only** — not the SQLite journal.
+      # Merging journal underneath caused paper/dry-run rows to appear as "live" when the account was flat or
+      # when the REST poll failed after switching modes. On poll failure we still avoid journal fill-in (sidebar
+      # shows EXCH ERR); journal remains the engine's source of truth for strategy/risk elsewhere.
       def positions_index_for_execution
-        idx = index_positions(@snap.positions)
-        return idx unless mirror_live_account?
+        return index_positions(@snap.positions) unless mirror_live_account?
 
+        build_exchange_positions_index_for_grid
+      end
+
+      def build_exchange_positions_index_for_grid
+        idx = {}
         Array(@snap.exchange_positions).each do |row|
           next unless CoindcxBot::Tui::LiveAccountMirror.row_open?(row)
 

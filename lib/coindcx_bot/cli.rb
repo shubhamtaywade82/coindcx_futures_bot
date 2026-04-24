@@ -141,7 +141,6 @@ module CoindcxBot
       pairs = config.pairs
       exec_res = config.strategy.fetch(:execution_resolution, '15m').to_s
       htf_res = config.strategy.fetch(:higher_timeframe_resolution, '1h').to_s
-      n = 24
       lookback = config.runtime.fetch(:candle_lookback, 120).to_i
       mult = Core::Engine.resolution_seconds(exec_res)
       to = Time.now.to_i
@@ -154,10 +153,7 @@ module CoindcxBot
           warn "candles #{p} #{exec_res}: #{res.message}"
           next
         end
-        arr = Array(res.value).last(n)
-        candles_by_pair[p] = arr.map do |c|
-          { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
-        end
+        candles_by_pair[p] = Array(res.value)
       end
 
       if candles_by_pair.empty?
@@ -166,13 +162,15 @@ module CoindcxBot
         return false
       end
 
-      ctx = {
+      ctx = SmcSetup::PlannerContext.build(
         pairs: pairs,
         candles_by_pair: candles_by_pair,
         open_count: journal.open_positions.size,
         exec_resolution: exec_res,
-        htf_resolution: htf_res
-      }
+        htf_resolution: htf_res,
+        strategy_cfg: config.strategy,
+        config: config
+      )
 
       brain = SmcSetup::PlannerBrain.new(config: config, logger: logger)
       result = brain.plan!(ctx)

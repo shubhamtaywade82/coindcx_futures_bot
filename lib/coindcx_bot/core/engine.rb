@@ -585,21 +585,16 @@ module CoindcxBot
 
       def build_smc_planner_context
         pairs = @config.pairs
-        n = 24
-        candles_by_pair = pairs.to_h do |p|
-          arr = Array(@candles_exec[p]).last(n)
-          rows = arr.map do |c|
-            { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
-          end
-          [p, rows]
-        end
-        {
+        candles_full = pairs.to_h { |p| [p, Array(@candles_exec[p])] }
+        SmcSetup::PlannerContext.build(
           pairs: pairs,
-          candles_by_pair: candles_by_pair,
+          candles_by_pair: candles_full,
           open_count: @journal.open_positions.size,
           exec_resolution: @exec_res,
-          htf_resolution: @htf_res
-        }
+          htf_resolution: @htf_res,
+          strategy_cfg: @config.strategy,
+          config: @config
+        )
       end
 
       def smc_setup_skip_strategy_entries?(pair)

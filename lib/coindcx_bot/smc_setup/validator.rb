@@ -45,6 +45,20 @@ module CoindcxBot
           raise ValidationError, 'leverage out of range' unless lev.positive? && lev <= 125
         end
 
+        if h.key?(:valid_for_minutes) && !blank?(h[:valid_for_minutes])
+          vfm = Integer(h[:valid_for_minutes])
+          raise ValidationError, 'valid_for_minutes must be positive' unless vfm.positive?
+        end
+
+        if h.key?(:invalidation_level) && !blank?(h[:invalidation_level])
+          raise ValidationError, 'invalidation_level must be numeric' unless numeric?(h[:invalidation_level])
+        end
+
+        nt = deep_symbolize(cond[:no_trade_zone] || {})
+        if nt.any? { |_k, v| !blank?(v) }
+          raise ValidationError, 'conditions.no_trade_zone requires min and max' unless numeric?(nt[:min]) && numeric?(nt[:max])
+        end
+
         true
       end
 

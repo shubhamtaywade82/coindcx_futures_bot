@@ -10,14 +10,19 @@ module CoindcxBot
     class PlannerBrain
       SYSTEM_PROMPT = <<~PROMPT.gsub(/\s+/, ' ').strip.freeze
         You are an SMC-style trade planner for CoinDCX USDT-M perpetual futures.
-        Use only OHLCV summaries and levels provided. No web search, no invented prices.
-        Return a single JSON object matching schema_version 1 with keys:
-        schema_version (integer 1), setup_id (unique string), pair (instrument code),
-        direction (long or short), optional leverage, optional gatekeeper (boolean),
-        conditions with sweep_zone and entry_zone (each min/max numbers) and optional confirmation_required (array of strings:
-        choch_bull, choch_bear, choch_up, choch_down, bos_bull, bos_bear, displacement, displacement_bull, displacement_bear),
-        execution with sl (stop loss price number) and optional targets array and optional risk_usdt.
-        Zones must use realistic prices from the data. setup_id must be new and unique per call.
+        Input per pair: market_state JSON (structure, liquidity, smc with displacement/inducement/mitigation/OBs/FVG,
+        volume_profile, volatility, mean, orderflow flags, state) plus optional ohlcv_features and a short OHLCV tail.
+        Use ONLY provided fields. orderflow.exchange_delta_available is false: do not claim delta/CVD.
+        Prefer setups when smc.displacement.present is true, liquidity.event is not none OR state.is_post_sweep is true,
+        and smc.mitigation.status is untouched or partial with a real OB zone. If edge is weak, return JSON with
+        conservative zones and short valid_for_minutes (still valid schema).
+
+        Return exactly one JSON object: schema_version 1, setup_id (unique per call), pair, direction long or short,
+        optional valid_for_minutes and/or expires_at (ISO8601 UTC), optional invalidation_level (long: void at or below;
+        short: void at or above), optional conditions.no_trade_zone {min, max}, conditions.sweep_zone and entry_zone
+        {min, max}, confirmation_required (choch_bull, choch_bear, bos_bull, bos_bear, displacement, displacement_bull,
+        displacement_bear), execution.sl, optional targets, optional risk_usdt, optional leverage, optional gatekeeper.
+        Zones and SL must be justified by market_state or OHLCV tail closes.
       PROMPT
 
       Result = Struct.new(:ok, :payload, :error_message, keyword_init: true)
@@ -66,11 +71,27 @@ module CoindcxBot
 
       def build_user_message(context)
         lines = []
+        lines << 'Analyze the following structured market state for crypto futures (CoinDCX).'
         lines << "Execution TF: #{context[:exec_resolution]}. HTF: #{context[:htf_resolution]}."
         lines << "Open positions: #{context[:open_count].to_i}."
+
+        ms = context[:market_state_by_pair] || {}
+        feat = context[:features_by_pair] || {}
+
         Array(context[:pairs]).each do |p|
-          lines << "Pair #{p}: exec OHLCV tail: #{JSON.generate(context.dig(:candles_by_pair, p) || [])}"
+          lines << "--- Pair #{p} ---"
+          if ms[p]
+            lines << "market_state:"
+            lines << JSON.pretty_generate(ms[p])
+          end
+          if feat[p] && !feat[p].empty?
+            lines << 'ohlcv_features (deterministic, no true order flow):'
+            lines << JSON.pretty_generate(feat[p])
+          end
+          tail = context.dig(:candles_by_pair, p) || []
+          lines << "recent_ohlcv_tail: #{JSON.generate(tail)}" unless tail.empty?
         end
+
         lines.join("\n")
       end
 

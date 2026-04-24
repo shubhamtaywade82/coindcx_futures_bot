@@ -37,4 +37,19 @@ RSpec.describe CoindcxBot::SmcSetup::Validator do
     h[:execution] = { sl: nil }
     expect { described_class.validate!(h) }.to raise_error(described_class::ValidationError, /execution.sl/)
   end
+
+  it 'accepts optional invalidation_level and no_trade_zone' do
+    h = valid_hash.merge(
+      invalidation_level: 88.5,
+      conditions: valid_hash[:conditions].merge(no_trade_zone: { min: 50, max: 52 })
+    )
+    expect { described_class.validate!(h) }.not_to raise_error
+  end
+
+  it 'rejects partial no_trade_zone' do
+    h = valid_hash.merge(
+      conditions: valid_hash[:conditions].merge(no_trade_zone: { min: 50 })
+    )
+    expect { described_class.validate!(h) }.to raise_error(described_class::ValidationError, /no_trade_zone/)
+  end
 end

@@ -12,7 +12,10 @@ module CoindcxBot
 
       SYSTEM_PROMPT = <<~PROMPT.gsub(/\s+/, ' ').strip.freeze
         You are a disciplined crypto USDT-M perpetual futures regime analyst for a multi-pair bot.
-        Use only the OHLCV and position summary provided. No web search, no invented prices.
+        Use only the OHLCV and the open_positions_json array in the user message. No web search, no invented prices.
+        The open_positions_json array is authoritative: when you mention an open position you MUST use the exact
+        pair, side, entry_price, and quantity from that array. If the array is empty the book is flat — never
+        describe an open long or short. Do not contradict those fields under any circumstances.
         Return a single JSON object with these keys (all required):
         regime_label (short string, e.g. TREND_UP, TREND_DOWN, RANGING, HIGH_VOL, LOW_VOL, TRANSITION),
         probability_pct (0-100 number, confidence in regime_label),
@@ -27,7 +30,9 @@ module CoindcxBot
 
       SYSTEM_PROMPT_WITH_HMM = <<~PROMPT.gsub(/\s+/, ' ').strip.freeze
         You review OHLCV plus a **quantitative HMM regime summary** already computed by the bot.
-        Narrate agreement or tension with that summary in your notes; do not invent different state probabilities.
+        The user message includes open_positions_json: it is authoritative for open positions (exact pair, side,
+        entry_price, quantity). If empty, the book is flat. Never invent or flip position side versus that JSON.
+        Narrate agreement or tension with the HMM in your notes; do not invent different state probabilities.
         Same JSON keys as the base analyst (regime_label, probability_pct, stability_bars, flicker_hint, confirmed,
         vol_rank, vol_rank_total, transition_summary, notes). If you disagree with the HMM, say so briefly in notes
         and set confirmed to false.
@@ -188,8 +193,8 @@ module CoindcxBot
       def build_user_message(context)
         lines = []
         lines << "Execution timeframe: #{context[:exec_resolution]}. Higher timeframe: #{context[:htf_resolution]}."
-        lines << 'Open positions (journal):'
-        Array(context[:positions]).each { |pos| lines << pos.inspect }
+        lines << 'open_positions_json (authoritative; [] means flat book):'
+        lines << JSON.generate(self.class.serialize_open_positions(Array(context[:positions])))
         lines << ''
         feats = context[:features_by_pair]
         if feats.is_a?(Hash) && feats.any?
@@ -215,6 +220,40 @@ module CoindcxBot
         end
         lines << 'Respond with ONLY the JSON object, no markdown fences.'
         lines.join("\n")
+      end
+
+      def self.serialize_open_positions(rows)
+        Array(rows).filter_map { |raw| serialize_one_open_position(raw) }
+      end
+
+      def self.serialize_one_open_position(raw)
+        return nil unless raw.is_a?(Hash)
+
+        h = raw.transform_keys { |k| k.to_sym }
+        pair = h[:pair].to_s.strip
+        return nil if pair.empty?
+
+        side = h[:side].to_s.strip.downcase
+        out = {
+          pair: pair,
+          side: side,
+          entry_price: h[:entry_price].to_s.strip,
+          quantity: h[:quantity].to_s.strip
+        }
+        pid = (h[:id] || h[:position_id])&.to_s&.strip
+        out[:position_id] = pid if pid && !pid.empty?
+
+        optional_position_fields(h, out)
+        out
+      end
+
+      def self.optional_position_fields(h, out)
+        %i[stop_price trail_price initial_stop_price peak_ltp].each do |k|
+          v = h[k]
+          next if v.nil? || v.to_s.strip.empty?
+
+          out[k] = v.to_s.strip
+        end
       end
 
       def normalize_payload(h)

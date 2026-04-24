@@ -172,6 +172,13 @@ smc_setup:
   auto_execute: false
   gatekeeper_enabled: false
   disable_strategy_entries: false
+  planner_enabled: true  # Ollama → TradeSetup; uses deterministic market_state + optional ohlcv_features
+  planner_include_market_state: true
+  planner_include_ohlcv_features: true
+  planner_min_candles: 30
+  planner_ohlcv_tail: 12
+  planner_tz_offset_minutes: 0
+  lifecycle_enabled: true  # time expiry + optional no_trade_zone / invalidation_level from planner JSON
   model: llama3.2:3b
   ollama_base_url: http://127.0.0.1:11434
   timeout_seconds: 90

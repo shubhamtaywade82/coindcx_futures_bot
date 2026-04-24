@@ -55,6 +55,29 @@ RSpec.describe CoindcxBot::Config do
     expect(cfg2.regime_ai_omit_raw_bars_when_feature_packet?).to be(true)
   end
 
+  it 'reads smc_setup planner context and lifecycle flags when planner is enabled' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        smc_setup: {
+          enabled: true,
+          planner_enabled: true,
+          planner_include_market_state: false,
+          planner_include_ohlcv_features: false,
+          planner_min_candles: 40,
+          planner_ohlcv_tail: 10,
+          planner_tz_offset_minutes: 30,
+          lifecycle_enabled: false
+        }
+      )
+    )
+    expect(cfg.smc_setup_planner_include_market_state?).to be(false)
+    expect(cfg.smc_setup_planner_include_ohlcv_features?).to be(false)
+    expect(cfg.smc_setup_planner_min_candles).to eq(40)
+    expect(cfg.smc_setup_planner_ohlcv_tail).to eq(10)
+    expect(cfg.smc_setup_planner_tz_offset_minutes).to eq(30)
+    expect(cfg.smc_setup_lifecycle_enabled?).to be(false)
+  end
+
   it 'reads smc_setup gatekeeper_include_feature_packet only when gatekeeper is enabled' do
     off = described_class.new(
       minimal_bot_config(

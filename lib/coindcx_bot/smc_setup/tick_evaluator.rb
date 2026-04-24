@@ -39,6 +39,23 @@ module CoindcxBot
               rec = @store.record_by_id(setup_id)
               break unless rec
 
+              if invalidate_for_lifecycle!(rec, pair, ltp)
+                break
+              end
+
+              if rec.state != States::ACTIVE && rec.trade_setup.expired?
+                @logger&.info("[smc_setup] #{setup_id} expired at #{rec.trade_setup.expires_at}")
+                rec.state = States::INVALIDATED
+                @store.persist_record!(rec)
+                @journal.log_event(
+                  'smc_setup_invalidated',
+                  setup_id: setup_id,
+                  pair: pair.to_s,
+                  reason: 'time_expired'
+                )
+                break
+              end
+
               cont = run_step(
                 rec,
                 pair: pair,
@@ -55,6 +72,40 @@ module CoindcxBot
       end
 
       private
+
+      def invalidate_for_lifecycle!(rec, pair, ltp)
+        return false unless @config.smc_setup_lifecycle_enabled?
+        return false if States::TERMINAL.include?(rec.state)
+
+        ts = rec.trade_setup
+        if ltp
+          p = BigDecimal(ltp.to_s)
+          if ts.in_no_trade_zone?(p)
+            rec.state = States::INVALIDATED
+            @store.persist_record!(rec)
+            @journal.log_event(
+              'smc_setup_invalidated',
+              setup_id: rec.setup_id,
+              pair: pair.to_s,
+              reason: 'no_trade_zone'
+            )
+            return true
+          end
+          if ts.breached_invalidation?(p)
+            rec.state = States::INVALIDATED
+            @store.persist_record!(rec)
+            @journal.log_event(
+              'smc_setup_invalidated',
+              setup_id: rec.setup_id,
+              pair: pair.to_s,
+              reason: 'invalidation_level'
+            )
+            return true
+          end
+        end
+
+        false
+      end
 
       def run_step(rec, pair:, ltp:, bar:, stale:, bars_json:, candles_exec:)
         case rec.state

@@ -380,6 +380,36 @@ module CoindcxBot
       smc_setup_section.fetch(:gatekeeper_feature_tz_offset_minutes, 0).to_i
     end
 
+    def smc_setup_planner_include_market_state?
+      return false unless smc_setup_planner_enabled?
+
+      truthy?(smc_setup_section.fetch(:planner_include_market_state, true))
+    end
+
+    def smc_setup_planner_include_ohlcv_features?
+      return false unless smc_setup_planner_enabled?
+
+      truthy?(smc_setup_section.fetch(:planner_include_ohlcv_features, true))
+    end
+
+    def smc_setup_planner_min_candles
+      n = smc_setup_section.fetch(:planner_min_candles, 30).to_i
+      [[n, 20].max, 500].min
+    end
+
+    def smc_setup_planner_ohlcv_tail
+      n = smc_setup_section.fetch(:planner_ohlcv_tail, 12).to_i
+      [[n, 4].max, 48].min
+    end
+
+    def smc_setup_planner_tz_offset_minutes
+      smc_setup_section.fetch(:planner_tz_offset_minutes, 0).to_i
+    end
+
+    def smc_setup_lifecycle_enabled?
+      smc_setup_enabled? && truthy?(smc_setup_section.fetch(:lifecycle_enabled, true))
+    end
+
     def regime_hmm_section
       rs = regime_section
       return {} unless rs.is_a?(Hash)

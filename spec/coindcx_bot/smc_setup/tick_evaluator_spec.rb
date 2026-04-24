@@ -85,6 +85,53 @@ RSpec.describe CoindcxBot::SmcSetup::TickEvaluator do
     expect(row.state).to eq(CoindcxBot::SmcSetup::States::ARMED_ENTRY)
   end
 
+  it 'invalidates when LTP sits in conditions.no_trade_zone and lifecycle is enabled' do
+    store.upsert_from_hash!(
+      {
+        schema_version: 1,
+        setup_id: 'ntz-1',
+        pair: 'B-SOL_USDT',
+        direction: 'long',
+        conditions: {
+          sweep_zone: { min: 40, max: 120 },
+          entry_zone: { min: 90, max: 102 },
+          no_trade_zone: { min: 94.5, max: 95.5 },
+          confirmation_required: []
+        },
+        execution: { sl: 30.0 }
+      }
+    )
+    store.reload!
+
+    cfg = CoindcxBot::Config.new(
+      minimal_bot_config(
+        pairs: %w[B-SOL_USDT],
+        smc_setup: { enabled: true, auto_execute: true, sweep_consecutive_ticks: 1, lifecycle_enabled: true }
+      )
+    )
+    ev = described_class.new(
+      config: cfg,
+      journal: journal,
+      coordinator: coord,
+      risk: CoindcxBot::Risk::Manager.new(config: cfg, journal: journal, exposure_guard: guard, fx: fx),
+      store: store,
+      logger: nil,
+      smc_configuration: smc_cfg,
+      regime_sizer: nil,
+      setup_mutex_factory: ->(id) { setup_mutexes[id] }
+    )
+
+    ev.evaluate_pair!(
+      pair: 'B-SOL_USDT',
+      ltp: BigDecimal('95.0'),
+      candles_exec: dto_candles(100),
+      stale: false
+    )
+
+    row = store.record_by_id('ntz-1')
+    expect(row.state).to eq(CoindcxBot::SmcSetup::States::INVALIDATED)
+  end
+
   it 'does not call apply twice when journal already has the setup id open' do
     journal.insert_position(
       pair: 'B-SOL_USDT',

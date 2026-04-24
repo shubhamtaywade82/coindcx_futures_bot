@@ -17,6 +17,50 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
       expect(msg).to include('OHLCV feature packets')
       expect(msg).to include('B-SOL_USDT')
     end
+
+    it 'embeds authoritative open_positions_json instead of Ruby inspect' do
+      ctx = {
+        exec_resolution: '15m',
+        htf_resolution: '1h',
+        positions: [
+          { pair: 'B-SOL_USDT', side: 'long', entry_price: '85.63', quantity: '227.19', id: 42, stop_price: '80' }
+        ],
+        pairs: %w[B-SOL_USDT],
+        candles_by_pair: { 'B-SOL_USDT' => [{ o: 1, h: 2, l: 1, c: 1.5, v: 1 }] }
+      }
+      msg = brain.send(:build_user_message, ctx)
+      expect(msg).to include('open_positions_json')
+      expect(msg).not_to include(':side=>')
+      parsed = msg.lines.find { |l| l.strip.start_with?('[') }
+      expect(JSON.parse(parsed.strip)).to contain_exactly(
+        a_hash_including(
+          'pair' => 'B-SOL_USDT',
+          'side' => 'long',
+          'entry_price' => '85.63',
+          'quantity' => '227.19',
+          'position_id' => '42',
+          'stop_price' => '80'
+        )
+      )
+    end
+  end
+
+  describe '.serialize_open_positions' do
+    it 'drops rows without a pair and normalizes string keys' do
+      rows = [
+        { 'pair' => 'B-ETH_USDT', 'side' => 'SHORT', 'entry_price' => '2300', 'quantity' => '1', 'id' => 7 },
+        { 'pair' => '', 'side' => 'long' }
+      ]
+      expect(described_class.serialize_open_positions(rows)).to contain_exactly(
+        {
+          position_id: '7',
+          pair: 'B-ETH_USDT',
+          side: 'short',
+          entry_price: '2300',
+          quantity: '1'
+        }
+      )
+    end
   end
 
   describe '.overlay_from_state' do
