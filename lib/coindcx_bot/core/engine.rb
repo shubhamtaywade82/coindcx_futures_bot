@@ -356,6 +356,7 @@ module CoindcxBot
             @regime_ai_state[:payload] = res.payload
             @regime_ai_state[:error] = nil
           else
+            @regime_ai_state[:payload] = nil
             @regime_ai_state[:error] = res.error_message
           end
         end

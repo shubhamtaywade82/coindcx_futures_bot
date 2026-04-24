@@ -59,8 +59,8 @@ module CoindcxBot
       end
 
       def upsert_from_hash!(hash, reset_state: false)
-        Validator.validate!(hash)
-        ts = TradeSetup.from_hash(Validator.deep_symbolize(hash))
+        h = Validator.validate!(hash)
+        ts = TradeSetup.from_hash(h)
         @lock.synchronize do
           existing = @journal.smc_setup_get_row(ts.setup_id)
           unless existing
@@ -161,8 +161,8 @@ module CoindcxBot
       def build_record(row)
         row = row.transform_keys(&:to_sym) if row.keys.first.is_a?(String)
         payload = JSON.parse(row[:payload].to_s, symbolize_names: true)
-        Validator.validate!(payload)
-        ts = TradeSetup.from_hash(payload)
+        h = Validator.validate!(payload)
+        ts = TradeSetup.from_hash(h)
         ev = parse_eval_hash(row[:eval_state])
         StoredRecord.new(
           setup_id: row[:setup_id].to_s,

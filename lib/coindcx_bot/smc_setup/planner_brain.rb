@@ -14,15 +14,35 @@ module CoindcxBot
         volume_profile, volatility, mean, orderflow flags, state) plus optional ohlcv_features and a short OHLCV tail.
         Use ONLY provided fields. orderflow.exchange_delta_available is false: do not claim delta/CVD.
         Prefer setups when smc.displacement.present is true, liquidity.event is not none OR state.is_post_sweep is true,
-        and smc.mitigation.status is untouched or partial with a real OB zone. If edge is weak, return JSON with
-        conservative zones and short valid_for_minutes (still valid schema).
+        and smc.mitigation.status is untouched or partial with a real OB zone.
 
-        Return exactly one JSON object: schema_version 1, setup_id (unique per call), pair, direction long or short,
-        optional valid_for_minutes and/or expires_at (ISO8601 UTC), optional invalidation_level (long: void at or below;
-        short: void at or above), optional conditions.no_trade_zone {min, max}, conditions.sweep_zone and entry_zone
-        {min, max}, confirmation_required (choch_bull, choch_bear, bos_bull, bos_bear, displacement, displacement_bull,
-        displacement_bear), execution.sl, optional targets, optional risk_usdt, optional leverage, optional gatekeeper.
-        Zones and SL must be justified by market_state or OHLCV tail closes.
+        Return exactly one JSON object matching schema_version 1.
+        CRITICAL: conditions.sweep_zone {min, max} and conditions.entry_zone {min, max} are REQUIRED.
+        If a sweep has ALREADY occurred, set sweep_zone {min, max} to include the current price so it triggers immediately.
+        If no trade is found, return a valid JSON with zones that are logically impossible to hit (e.g., extremely far away) or set valid_for_minutes to 1.
+
+        JSON structure:
+        {
+          "schema_version": 1,
+          "setup_id": "unique_string",
+          "pair": "B-SOL_USDT",
+          "direction": "long",
+          "valid_for_minutes": 60,
+          "invalidation_level": 82.5,
+          "conditions": {
+            "sweep_zone": { "min": 83.0, "max": 83.5 },
+            "entry_zone": { "min": 84.0, "max": 84.5 },
+            "no_trade_zone": { "min": 84.5, "max": 86.0 },
+            "confirmation_required": ["choch_bull", "displacement"]
+          },
+          "execution": {
+            "sl": 82.0,
+            "targets": [88.0, 90.0],
+            "risk_usdt": 10.0
+          }
+        }
+
+        Prices must be justified by market_state or OHLCV tail. setup_id must be new per call.
       PROMPT
 
       Result = Struct.new(:ok, :payload, :error_message, keyword_init: true)
@@ -49,8 +69,8 @@ module CoindcxBot
         raw = resp.content.to_s
         h = JsonSlice.parse_object(raw)
         h = unwrap_array_payload(h)
-        Validator.validate!(h)
-        Result.new(ok: true, payload: Validator.deep_symbolize(h), error_message: nil)
+        h = Validator.validate!(h)
+        Result.new(ok: true, payload: h, error_message: nil)
       rescue StandardError => e
         @logger&.warn("[smc_setup:planner] #{e.class}: #{e.message}")
         Result.new(ok: false, payload: nil, error_message: e.message.to_s)

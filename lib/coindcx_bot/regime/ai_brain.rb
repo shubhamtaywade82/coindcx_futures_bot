@@ -68,8 +68,8 @@ module CoindcxBot
           stream: false,
           options: { temperature: @config.regime_ai_temperature }
         )
-        raw = resp.content.to_s
-        hash = SmcSetup::JsonSlice.parse_object(raw)
+        raw = self.class.scrub_json_string(resp.content.to_s)
+        hash = parse_response_for_primary_pair(raw, context)
         payload = normalize_payload(hash)
         Result.new(ok: true, payload: payload, error_message: nil)
       rescue StandardError => e
@@ -223,6 +223,20 @@ module CoindcxBot
         else
           Ollama::Client.new(config: ollama_config_object)
         end
+      end
+
+      def parse_response_for_primary_pair(raw, context)
+        s = raw.to_s.strip
+        s = s.sub(/\A```(?:json)?\s*/i, '').sub(/```\s*\z/m, '')
+        if s.start_with?('[')
+          arr = JSON.parse(s, symbolize_names: true)
+          primary = Array(context[:pairs]).first.to_s
+          match = arr.find { |h| h.is_a?(Hash) && (h[:pair].to_s == primary || h['pair'].to_s == primary) }
+          return match || arr.find { |h| h.is_a?(Hash) } || {}
+        end
+        SmcSetup::JsonSlice.parse_object(raw)
+      rescue JSON::ParserError
+        SmcSetup::JsonSlice.parse_object(raw)
       end
 
       def build_user_message(context)
