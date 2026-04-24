@@ -26,5 +26,19 @@ module CoindcxBot
       :vol_rank_total,
       keyword_init: true
     )
+
+    # ML regime head: debounced class + per-bar raw argmax (control layer only — not entry direction).
+    MlRegimeState = Struct.new(
+      :label,
+      :class_index,
+      :probability,
+      :probabilities,
+      :tier,
+      :raw_label,
+      :raw_class_index,
+      :raw_max_probability,
+      :candle_index,
+      keyword_init: true
+    )
   end
 end

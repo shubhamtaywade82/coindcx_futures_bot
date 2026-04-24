@@ -251,6 +251,17 @@ runtime:
 #     flicker_threshold: 4
 #     min_confidence: 0.55
 #     retrain_every_bars: 0
+#   # Offline multinomial-logistic bundle (JSON) — same 6 causal z-scored columns as HMM features
+#   # (Regime::Features). Does not predict direction; maps regime class → vol tier for regime_hint / gating.
+#   # Train: scripts/train_ml_regime.py (see script docstring).
+#   # ml:
+#   #   enabled: false
+#   #   model_path: ./data/ml_regime_model.json
+#   #   scope: global              # global = one file; per_pair = ml_regime_model_<PAIR>.json beside stem
+#   #   zscore_lookback: 60
+#   #   confirm_bars: 3            # consecutive bars with same raw argmax before switching debounced label
+#   #   immediate_probability: 0.92 # switch early when softmax max prob reaches this
+#   #   tier_precedence: hmm_first # hmm_first | ml_first — which source supplies regime_hint[:tier] first
 #   strategy:
 #     block_entries_high_vol: true
 #     block_on_flicker: false

@@ -109,6 +109,7 @@ module CoindcxBot
         @regime_ai_state = { updated_at: nil, payload: nil, error: nil }
         @regime_ai_brain = nil
         @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
+        @ml_runtime = Regime::MlRuntime.new(config: @config, logger: @logger) if @config.regime_ml_enabled?
         @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
         @margin_sim = Risk::MarginSimulator.new(config: @config, logger: @logger)
         @daily_loss_flatten_warned = false
@@ -452,14 +453,43 @@ module CoindcxBot
       end
 
       def regime_hint_for(pair)
-        return nil unless @hmm_runtime
+        hmm_tier = nil
+        hmm_state = nil
+        if @hmm_runtime && (st = @hmm_runtime.state_for(pair))
+          hmm_state = st
+          hmm_tier = Regime::Allocation.vol_tier(st.vol_rank, st.vol_rank_total)
+        end
 
-        st = @hmm_runtime.state_for(pair)
-        return nil unless st
+        ml_hash = ml_regime_hint_slice(pair)
+
+        return nil if hmm_tier.nil? && ml_hash.nil?
+
+        prec = @config.regime_ml_tier_precedence
+        tier = if prec == 'ml_first'
+                 (ml_hash && ml_hash[:tier]) || hmm_tier
+               else
+                 hmm_tier || (ml_hash && ml_hash[:tier])
+               end
+
+        out = { tier: tier, state: hmm_state }
+        out[:ml] = ml_hash if ml_hash
+        out
+      end
+
+      def ml_regime_hint_slice(pair)
+        return nil unless @ml_runtime
+
+        ml = @ml_runtime.state_for(pair)
+        return nil unless ml
 
         {
-          tier: Regime::Allocation.vol_tier(st.vol_rank, st.vol_rank_total),
-          state: st
+          label: ml.label,
+          class_index: ml.class_index,
+          probability: ml.probability,
+          tier: ml.tier,
+          raw_label: ml.raw_label,
+          raw_class_index: ml.raw_class_index,
+          raw_max_probability: ml.raw_max_probability
         }
       end
 
@@ -1009,6 +1039,7 @@ module CoindcxBot
         @daily_loss_flatten_warned = false unless @risk.daily_loss_breached?
         load_candles
         @hmm_runtime&.refresh!(@candles_exec)
+        @ml_runtime&.refresh!(@candles_exec)
         emit_regime_hmm_transitions!
         seed_tracker_from_last_candle_if_no_ltp
         refresh_tracker_from_exec_candle_when_ws_stale

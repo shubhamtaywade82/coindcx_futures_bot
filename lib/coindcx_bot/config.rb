@@ -411,6 +411,58 @@ module CoindcxBot
       regime_hmm_section.fetch(:scope, 'per_pair').to_s.strip.downcase
     end
 
+    def regime_ml_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:ml, {})
+    end
+
+    def regime_ml_enabled?
+      regime_enabled? && truthy?(regime_ml_section[:enabled])
+    end
+
+    def regime_ml_hash
+      regime_ml_section
+    end
+
+    def regime_ml_model_path_for(pair = nil)
+      base = regime_ml_section.fetch(:model_path, './data/ml_regime_model.json').to_s
+      expanded = File.expand_path(base, Dir.pwd)
+      scope = regime_ml_section.fetch(:scope, 'global').to_s.strip.downcase
+      return expanded if scope == 'global' || pair.nil? || pair.to_s.strip.empty?
+
+      dir = File.dirname(expanded)
+      stem = File.basename(expanded, '.*')
+      ext = File.extname(expanded)
+      ext = '.json' if ext.empty?
+      File.join(dir, "#{stem}_#{pair}#{ext}")
+    end
+
+    def regime_ml_scope_global?
+      regime_ml_section.fetch(:scope, 'global').to_s.strip.downcase == 'global'
+    end
+
+    def regime_ml_zscore_lookback
+      n = regime_ml_section.fetch(:zscore_lookback, 60).to_i
+      [[n, 10].max, 500].min
+    end
+
+    def regime_ml_confirm_bars
+      n = regime_ml_section.fetch(:confirm_bars, 3).to_i
+      [[n, 1].max, 20].min
+    end
+
+    def regime_ml_immediate_probability
+      v = regime_ml_section.fetch(:immediate_probability, 0.92).to_f
+      [[v, 0.51].max, 0.999].min
+    end
+
+    # hmm_first: use HMM vol tier when present; else ML tier. ml_first: prefer ML tier when present.
+    def regime_ml_tier_precedence
+      regime_ml_section.fetch(:tier_precedence, 'hmm_first').to_s.strip.downcase
+    end
+
     def regime_strategy_section
       rs = regime_section
       return {} unless rs.is_a?(Hash)

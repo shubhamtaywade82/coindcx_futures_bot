@@ -77,6 +77,38 @@ RSpec.describe CoindcxBot::Config do
     expect(off.regime_enabled?).to be(false)
   end
 
+  it 'reads regime.ml.enabled only when regime is enabled' do
+    off = described_class.new(minimal_bot_config(regime: { enabled: false, ml: { enabled: true } }))
+    expect(off.regime_ml_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(regime: { enabled: true, ml: { enabled: true } }))
+    expect(on.regime_ml_enabled?).to be(true)
+  end
+
+  it 'resolves regime.ml model path per pair when scope is per_pair' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        regime: {
+          enabled: true,
+          ml: { enabled: true, model_path: './data/ml_regime_model.json', scope: 'per_pair' }
+        }
+      )
+    )
+    p = cfg.regime_ml_model_path_for('B-ETH_USDT')
+    expect(p).to end_with('ml_regime_model_B-ETH_USDT.json')
+  end
+
+  it 'uses a single regime.ml model path when scope is global' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        regime: {
+          enabled: true,
+          ml: { enabled: true, model_path: './data/ml_regime_model.json', scope: 'global' }
+        }
+      )
+    )
+    expect(cfg.regime_ml_model_path_for('B-ETH_USDT')).to eq(cfg.regime_ml_model_path_for('B-SOL_USDT'))
+  end
+
   it 'reads alerts.analysis.price_cross_cooldown_seconds' do
     cfg = described_class.new(
       minimal_bot_config(alerts: { analysis: { price_cross_cooldown_seconds: 120 } })
