@@ -225,7 +225,6 @@ Say:
 
 **“build lifecycle manager”**
 
-
 Use this as a reusable prompt for chart or OHLCV-based analysis:
 
 ```text
@@ -378,7 +377,6 @@ For your own consistency, keep these placeholders ready:
 `[INSTRUMENT] [EXCHANGE] [TF1] [TF2] [TF3] [TF4] [chart screenshot or OHLCV data]`
 
 If you want a sharper version tuned specifically for **ETH/SOL futures with your SMC + orderflow style**, I can write that next.
-
 
 ## Direct answer
 
@@ -943,7 +941,6 @@ Say:
 
 **“build state builder in ruby”**
 
-
 Below is a **production-grade JSON Schema (Draft 2020-12)** for your **full SMC + Price Action + Execution state model**, with strict typing, enums, and validation constraints.
 
 This is **directly usable** for:
@@ -1237,7 +1234,7 @@ This is **directly usable** for:
 
 # ✅ Design Guarantees
 
-### Enforces:
+### Enforces
 
 * Structural correctness (no missing SMC core fields)
 * Valid enumerations (no garbage values)
@@ -1280,7 +1277,7 @@ From OHLCV → this schema
 
 ---
 
-# If you want next:
+# If you want next
 
 I can give:
 
