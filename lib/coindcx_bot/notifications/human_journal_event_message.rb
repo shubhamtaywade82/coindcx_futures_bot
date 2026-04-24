@@ -170,7 +170,18 @@ module CoindcxBot
           lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
           lines << "From: #{fetch_s(h, :from_label)} (state #{fetch_s(h, :from_state_id)})" if fetch_s(h, :from_label) != ''
           lines << "To: #{fetch_s(h, :to_label)} (state #{fetch_s(h, :to_state_id)})" if fetch_s(h, :to_label) != ''
-          lines << "Posterior: #{fetch_s(h, :probability_pct)}%" if fetch_s(h, :probability_pct) != ''
+          lines << "Meaning: #{fetch_s(h, :meaning)}" if fetch_s(h, :meaning) != ''
+          posterior = fetch_s(h, :probability_pct)
+          if posterior != ''
+            stab = fetch_s(h, :stability_bars)
+            stab_part = stab == '' ? '' : " · stability #{stab} bars"
+            lines << "Confidence: #{posterior}%#{stab_part}"
+          end
+          if fetch_s(h, :vol_rank) != '' && fetch_s(h, :vol_rank_total) != ''
+            lines << "Volatility rank: #{fetch_s(h, :vol_rank)}/#{fetch_s(h, :vol_rank_total)}"
+          end
+          lines << "Bias: #{fetch_s(h, :bias)}" if fetch_s(h, :bias) != ''
+          lines << "Action: #{fetch_s(h, :action)}" if fetch_s(h, :action) != ''
           lines.join("\n")
         end
 

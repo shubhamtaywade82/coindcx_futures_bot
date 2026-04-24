@@ -3,6 +3,7 @@
 require_relative 'allocation'
 require_relative 'hmm_engine'
 require_relative 'features'
+require_relative 'state_machine'
 
 module CoindcxBot
   module Regime
@@ -17,6 +18,14 @@ module CoindcxBot
         @history_argmax = Hash.new { |h, k| h[k] = [] }
         @last_candle_time_by_pair = {}
         @bars_since_train = Hash.new(0)
+        @state_machines = Hash.new do |h, pair|
+          h[pair] = StateMachine.new(confirmations: confirmations_cfg)
+        end
+      end
+
+      # @return [Hash, nil] { state_id:, label:, posterior: } once the state machine confirms stability
+      def stable_state_for(pair)
+        @mutex.synchronize { @state_machines[pair].stable_state }
       end
 
       def refresh!(candles_by_pair)
@@ -179,6 +188,7 @@ module CoindcxBot
               hist << sid
               hist.shift while hist.size > 50
               @state_by_pair[pair] = st
+              @state_machines[pair].update(state_id: st.state_id, label: st.label, posterior: st.probability)
             end
           end
 
@@ -195,6 +205,10 @@ module CoindcxBot
 
       def zscore_lookback_cfg
         @config.regime_hmm_hash.fetch(:zscore_lookback, 60).to_i
+      end
+
+      def confirmations_cfg
+        @config.respond_to?(:regime_hmm_state_machine_confirmations) ? @config.regime_hmm_state_machine_confirmations : 2
       end
     end
   end

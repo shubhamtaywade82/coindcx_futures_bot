@@ -425,6 +425,21 @@ module CoindcxBot
       regime_hmm_section
     end
 
+    def regime_hmm_alert_min_posterior
+      v = regime_hmm_section.fetch(:alert_min_posterior, 0.70)
+      Float(v).clamp(0.0, 1.0)
+    rescue ArgumentError, TypeError
+      0.70
+    end
+
+    def regime_hmm_alert_min_stability_bars
+      regime_hmm_section.fetch(:alert_min_stability_bars, 2).to_i
+    end
+
+    def regime_hmm_state_machine_confirmations
+      regime_hmm_section.fetch(:state_machine_confirmations, 2).to_i
+    end
+
     def regime_hmm_persistence_path_for(pair = nil)
       base = regime_hmm_section.fetch(:persistence_path, './data/regime_hmm.json').to_s
       expanded = File.expand_path(base, Dir.pwd)

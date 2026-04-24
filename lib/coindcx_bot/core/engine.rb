@@ -6,6 +6,7 @@ require 'logger'
 
 require_relative '../display_ltp'
 require_relative '../regime/tui_state'
+require_relative '../regime/transition_meaning'
 require_relative '../synthetic_l1'
 
 module CoindcxBot
@@ -1635,6 +1636,9 @@ module CoindcxBot
       def emit_regime_hmm_transitions!
         return unless @hmm_runtime && @config.alerts_analysis_regime_hmm_transitions?
 
+        min_post = @config.regime_hmm_alert_min_posterior
+        min_stab = @config.regime_hmm_alert_min_stability_bars
+
         @config.pairs.each do |pair|
           st = @hmm_runtime.state_for(pair)
           next unless st
@@ -1647,8 +1651,18 @@ module CoindcxBot
           end
           next if prev == cur
 
+          if st.probability < min_post || st.consecutive_bars < min_stab || st.flickering || st.uncertainty
+            @logger&.debug(
+              "[regime_hmm] suppressed #{pair} #{prev}->#{cur} " \
+              "post=#{(st.probability * 100).round(1)}% stab=#{st.consecutive_bars} " \
+              "flick=#{st.flickering} unc=#{st.uncertainty}"
+            )
+            next
+          end
+
           @analysis_last_hmm_state[pair] = cur
           prev_sid, prev_lbl = prev.split(':', 2)
+          meaning = Regime::TransitionMeaning.describe(prev_lbl.to_s, st.label.to_s)
           @journal.log_event(
             'analysis_regime_change',
             pair: pair,
@@ -1657,6 +1671,14 @@ module CoindcxBot
             to_state_id: st.state_id.to_s,
             to_label: st.label.to_s,
             probability_pct: (st.probability * 100).round(2).to_s,
+            stability_bars: st.consecutive_bars.to_s,
+            vol_rank: st.vol_rank.to_s,
+            vol_rank_total: st.vol_rank_total.to_s,
+            flickering: st.flickering.to_s,
+            confirmed: st.is_confirmed.to_s,
+            meaning: meaning[:meaning].to_s,
+            bias: meaning[:bias].to_s,
+            action: meaning[:action].to_s,
             dedupe_key: "#{pair}|#{cur}"
           )
         end

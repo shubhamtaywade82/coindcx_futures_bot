@@ -200,7 +200,10 @@ regime:
     em_iterations: 35 # Baum-Welch max iterations
     min_train_bars: 80 # skip fit if fewer bars available
     zscore_lookback: 60 # volatility zscore rolling window
-    retrain_every_bars: 0 # 0 = retrain every candle refresh cycle
+    retrain_every_bars: 0 # 0 = never retrain after first fit (HmmRuntime#should_retrain?)
+    alert_min_posterior: 0.70 # suppress analysis_regime_change below this posterior probability
+    alert_min_stability_bars: 2 # suppress transitions with fewer consecutive confirmed bars
+    state_machine_confirmations: 2 # RegimeStateMachine: candles of same argmax required to mark stable
 
   ai:
     enabled: true
