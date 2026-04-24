@@ -238,6 +238,8 @@ module CoindcxBot
         def ai_column_fragment(hmm_display)
           t = hmm_display.to_s.strip
           return 'AI:—' if t.empty?
+          return 'AI:—' if t.match?(/\AAI:?\z/i)
+
           return t if t.match?(/\AAI[ :]/)
 
           "AI:#{t}"

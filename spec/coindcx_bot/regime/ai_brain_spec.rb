@@ -18,6 +18,26 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
       expect(msg).to include('B-SOL_USDT')
     end
 
+    it 'embeds feature JSON without raising when strings contain ASCII controls' do
+      ctx = {
+        exec_resolution: '15m',
+        htf_resolution: '1h',
+        positions: [],
+        pairs: %w[B-SOL_USDT],
+        candles_by_pair: { 'B-SOL_USDT' => [{ o: 1, h: 2, l: 1, c: 1.5, v: 1 }] },
+        features_by_pair: { 'B-SOL_USDT' => { 'hint' => "ok\x03x" } }
+      }
+      msg = brain.send(:build_user_message, ctx)
+      expect(msg).to include('OHLCV feature packets')
+      expect(msg).to include('ok')
+      expect(msg).not_to include("\x03")
+      lines = msg.lines.map(&:strip)
+      hdr = 'OHLCV feature packets (JSON, deterministic Ruby layer; use with bar list if present):'
+      idx = lines.index(hdr)
+      expect(idx).not_to be_nil
+      expect { JSON.parse(lines[idx + 1]) }.not_to raise_error
+    end
+
     it 'embeds authoritative open_positions_json instead of Ruby inspect' do
       ctx = {
         exec_resolution: '15m',
@@ -63,6 +83,15 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
     end
   end
 
+  describe '.scrub_for_json' do
+    it 'strips C0 control bytes so JSON.generate succeeds' do
+      dirty = { 'pair' => "B-SOL\x01USDT", nested: ['a', "b\x02c"] }
+      clean = described_class.scrub_for_json(dirty)
+      expect { JSON.generate(clean) }.not_to raise_error
+      expect(clean['pair']).not_to include("\x01")
+    end
+  end
+
   describe '.overlay_from_state' do
     it 'returns empty hash when there is no payload and no error' do
       expect(described_class.overlay_from_state({})).to eq({})
@@ -73,6 +102,30 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
       expect(o[:active]).to be(false)
       expect(o[:status]).to eq('PIPE:ERR')
       expect(o[:hmm_display]).to include('connection refused')
+    end
+
+    it 'scrubs control characters from error text for the TUI' do
+      o = described_class.overlay_from_state(error: "bad\x01msg")
+      expect(o[:ai_notes_full]).not_to include("\x01")
+      expect(o[:ai_notes_full]).to include('bad')
+    end
+
+    it 'falls back to transition then label when notes are empty so hmm_display is never bare AI:' do
+      payload = {
+        regime_label: 'RANGING',
+        probability_pct: 71,
+        stability_bars: 4,
+        flicker_hint: 'low',
+        confirmed: true,
+        vol_rank: 2,
+        vol_rank_total: 5,
+        transition_summary: 'compression building',
+        notes: ''
+      }
+      o = described_class.overlay_from_state(payload: payload)
+      expect(o[:hmm_display]).to include('compression')
+      expect(o[:ai_notes_full]).to eq('')
+      expect(o[:ai_transition_full]).to eq('compression building')
     end
 
     it 'maps a successful payload to active regime fields' do

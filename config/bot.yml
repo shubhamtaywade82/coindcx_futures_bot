@@ -125,6 +125,8 @@ strategy:
     fvg_confluence: true # require FVG overlap for higher-quality OB entries
     premium_discount_lookback: 20 # bars for premium/discount range calculation
     signal_mode: choch_strict # choch_strict | choch_any | bos
+    displacement_detection: true # compute impulse strength + volume support for StateBuilder
+    inducement_detection: true  # detect equal highs/lows trap logic for StateBuilder
     close_on_opposite_smc: true # close long on bearish SMC signal (and vice versa)
     opposite_smc_min_gain_pct: 0 # close on opposite signal regardless of current gain
 

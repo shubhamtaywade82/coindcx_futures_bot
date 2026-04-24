@@ -8,6 +8,9 @@ module CoindcxBot
     # Calls a local Ollama model (ollama-client) with optional exponential backoff (ollama_agent retry middleware).
     # Advisory only: does not place orders; feeds {Engine#snapshot #regime} for the TUI.
     class AiBrain
+      # JSON::Ext::Generator rejects many C0 control bytes in string values (see JSON::GeneratorError).
+      JSON_UNSAFE_ASCII = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.freeze
+
       Result = Struct.new(:ok, :payload, :error_message, keyword_init: true)
 
       SYSTEM_PROMPT = <<~PROMPT.gsub(/\s+/, ' ').strip.freeze
@@ -78,7 +81,7 @@ module CoindcxBot
         st = state.is_a?(Hash) ? state : {}
         err = st[:error].to_s.strip
         unless err.empty?
-          msg = err.to_s.strip
+          msg = scrub_json_string(err.to_s)
           return {
             active: false,
             hmm_display: truncate(msg, 56),
@@ -101,12 +104,25 @@ module CoindcxBot
           end
         vol_disp = '—' if vol_disp.strip.empty?
 
-        flick = (p[:flicker_hint] || p['flicker_hint']).to_s
+        flick = scrub_json_string((p[:flicker_hint] || p['flicker_hint']).to_s)
         flick = flick[0, 14] unless flick.empty?
 
-        label = (p[:regime_label] || p['regime_label']).to_s
-        notes = (p[:notes] || p['notes']).to_s
-        trans = (p[:transition_summary] || p['transition_summary']).to_s
+        label = scrub_json_string((p[:regime_label] || p['regime_label']).to_s)
+        notes = scrub_json_string((p[:notes] || p['notes']).to_s)
+        trans = scrub_json_string((p[:transition_summary] || p['transition_summary']).to_s)
+        notes_stripped = notes.strip
+        trans_stripped = trans.strip
+        label_stripped = label.strip
+        hmm_line =
+          if !notes_stripped.empty?
+            notes_stripped
+          elsif !trans_stripped.empty?
+            trans_stripped
+          elsif !label_stripped.empty?
+            label_stripped
+          else
+            '—'
+          end
 
         {
           active: true,
@@ -117,11 +133,30 @@ module CoindcxBot
           confirmed: coerce_bool(p[:confirmed] || p['confirmed']),
           vol_rank_display: truncate(vol_disp, 14),
           transition_display: truncate(trans, 40),
-          hmm_display: truncate("AI: #{notes}", 52),
-          ai_transition_full: trans.to_s.strip,
-          ai_notes_full: notes.to_s.strip,
+          hmm_display: truncate("AI: #{hmm_line}", 52),
+          ai_transition_full: trans_stripped,
+          ai_notes_full: notes_stripped,
           status: 'PIPE:RUN'
         }
+      end
+
+      def self.scrub_json_string(s)
+        s.to_s.encode('UTF-8', invalid: :replace, undef: :replace, replace: '?').gsub(JSON_UNSAFE_ASCII, ' ')
+      end
+
+      def self.scrub_for_json(obj)
+        case obj
+        when String then scrub_json_string(obj)
+        when Hash
+          obj.each_with_object({}) do |(k, v), acc|
+            nk = k.is_a?(String) || k.is_a?(Symbol) ? k : scrub_json_string(k.to_s)
+            acc[nk] = scrub_for_json(v)
+          end
+        when Array
+          obj.map { |e| scrub_for_json(e) }
+        else
+          obj
+        end
       end
 
       def self.truncate(s, max)
@@ -194,12 +229,13 @@ module CoindcxBot
         lines = []
         lines << "Execution timeframe: #{context[:exec_resolution]}. Higher timeframe: #{context[:htf_resolution]}."
         lines << 'open_positions_json (authoritative; [] means flat book):'
-        lines << JSON.generate(self.class.serialize_open_positions(Array(context[:positions])))
+        positions_json = self.class.scrub_for_json(self.class.serialize_open_positions(Array(context[:positions])))
+        lines << JSON.generate(positions_json)
         lines << ''
         feats = context[:features_by_pair]
         if feats.is_a?(Hash) && feats.any?
           lines << 'OHLCV feature packets (JSON, deterministic Ruby layer; use with bar list if present):'
-          lines << JSON.generate(feats)
+          lines << JSON.generate(self.class.scrub_for_json(feats))
           lines << ''
         end
         Array(context[:pairs]).each do |pair|
@@ -258,15 +294,15 @@ module CoindcxBot
 
       def normalize_payload(h)
         {
-          regime_label: (h[:regime_label] || h['regime_label']).to_s,
+          regime_label: self.class.scrub_json_string((h[:regime_label] || h['regime_label']).to_s),
           probability_pct: self.class.coerce_pct(h[:probability_pct] || h['probability_pct']),
           stability_bars: self.class.coerce_int(h[:stability_bars] || h['stability_bars']),
-          flicker_hint: (h[:flicker_hint] || h['flicker_hint']).to_s,
+          flicker_hint: self.class.scrub_json_string((h[:flicker_hint] || h['flicker_hint']).to_s),
           confirmed: self.class.coerce_bool(h[:confirmed] || h['confirmed']),
           vol_rank: self.class.coerce_int(h[:vol_rank] || h['vol_rank']),
           vol_rank_total: self.class.coerce_int(h[:vol_rank_total] || h['vol_rank_total']),
-          transition_summary: (h[:transition_summary] || h['transition_summary']).to_s,
-          notes: (h[:notes] || h['notes']).to_s
+          transition_summary: self.class.scrub_json_string((h[:transition_summary] || h['transition_summary']).to_s),
+          notes: self.class.scrub_json_string((h[:notes] || h['notes']).to_s)
         }
       end
     end
