@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+require_relative 'displacement'
+require_relative 'inducement'
+require_relative 'mitigation_analyzer'
+
 module CoindcxBot
   module SmcConfluence
     # Bar-by-bar replay of delta_exchange_bot `pinescripts/smc_confluence.pine` signal logic (Pine v6).
@@ -68,6 +72,13 @@ module CoindcxBot
           s.structure_bias = -1
         end
 
+        # --- Displacement detection (opt-in) ---
+        disp = if cfg.displacement_detection && (bos_bull || bos_bear || choch_bull || choch_bear)
+                 Displacement.detect(c, atr14, candles, i)
+               else
+                 Displacement.absent
+               end
+
         # --- Layer 1C: Order blocks ---
         s.bull_ob_age += 1
         s.bear_ob_age += 1
@@ -94,6 +105,9 @@ module CoindcxBot
         in_bull_ob = bull_ob_valid && low <= s.bull_ob_hi && high >= s.bull_ob_lo
         in_bear_ob = bear_ob_valid && high >= s.bear_ob_lo && low <= s.bear_ob_hi
 
+        # --- Mitigation reaction strength (always computed when in OB) ---
+        miti = MitigationAnalyzer.detect(c, in_bull_ob, in_bear_ob)
+
         # --- Layer 1D: Liquidity (uses previous bar rolling swing) ---
         liq_hi, liq_lo = rolling_high_low(i, cfg.liq_lookback)
         liq_sweep_bull = s.prev_liq_lo &&
@@ -106,6 +120,9 @@ module CoindcxBot
         s.last_bear_sweep_bar = i if liq_sweep_bear
         recent_bull_sweep = (i - s.last_bull_sweep_bar) <= swing * 2
         recent_bear_sweep = (i - s.last_bear_sweep_bar) <= swing * 2
+
+        # --- Inducement detection (opt-in) ---
+        indu = cfg.inducement_detection ? Inducement.detect(i, candles) : Inducement.absent
 
         # --- Layer 2: Market structure ---
         ms = cfg.ms_swing
@@ -275,8 +292,10 @@ module CoindcxBot
           in_bear_ob: in_bear_ob,
           bull_ob_valid: bull_ob_valid,
           bear_ob_valid: bear_ob_valid,
+          bull_ob_hi: s.bull_ob_hi,
           bull_ob_lo: s.bull_ob_lo,
           bear_ob_hi: s.bear_ob_hi,
+          bear_ob_lo: s.bear_ob_lo,
           recent_bull_sweep: recent_bull_sweep,
           recent_bear_sweep: recent_bear_sweep,
           liq_sweep_bull: liq_sweep_bull,
@@ -308,7 +327,16 @@ module CoindcxBot
           fvg_bull_align: fvg_bull_align,
           fvg_bear_align: fvg_bear_align,
           in_discount: in_discount,
-          in_premium: in_premium
+          in_premium: in_premium,
+          displacement_present: disp[:present],
+          displacement_strength: disp[:strength],
+          displacement_range_multiple: disp[:range_multiple],
+          displacement_volume_support: disp[:volume_support],
+          inducement_present: indu[:present],
+          inducement_type: indu[:type],
+          inducement_price: indu[:price],
+          inducement_swept: indu[:swept],
+          mitigation_reaction_strength: miti[:reaction_strength]
         )
       end
 

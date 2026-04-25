@@ -39,6 +39,7 @@ module CoindcxBot
       validate_risk_capital_pct!
       validate_runtime_no_legacy_paper_flag!
       validate_meta_first_win!
+      apply_coindcx_env_runtime_overrides!
     end
 
     def scalper_mode?
@@ -259,6 +260,27 @@ module CoindcxBot
       regime_ai_section.fetch(:mode, 'tui_narrative').to_s.strip
     end
 
+    def regime_ai_include_feature_packet?
+      return false unless regime_ai_enabled?
+
+      truthy?(regime_ai_section.fetch(:include_feature_packet, false))
+    end
+
+    def regime_ai_feature_min_candles
+      n = regime_ai_section.fetch(:feature_min_candles, 30).to_i
+      [[n, 20].max, 200].min
+    end
+
+    def regime_ai_feature_tz_offset_minutes
+      regime_ai_section.fetch(:feature_tz_offset_minutes, 0).to_i
+    end
+
+    def regime_ai_omit_raw_bars_when_feature_packet?
+      return false unless regime_ai_include_feature_packet?
+
+      truthy?(regime_ai_section.fetch(:omit_raw_bars_when_feature_packet, false))
+    end
+
     def smc_setup_section
       raw.fetch(:smc_setup, {})
     end
@@ -281,6 +303,13 @@ module CoindcxBot
 
     def smc_setup_gatekeeper_enabled?
       smc_setup_enabled? && truthy?(smc_setup_section[:gatekeeper_enabled])
+    end
+
+    def smc_setup_planner_max_price_deviation_pct
+      v = smc_setup_section.fetch(:planner_max_price_deviation_pct, 5.0)
+      Float(v).clamp(0.5, 50.0)
+    rescue ArgumentError, TypeError
+      5.0
     end
 
     def smc_setup_max_active_setups_per_pair
@@ -343,6 +372,51 @@ module CoindcxBot
       smc_setup_section.fetch(:gatekeeper_min_interval_seconds, 45).to_f
     end
 
+    def smc_setup_gatekeeper_include_feature_packet?
+      return false unless smc_setup_gatekeeper_enabled?
+
+      truthy?(smc_setup_section.fetch(:gatekeeper_include_feature_packet, false))
+    end
+
+    def smc_setup_gatekeeper_feature_min_candles
+      n = smc_setup_section.fetch(:gatekeeper_feature_min_candles, 30).to_i
+      [[n, 20].max, 200].min
+    end
+
+    def smc_setup_gatekeeper_feature_tz_offset_minutes
+      smc_setup_section.fetch(:gatekeeper_feature_tz_offset_minutes, 0).to_i
+    end
+
+    def smc_setup_planner_include_market_state?
+      return false unless smc_setup_planner_enabled?
+
+      truthy?(smc_setup_section.fetch(:planner_include_market_state, true))
+    end
+
+    def smc_setup_planner_include_ohlcv_features?
+      return false unless smc_setup_planner_enabled?
+
+      truthy?(smc_setup_section.fetch(:planner_include_ohlcv_features, true))
+    end
+
+    def smc_setup_planner_min_candles
+      n = smc_setup_section.fetch(:planner_min_candles, 30).to_i
+      [[n, 20].max, 500].min
+    end
+
+    def smc_setup_planner_ohlcv_tail
+      n = smc_setup_section.fetch(:planner_ohlcv_tail, 12).to_i
+      [[n, 4].max, 48].min
+    end
+
+    def smc_setup_planner_tz_offset_minutes
+      smc_setup_section.fetch(:planner_tz_offset_minutes, 0).to_i
+    end
+
+    def smc_setup_lifecycle_enabled?
+      smc_setup_enabled? && truthy?(smc_setup_section.fetch(:lifecycle_enabled, true))
+    end
+
     def regime_hmm_section
       rs = regime_section
       return {} unless rs.is_a?(Hash)
@@ -356,6 +430,21 @@ module CoindcxBot
 
     def regime_hmm_hash
       regime_hmm_section
+    end
+
+    def regime_hmm_alert_min_posterior
+      v = regime_hmm_section.fetch(:alert_min_posterior, 0.70)
+      Float(v).clamp(0.0, 1.0)
+    rescue ArgumentError, TypeError
+      0.70
+    end
+
+    def regime_hmm_alert_min_stability_bars
+      regime_hmm_section.fetch(:alert_min_stability_bars, 2).to_i
+    end
+
+    def regime_hmm_state_machine_confirmations
+      regime_hmm_section.fetch(:state_machine_confirmations, 2).to_i
     end
 
     def regime_hmm_persistence_path_for(pair = nil)
@@ -372,6 +461,58 @@ module CoindcxBot
 
     def regime_scope
       regime_hmm_section.fetch(:scope, 'per_pair').to_s.strip.downcase
+    end
+
+    def regime_ml_section
+      rs = regime_section
+      return {} unless rs.is_a?(Hash)
+
+      rs.fetch(:ml, {})
+    end
+
+    def regime_ml_enabled?
+      regime_enabled? && truthy?(regime_ml_section[:enabled])
+    end
+
+    def regime_ml_hash
+      regime_ml_section
+    end
+
+    def regime_ml_model_path_for(pair = nil)
+      base = regime_ml_section.fetch(:model_path, './data/ml_regime_model.json').to_s
+      expanded = File.expand_path(base, Dir.pwd)
+      scope = regime_ml_section.fetch(:scope, 'global').to_s.strip.downcase
+      return expanded if scope == 'global' || pair.nil? || pair.to_s.strip.empty?
+
+      dir = File.dirname(expanded)
+      stem = File.basename(expanded, '.*')
+      ext = File.extname(expanded)
+      ext = '.json' if ext.empty?
+      File.join(dir, "#{stem}_#{pair}#{ext}")
+    end
+
+    def regime_ml_scope_global?
+      regime_ml_section.fetch(:scope, 'global').to_s.strip.downcase == 'global'
+    end
+
+    def regime_ml_zscore_lookback
+      n = regime_ml_section.fetch(:zscore_lookback, 60).to_i
+      [[n, 10].max, 500].min
+    end
+
+    def regime_ml_confirm_bars
+      n = regime_ml_section.fetch(:confirm_bars, 3).to_i
+      [[n, 1].max, 20].min
+    end
+
+    def regime_ml_immediate_probability
+      v = regime_ml_section.fetch(:immediate_probability, 0.92).to_f
+      [[v, 0.51].max, 0.999].min
+    end
+
+    # hmm_first: use HMM vol tier when present; else ML tier. ml_first: prefer ML tier when present.
+    def regime_ml_tier_precedence
+      regime_ml_section.fetch(:tier_precedence, 'hmm_first').to_s.strip.downcase
     end
 
     def regime_strategy_section
@@ -403,12 +544,13 @@ module CoindcxBot
 
     # Live (+dry_run: false+) only: when false, the engine uses live feeds and read-only account APIs but does not
     # place or exit futures orders. Ignored in paper (+dry_run: true+). YAML +runtime.place_orders+; env +PLACE_ORDER+
-    # overrides when set (true/false/1/0).
+    # or +PLACE_ORDERS+ overrides when set (true/false/1/0). +PLACE_ORDER+ wins if both are set.
     def place_orders?
       return true if dry_run?
 
       raw_place = runtime[:place_orders]
       env_place = ENV['PLACE_ORDER'].to_s.strip
+      env_place = ENV['PLACE_ORDERS'].to_s.strip if env_place.empty?
       v = env_place.empty? ? raw_place : env_place
       return true if v.nil?
 
@@ -639,9 +781,127 @@ module CoindcxBot
       raw.to_s.split(',').map(&:strip).reject(&:empty?)
     end
 
+    # --- Multi-level analysis alerts (journal + optional Telegram filter) ---
+
+    def alerts_section
+      s = raw[:alerts]
+      s.is_a?(Hash) ? s.transform_keys(&:to_sym) : {}
+    end
+
+    def alerts_analysis_section
+      s = alerts_section[:analysis]
+      s.is_a?(Hash) ? s.transform_keys(&:to_sym) : {}
+    end
+
+    def alerts_filter_telegram?
+      truthy?(alerts_section[:filter_telegram])
+    end
+
+    def alerts_analysis_strategy_transitions?
+      truthy?(alerts_analysis_section[:strategy_transitions])
+    end
+
+    def alerts_analysis_regime_hmm_transitions?
+      truthy?(alerts_analysis_section[:regime_hmm_transitions])
+    end
+
+    def alerts_analysis_regime_ai_updates?
+      truthy?(alerts_analysis_section[:regime_ai_updates])
+    end
+
+    def alerts_regime_ai_min_probability_delta
+      v = alerts_analysis_section[:regime_ai_min_probability_delta]
+      return 10.0 if v.nil? || v.to_s.strip.empty?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      10.0
+    end
+
+    # Minimum seconds between +analysis_price_cross+ journal rows for the same pair and rule id
+    # (LTP can chop across a level on every WS tick).
+    def alerts_analysis_price_cross_cooldown_seconds
+      v = alerts_analysis_section[:price_cross_cooldown_seconds]
+      return 0.0 if v.nil? || v.to_s.strip.empty?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      0.0
+    end
+
+    def alerts_price_rules
+      Array(alerts_section[:price_rules]).select { |r| r.is_a?(Hash) }
+    end
+
+    def alerts_telegram_config
+      h = alerts_section[:telegram] || alerts_section['telegram']
+      h.is_a?(Hash) ? h.transform_keys(&:to_sym) : {}
+    end
+
+    def alerts_telegram_allow_types
+      v = alerts_telegram_config[:allow_types]
+      return nil if v.nil?
+
+      Array(v).map(&:to_s).reject(&:empty?)
+    end
+
+    def alerts_telegram_critical_types
+      v = alerts_telegram_config[:critical_types]
+      return default_alerts_critical_types if v.nil?
+
+      Array(v).map(&:to_s).reject(&:empty?)
+    end
+
+    def alerts_telegram_default_throttle_seconds
+      v = alerts_telegram_config[:default_throttle_seconds]
+      return 0.0 if v.nil? || v.to_s.strip.empty?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      0.0
+    end
+
+    def alerts_telegram_throttle_by_type
+      raw = alerts_telegram_config[:throttle_by_type]
+      return {} unless raw.is_a?(Hash)
+
+      raw.transform_keys(&:to_s).each_with_object({}) do |(k, v), acc|
+        acc[k] = Float(v.to_s)
+      rescue ArgumentError, TypeError
+        acc[k] = 0.0
+      end
+    end
+
+    def alerts_telegram_critical_throttle_seconds
+      v = alerts_telegram_config[:critical_throttle_seconds]
+      return 30.0 if v.nil? || v.to_s.strip.empty?
+
+      Float(v.to_s)
+    rescue ArgumentError, TypeError
+      30.0
+    end
+
+    def default_alerts_critical_types
+      %w[
+        open_failed
+        signal_close
+        analysis_liquidation_proximity
+        flatten
+      ]
+    end
+
     class ConfigurationError < StandardError; end
 
     private
+
+    # Startup helpers (+bin/start-dry-run+, +bin/start-live+; both always run +bin/bot tui+): overrides +runtime.dry_run+ from YAML.
+    def apply_coindcx_env_runtime_overrides!
+      v = ENV['COINDCX_DRY_RUN'].to_s.strip
+      return if v.empty?
+
+      @raw[:runtime] ||= {}
+      @raw[:runtime][:dry_run] = truthy?(v)
+    end
 
     # Fills in missing keys only (user YAML always wins on explicit keys).
     def deep_merge_defaults(base, defaults)

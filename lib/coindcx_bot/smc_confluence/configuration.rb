@@ -7,7 +7,8 @@ module CoindcxBot
       attr_reader :smc_swing, :ob_body_pct, :ob_expire, :liq_lookback, :liq_wick_pct,
                   :ms_swing, :tl_pivot_len, :tl_retest_pct, :vp_bars, :vp_rows,
                   :poc_zone_pct, :sess_liq_pct, :min_score, :sig_cooldown, :atr_period,
-                  :signal_mode, :fvg_confluence, :premium_discount_lookback
+                  :signal_mode, :fvg_confluence, :premium_discount_lookback,
+                  :displacement_detection, :inducement_detection
 
       # signal_mode: :choch_strict (Pine parity) or :bos_relaxed (BOS or CHOCH counts as primary trigger for score gate)
       def initialize(
@@ -28,7 +29,9 @@ module CoindcxBot
         atr_period: 14,
         signal_mode: :choch_strict,
         fvg_confluence: false,
-        premium_discount_lookback: nil
+        premium_discount_lookback: nil,
+        displacement_detection: false,
+        inducement_detection: false
       )
         @smc_swing = Integer(smc_swing)
         @ob_body_pct = Float(ob_body_pct)
@@ -48,6 +51,8 @@ module CoindcxBot
         @signal_mode = normalize_signal_mode(signal_mode)
         @fvg_confluence = coerce_bool(fvg_confluence)
         @premium_discount_lookback = normalize_premium_discount_lookback(premium_discount_lookback)
+        @displacement_detection = coerce_bool(displacement_detection)
+        @inducement_detection = coerce_bool(inducement_detection)
       end
 
       def bos_relaxed?
@@ -80,7 +85,9 @@ module CoindcxBot
           atr_period: sym[:atr_period],
           signal_mode: sym[:signal_mode],
           fvg_confluence: sym[:fvg_confluence],
-          premium_discount_lookback: sym[:premium_discount_lookback]
+          premium_discount_lookback: sym[:premium_discount_lookback],
+          displacement_detection: sym[:displacement_detection],
+          inducement_detection: sym[:inducement_detection]
         }.compact
       end
 

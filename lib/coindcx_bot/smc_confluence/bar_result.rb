@@ -6,7 +6,7 @@ module CoindcxBot
       attr_reader :bar_index,
                   :bos_bull, :bos_bear, :choch_bull, :choch_bear, :structure_bias,
                   :in_bull_ob, :in_bear_ob, :bull_ob_valid, :bear_ob_valid,
-                  :bull_ob_lo, :bear_ob_hi,
+                  :bull_ob_hi, :bull_ob_lo, :bear_ob_hi, :bear_ob_lo,
                   :recent_bull_sweep, :recent_bear_sweep,
                   :liq_sweep_bull, :liq_sweep_bear,
                   :ms_trend,
@@ -16,7 +16,11 @@ module CoindcxBot
                   :long_score, :short_score, :long_signal, :short_signal,
                   :pdh_sweep, :pdl_sweep,
                   :pdh, :pdl, :poc, :vah, :val_line, :atr14,
-                  :fvg_bull_align, :fvg_bear_align, :in_discount, :in_premium
+                  :fvg_bull_align, :fvg_bear_align, :in_discount, :in_premium,
+                  :displacement_present, :displacement_strength,
+                  :displacement_range_multiple, :displacement_volume_support,
+                  :inducement_present, :inducement_type, :inducement_price, :inducement_swept,
+                  :mitigation_reaction_strength
 
       def initialize(**attrs)
         @bar_index = attrs[:bar_index]
@@ -29,8 +33,10 @@ module CoindcxBot
         @in_bear_ob = attrs[:in_bear_ob]
         @bull_ob_valid = attrs[:bull_ob_valid]
         @bear_ob_valid = attrs[:bear_ob_valid]
+        @bull_ob_hi = attrs[:bull_ob_hi]
         @bull_ob_lo = attrs[:bull_ob_lo]
         @bear_ob_hi = attrs[:bear_ob_hi]
+        @bear_ob_lo = attrs[:bear_ob_lo]
         @recent_bull_sweep = attrs[:recent_bull_sweep]
         @recent_bear_sweep = attrs[:recent_bear_sweep]
         @liq_sweep_bull = attrs[:liq_sweep_bull]
@@ -63,6 +69,15 @@ module CoindcxBot
         @fvg_bear_align = attrs.fetch(:fvg_bear_align, false)
         @in_discount = attrs.fetch(:in_discount, false)
         @in_premium = attrs.fetch(:in_premium, false)
+        @displacement_present = attrs.fetch(:displacement_present, false)
+        @displacement_strength = attrs.fetch(:displacement_strength, 'none')
+        @displacement_range_multiple = attrs.fetch(:displacement_range_multiple, 0.0)
+        @displacement_volume_support = attrs.fetch(:displacement_volume_support, false)
+        @inducement_present = attrs.fetch(:inducement_present, false)
+        @inducement_type = attrs.fetch(:inducement_type, 'none')
+        @inducement_price = attrs.fetch(:inducement_price, nil)
+        @inducement_swept = attrs.fetch(:inducement_swept, false)
+        @mitigation_reaction_strength = attrs.fetch(:mitigation_reaction_strength, 'none')
       end
 
       def serialize
@@ -77,8 +92,10 @@ module CoindcxBot
           'in_bear_ob' => in_bear_ob,
           'bull_ob_valid' => bull_ob_valid,
           'bear_ob_valid' => bear_ob_valid,
+          'bull_ob_hi' => bull_ob_hi,
           'bull_ob_lo' => bull_ob_lo,
           'bear_ob_hi' => bear_ob_hi,
+          'bear_ob_lo' => bear_ob_lo,
           'recent_bull_sweep' => recent_bull_sweep,
           'recent_bear_sweep' => recent_bear_sweep,
           'liq_sweep_bull' => liq_sweep_bull,
@@ -110,7 +127,16 @@ module CoindcxBot
           'fvg_bull_align' => fvg_bull_align,
           'fvg_bear_align' => fvg_bear_align,
           'in_discount' => in_discount,
-          'in_premium' => in_premium
+          'in_premium' => in_premium,
+          'displacement_present' => displacement_present,
+          'displacement_strength' => displacement_strength,
+          'displacement_range_multiple' => displacement_range_multiple,
+          'displacement_volume_support' => displacement_volume_support,
+          'inducement_present' => inducement_present,
+          'inducement_type' => inducement_type,
+          'inducement_price' => inducement_price,
+          'inducement_swept' => inducement_swept,
+          'mitigation_reaction_strength' => mitigation_reaction_strength
         }
       end
     end

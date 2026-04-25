@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Live mode: always starts the TUI. Sets COINDCX_DRY_RUN=0 (overrides bot.yml).
+# Order placement defaults OFF: export PLACE_ORDERS=0 unless already set.
+# Enable real order/exit REST only with: PLACE_ORDERS=1 bin/start-live
+# Usage: bin/start-live
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+export COINDCX_DRY_RUN=0
+
+if [ -z "${PLACE_ORDERS+x}" ] && [ -z "${PLACE_ORDER+x}" ]; then
+  export PLACE_ORDERS=0
+fi
+
+if [ "$#" -gt 0 ]; then
+  echo "[start-live] ignoring extra arguments (this launcher always runs tui): $*" >&2
+fi
+
+if [ "${PLACE_ORDERS:-}" != "1" ] && [ "${PLACE_ORDER:-}" != "1" ]; then
+  echo "[start-live] Live observe: order placement disabled (set PLACE_ORDERS=1 to enable)." >&2
+fi
+
+exec bundle exec ruby "$ROOT/bin/bot" tui

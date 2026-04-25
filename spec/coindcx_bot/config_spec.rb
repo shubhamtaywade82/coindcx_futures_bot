@@ -23,11 +23,121 @@ RSpec.describe CoindcxBot::Config do
     expect(on.regime_ai_enabled?).to be(true)
   end
 
+  it 'reads regime.ai.include_feature_packet only when regime ai is enabled' do
+    off = described_class.new(
+      minimal_bot_config(regime: { enabled: true, ai: { enabled: false, include_feature_packet: true } })
+    )
+    expect(off.regime_ai_include_feature_packet?).to be(false)
+    on = described_class.new(
+      minimal_bot_config(regime: { enabled: true, ai: { enabled: true, include_feature_packet: true } })
+    )
+    expect(on.regime_ai_include_feature_packet?).to be(true)
+  end
+
+  it 'defaults regime ai feature_min_candles and omits raw bars only when packet is enabled' do
+    cfg = described_class.new(
+      minimal_bot_config(regime: { enabled: true, ai: { enabled: true, include_feature_packet: true } })
+    )
+    expect(cfg.regime_ai_feature_min_candles).to eq(30)
+    expect(cfg.regime_ai_omit_raw_bars_when_feature_packet?).to be(false)
+    cfg2 = described_class.new(
+      minimal_bot_config(
+        regime: {
+          enabled: true,
+          ai: {
+            enabled: true,
+            include_feature_packet: true,
+            omit_raw_bars_when_feature_packet: true
+          }
+        }
+      )
+    )
+    expect(cfg2.regime_ai_omit_raw_bars_when_feature_packet?).to be(true)
+  end
+
+  it 'reads smc_setup planner context and lifecycle flags when planner is enabled' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        smc_setup: {
+          enabled: true,
+          planner_enabled: true,
+          planner_include_market_state: false,
+          planner_include_ohlcv_features: false,
+          planner_min_candles: 40,
+          planner_ohlcv_tail: 10,
+          planner_tz_offset_minutes: 30,
+          lifecycle_enabled: false
+        }
+      )
+    )
+    expect(cfg.smc_setup_planner_include_market_state?).to be(false)
+    expect(cfg.smc_setup_planner_include_ohlcv_features?).to be(false)
+    expect(cfg.smc_setup_planner_min_candles).to eq(40)
+    expect(cfg.smc_setup_planner_ohlcv_tail).to eq(10)
+    expect(cfg.smc_setup_planner_tz_offset_minutes).to eq(30)
+    expect(cfg.smc_setup_lifecycle_enabled?).to be(false)
+  end
+
+  it 'reads smc_setup gatekeeper_include_feature_packet only when gatekeeper is enabled' do
+    off = described_class.new(
+      minimal_bot_config(
+        smc_setup: { enabled: true, gatekeeper_enabled: false, gatekeeper_include_feature_packet: true }
+      )
+    )
+    expect(off.smc_setup_gatekeeper_include_feature_packet?).to be(false)
+    on = described_class.new(
+      minimal_bot_config(
+        smc_setup: { enabled: true, gatekeeper_enabled: true, gatekeeper_include_feature_packet: true }
+      )
+    )
+    expect(on.smc_setup_gatekeeper_include_feature_packet?).to be(true)
+  end
+
   it 'reads regime.enabled as regime_enabled?' do
     on = described_class.new(minimal_bot_config(regime: { enabled: true }))
     expect(on.regime_enabled?).to be(true)
     off = described_class.new(minimal_bot_config(regime: { enabled: false }))
     expect(off.regime_enabled?).to be(false)
+  end
+
+  it 'reads regime.ml.enabled only when regime is enabled' do
+    off = described_class.new(minimal_bot_config(regime: { enabled: false, ml: { enabled: true } }))
+    expect(off.regime_ml_enabled?).to be(false)
+    on = described_class.new(minimal_bot_config(regime: { enabled: true, ml: { enabled: true } }))
+    expect(on.regime_ml_enabled?).to be(true)
+  end
+
+  it 'resolves regime.ml model path per pair when scope is per_pair' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        regime: {
+          enabled: true,
+          ml: { enabled: true, model_path: './data/ml_regime_model.json', scope: 'per_pair' }
+        }
+      )
+    )
+    p = cfg.regime_ml_model_path_for('B-ETH_USDT')
+    expect(p).to end_with('ml_regime_model_B-ETH_USDT.json')
+  end
+
+  it 'uses a single regime.ml model path when scope is global' do
+    cfg = described_class.new(
+      minimal_bot_config(
+        regime: {
+          enabled: true,
+          ml: { enabled: true, model_path: './data/ml_regime_model.json', scope: 'global' }
+        }
+      )
+    )
+    expect(cfg.regime_ml_model_path_for('B-ETH_USDT')).to eq(cfg.regime_ml_model_path_for('B-SOL_USDT'))
+  end
+
+  it 'reads alerts.analysis.price_cross_cooldown_seconds' do
+    cfg = described_class.new(
+      minimal_bot_config(alerts: { analysis: { price_cross_cooldown_seconds: 120 } })
+    )
+    expect(cfg.alerts_analysis_price_cross_cooldown_seconds).to eq(120.0)
+    expect(described_class.new(minimal_bot_config).alerts_analysis_price_cross_cooldown_seconds).to eq(0.0)
   end
 
   it 'defaults tui exchange position margins to [USDT, INR] when margin_currency_short_name is blank' do
@@ -129,6 +239,15 @@ RSpec.describe CoindcxBot::Config do
     expect(cfg.place_orders?).to be(true)
   end
 
+  it 'defaults alerts_filter_telegram? to false' do
+    expect(described_class.new(minimal_bot_config).alerts_filter_telegram?).to be(false)
+  end
+
+  it 'reads alerts.filter_telegram from YAML' do
+    cfg = described_class.new(minimal_bot_config(alerts: { filter_telegram: true }))
+    expect(cfg.alerts_filter_telegram?).to be(true)
+  end
+
   it 'defaults exit_on_hard_stop? to true' do
     expect(described_class.new(minimal_bot_config).exit_on_hard_stop?).to be(true)
   end
@@ -190,6 +309,43 @@ RSpec.describe CoindcxBot::Config do
     expect(cfg.place_orders?).to be(false)
   ensure
     prev.nil? ? ENV.delete('PLACE_ORDER') : ENV['PLACE_ORDER'] = prev
+  end
+
+  it 'lets PLACE_ORDERS env override YAML when live and PLACE_ORDER is unset' do
+    prev_o = ENV['PLACE_ORDER']
+    prev_os = ENV['PLACE_ORDERS']
+    ENV.delete('PLACE_ORDER')
+    ENV['PLACE_ORDERS'] = '0'
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3', place_orders: true })
+    )
+    expect(cfg.place_orders?).to be(false)
+  ensure
+    prev_o.nil? ? ENV.delete('PLACE_ORDER') : ENV['PLACE_ORDER'] = prev_o
+    prev_os.nil? ? ENV.delete('PLACE_ORDERS') : ENV['PLACE_ORDERS'] = prev_os
+  end
+
+  it 'prefers PLACE_ORDER over PLACE_ORDERS when both are set' do
+    prev_o = ENV['PLACE_ORDER']
+    prev_os = ENV['PLACE_ORDERS']
+    ENV['PLACE_ORDER'] = '0'
+    ENV['PLACE_ORDERS'] = '1'
+    cfg = described_class.new(
+      minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3', place_orders: true })
+    )
+    expect(cfg.place_orders?).to be(false)
+  ensure
+    prev_o.nil? ? ENV.delete('PLACE_ORDER') : ENV['PLACE_ORDER'] = prev_o
+    prev_os.nil? ? ENV.delete('PLACE_ORDERS') : ENV['PLACE_ORDERS'] = prev_os
+  end
+
+  it 'lets COINDCX_DRY_RUN override runtime.dry_run from YAML' do
+    prev = ENV['COINDCX_DRY_RUN']
+    ENV['COINDCX_DRY_RUN'] = '1'
+    cfg = described_class.new(minimal_bot_config(runtime: { dry_run: false, journal_path: '/tmp/x.sqlite3' }))
+    expect(cfg.dry_run?).to be(true)
+  ensure
+    prev.nil? ? ENV.delete('COINDCX_DRY_RUN') : ENV['COINDCX_DRY_RUN'] = prev
   end
 
   it 'fx_enabled? defaults true when fx section absent' do

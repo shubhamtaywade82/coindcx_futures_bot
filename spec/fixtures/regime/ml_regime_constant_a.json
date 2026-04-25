@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "model_type": "multinomial_logistic",
+  "feature_order": ["std20", "vol_ratio", "rsi_norm", "atr_rel", "roc10", "vol_z"],
+  "classes": ["a", "b", "c"],
+  "weights": [
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  ],
+  "biases": [1.0, 0.0, 0.0],
+  "tier_by_class": {
+    "a": "low_vol",
+    "b": "mid_vol",
+    "c": "high_vol"
+  }
+}

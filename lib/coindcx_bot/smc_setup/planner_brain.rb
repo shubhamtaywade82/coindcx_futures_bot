@@ -10,14 +10,43 @@ module CoindcxBot
     class PlannerBrain
       SYSTEM_PROMPT = <<~PROMPT.gsub(/\s+/, ' ').strip.freeze
         You are an SMC-style trade planner for CoinDCX USDT-M perpetual futures.
-        Use only OHLCV summaries and levels provided. No web search, no invented prices.
-        Return a single JSON object matching schema_version 1 with keys:
-        schema_version (integer 1), setup_id (unique string), pair (instrument code),
-        direction (long or short), optional leverage, optional gatekeeper (boolean),
-        conditions with sweep_zone and entry_zone (each min/max numbers) and optional confirmation_required (array of strings:
-        choch_bull, choch_bear, choch_up, choch_down, bos_bull, bos_bear, displacement, displacement_bull, displacement_bear),
-        execution with sl (stop loss price number) and optional targets array and optional risk_usdt.
-        Zones must use realistic prices from the data. setup_id must be new and unique per call.
+        Input per pair: market_state JSON (structure, liquidity, smc with displacement/inducement/mitigation/OBs/FVG,
+        volume_profile, volatility, mean, orderflow flags, state) plus optional ohlcv_features and a short OHLCV tail.
+        Use ONLY provided fields. orderflow.exchange_delta_available is false: do not claim delta/CVD.
+        Prefer setups when smc.displacement.present is true, liquidity.event is not none OR state.is_post_sweep is true,
+        and smc.mitigation.status is untouched or partial with a real OB zone.
+
+        Return exactly one JSON object matching schema_version 1.
+        CRITICAL: conditions.sweep_zone {min, max} and conditions.entry_zone {min, max} are REQUIRED.
+        If a sweep has ALREADY occurred, set sweep_zone {min, max} to include the current price so it triggers immediately.
+        If no trade is found, return a valid JSON with zones that are logically impossible to hit (e.g., extremely far away) or set valid_for_minutes to 1.
+
+        JSON structure:
+        {
+          "schema_version": 1,
+          "setup_id": "unique_string",
+          "pair": "B-SOL_USDT",
+          "direction": "long",
+          "valid_for_minutes": 60,
+          "invalidation_level": 82.5,
+          "conditions": {
+            "sweep_zone": { "min": 83.0, "max": 83.5 },
+            "entry_zone": { "min": 84.0, "max": 84.5 },
+            "no_trade_zone": { "min": 84.5, "max": 86.0 },
+            "confirmation_required": ["choch_bull", "displacement"]
+          },
+          "execution": {
+            "sl": 82.0,
+            "targets": [88.0, 90.0],
+            "risk_usdt": 10.0
+          }
+        }
+
+        Prices must be justified by market_state or OHLCV tail. setup_id must be new per call.
+        ANCHOR RULE: every numeric price (sweep_zone, entry_zone, no_trade_zone, sl, targets, invalidation_level)
+        MUST stay within +/- 5% of the current_price provided in the user message for that pair. Never extrapolate
+        from prior knowledge or training data; recompute from the current_price + recent_ohlcv_tail. If you cannot
+        produce a valid setup within that band, return a JSON with valid_for_minutes: 1 and zones that cannot trigger.
       PROMPT
 
       Result = Struct.new(:ok, :payload, :error_message, keyword_init: true)
@@ -44,8 +73,8 @@ module CoindcxBot
         raw = resp.content.to_s
         h = JsonSlice.parse_object(raw)
         h = unwrap_array_payload(h)
-        Validator.validate!(h)
-        Result.new(ok: true, payload: Validator.deep_symbolize(h), error_message: nil)
+        h = Validator.validate!(h)
+        Result.new(ok: true, payload: h, error_message: nil)
       rescue StandardError => e
         @logger&.warn("[smc_setup:planner] #{e.class}: #{e.message}")
         Result.new(ok: false, payload: nil, error_message: e.message.to_s)
@@ -66,11 +95,35 @@ module CoindcxBot
 
       def build_user_message(context)
         lines = []
+        lines << 'Analyze the following structured market state for crypto futures (CoinDCX).'
         lines << "Execution TF: #{context[:exec_resolution]}. HTF: #{context[:htf_resolution]}."
         lines << "Open positions: #{context[:open_count].to_i}."
+
+        ms = context[:market_state_by_pair] || {}
+        feat = context[:features_by_pair] || {}
+
+        ltps = context[:ltps_by_pair] || {}
         Array(context[:pairs]).each do |p|
-          lines << "Pair #{p}: exec OHLCV tail: #{JSON.generate(context.dig(:candles_by_pair, p) || [])}"
+          lines << "--- Pair #{p} ---"
+          ltp = ltps[p] || ltps[p.to_s]
+          if ltp
+            lines << "current_price: #{ltp}"
+            lines << "PRICE ANCHOR: All proposed sweep_zone, entry_zone, sl, targets, no_trade_zone " \
+                     "MUST be within +/- 5% of current_price (#{ltp}). Reject any setup outside that band. " \
+                     "Do not invent prices from training data."
+          end
+          if ms[p]
+            lines << 'market_state:'
+            lines << JSON.pretty_generate(ms[p])
+          end
+          if feat[p] && !feat[p].empty?
+            lines << 'ohlcv_features (deterministic, no true order flow):'
+            lines << JSON.pretty_generate(feat[p])
+          end
+          tail = context.dig(:candles_by_pair, p) || []
+          lines << "recent_ohlcv_tail: #{JSON.generate(tail)}" unless tail.empty?
         end
+
         lines.join("\n")
       end
 

@@ -46,6 +46,8 @@ The engine subscribes to the private **order update** Socket.io stream when runn
 ```bash
 bundle exec bin/bot run           # blocking engine (WS + REST candles + strategy loop)
 bundle exec bin/bot tui           # engine + terminal dashboard (see TUI notes below)
+
+**Startup wrappers (always TUI):** `bin/start-dry-run` sets **`COINDCX_DRY_RUN=1`** (paper, overrides YAML). `bin/start-live` sets **`COINDCX_DRY_RUN=0`** and defaults **`PLACE_ORDERS=0`** (live observe); use **`PLACE_ORDERS=1 bin/start-live`** to allow real order placement. For **`run`** or other commands, call **`bundle exec bin/bot …`** directly.
 bundle exec bin/bot doctor        # REST check + list active instruments (SOL/ETH hints)
 bundle exec bin/bot paper-status  # journal snapshot: open rows, today's INR PnL, paper_realized
 bundle exec bin/bot help

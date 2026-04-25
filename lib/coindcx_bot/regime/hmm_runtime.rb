@@ -3,6 +3,7 @@
 require_relative 'allocation'
 require_relative 'hmm_engine'
 require_relative 'features'
+require_relative 'state_machine'
 
 module CoindcxBot
   module Regime
@@ -17,6 +18,14 @@ module CoindcxBot
         @history_argmax = Hash.new { |h, k| h[k] = [] }
         @last_candle_time_by_pair = {}
         @bars_since_train = Hash.new(0)
+        @state_machines = Hash.new do |h, pair|
+          h[pair] = StateMachine.new(confirmations: confirmations_cfg)
+        end
+      end
+
+      # @return [Hash, nil] { state_id:, label:, posterior: } once the state machine confirms stability
+      def stable_state_for(pair)
+        @mutex.synchronize { @state_machines[pair].stable_state }
       end
 
       def refresh!(candles_by_pair)
@@ -38,7 +47,7 @@ module CoindcxBot
         return {} if pair.nil?
 
         st = state_for(pair)
-        return {} if st.nil?
+        return tui_overlay_waiting(pair) if st.nil?
 
         tier = Allocation.vol_tier(st.vol_rank, st.vol_rank_total)
         {
@@ -86,12 +95,32 @@ module CoindcxBot
 
       private
 
+      # Prefer the TUI focus pair when it is a configured instrument — do not substitute another pair's
+      # HMM state (that caused FOCUS: ETH while the strip showed SOL's regime).
       def resolve_overlay_primary_pair(primary_pair)
-        candidates = []
         p = primary_pair.to_s.strip
-        candidates << p unless p.empty?
-        @config.pairs.each { |x| candidates << x.to_s }
-        candidates.compact.uniq.find { |pair| state_for(pair) }
+        configured = @config.pairs.map(&:to_s)
+        return p if !p.empty? && configured.include?(p)
+
+        configured.find { |pair| state_for(pair) }
+      end
+
+      def tui_overlay_waiting(pair)
+        {
+          active: false,
+          enabled: true,
+          regime_pair: pair,
+          label: '—',
+          probability_pct: nil,
+          stability_bars: nil,
+          flicker_display: 'n/a',
+          confirmed: nil,
+          vol_rank_display: 'n/a',
+          transition_display: 'n/a',
+          quant_display: '—',
+          hmm_display: 'HMM: warming up (need bars)',
+          status: 'PIPE:WAIT'
+        }
       end
 
       def hmm_state_slice(st)
@@ -159,6 +188,7 @@ module CoindcxBot
               hist << sid
               hist.shift while hist.size > 50
               @state_by_pair[pair] = st
+              @state_machines[pair].update(state_id: st.state_id, label: st.label, posterior: st.probability)
             end
           end
 
@@ -175,6 +205,10 @@ module CoindcxBot
 
       def zscore_lookback_cfg
         @config.regime_hmm_hash.fetch(:zscore_lookback, 60).to_i
+      end
+
+      def confirmations_cfg
+        @config.respond_to?(:regime_hmm_state_machine_confirmations) ? @config.regime_hmm_state_machine_confirmations : 2
       end
     end
   end

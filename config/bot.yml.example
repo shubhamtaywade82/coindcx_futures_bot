@@ -16,6 +16,9 @@
 #   COINDCX_TUI_VERBOSE=1       — TUI: engine logs to tmp/coindcx_tui.log (or COINDCX_TUI_LOG path)
 #   COINDCX_TUI_LOG             — custom path for TUI verbose log
 #   COINDCX_TUI_POLL_ONLY=1     — TUI: REST LTP poll only (no WS requirement for display)
+# Telegram (optional): COINDCX_TELEGRAM_BOT_TOKEN, COINDCX_TELEGRAM_CHAT_ID enable the main chat.
+#   COINDCX_TELEGRAM_OPS_CHAT_ID / COINDCX_TELEGRAM_OPS_BOT_TOKEN — optional second destination
+#   COINDCX_TELEGRAM_OPS_TYPES — comma-separated event_log.type names for ops duplicate (empty = none)
 
 margin_currency_short_name: USDT
 
@@ -172,6 +175,7 @@ execution:
     # leverage: 5   # optional; TUI/header fall back to risk.max_leverage when omitted
 
 # Three ways to run: paper (dry_run true) vs live observe (dry_run false + place_orders false) vs live trading — docs/operating_modes.md
+# Convenience (always `bin/bot tui`): bin/start-dry-run (COINDCX_DRY_RUN=1) and bin/start-live (COINDCX_DRY_RUN=0, PLACE_ORDERS=0 unless set).
 runtime:
   journal_path: ./data/bot_journal.sqlite3
   candle_lookback: 120
@@ -188,9 +192,10 @@ runtime:
   ws_shutdown_join_seconds: 45
   # Paper trading: no futures orders / account exits (set false only for live after risk checks).
   dry_run: true
-  # Live only (dry_run: false): false = live feeds + read-only APIs, no order/exit REST. Default true. Override: PLACE_ORDER=0
+  # Live only (dry_run: false): false = live feeds + read-only APIs, no order/exit REST. Default true if omitted.
+  # Override env (live only): PLACE_ORDER=0/1 or PLACE_ORDERS=0/1 (PLACE_ORDER wins if both set). bin/start-live defaults PLACE_ORDERS=0.
   # place_orders: true
-  # With place_orders false (or PLACE_ORDER=0), TUI mirrors CoinDCX futures positions + wallet into the desk (needs tui_exchange_positions: true).
+  # With place_orders false (or PLACE_ORDER/PLACE_ORDERS=0), TUI mirrors CoinDCX futures positions + wallet into the desk (needs tui_exchange_positions: true).
   # Live + place_orders true: set true to mirror exchange rows anyway (optional).
   # tui_exchange_mirror: true
   # Log every strategy evaluation: [strategy] pair action reason=… (noisy). Or set COINDCX_STRATEGY_SIGNALS=1.
@@ -203,6 +208,30 @@ runtime:
   # tui_exchange_positions: true
   # tui_exchange_positions_refresh_seconds: 25
   # tui_exchange_positions_margins: [USDT, INR]   # optional; default: top-level margin_currency_short_name, or [USDT, INR] if unset
+
+# Multi-level analysis alerts (journal always; Telegram optional + throttle when filter_telegram is true).
+# When filter_telegram is false or omitted, every journal event still reaches Telegram as today (no policy).
+# New analysis_* events are emitted only when the matching analysis.* flag is true (except price_rules: any listed rule runs).
+# alerts:
+#   filter_telegram: false
+#   analysis:
+#     strategy_transitions: false      # analysis_strategy_transition on sig action/reason edge (per pair)
+#     regime_hmm_transitions: false    # analysis_regime_change after HMM decode changes
+#     regime_ai_updates: false         # analysis_regime_ai_update when Ollama label/prob delta exceeds threshold
+#     regime_ai_min_probability_delta: 10   # percentage points
+#     price_cross_cooldown_seconds: 300     # per pair + price rule: suppress analysis_price_cross while LTP chops one level
+#   price_rules:
+#     - pair: B-SOL_USDT
+#       id: sol_above_100
+#       label: "SOL century"
+#       above: 100        # also supports below: or both (zone flips emit analysis_price_cross)
+#   telegram:
+#     allow_types: []                 # empty = all types allowed; otherwise whitelist (suffix * = prefix match)
+#     critical_types: []              # omit for defaults: open_failed, signal_close, analysis_liquidation_proximity, flatten
+#     default_throttle_seconds: 0     # 0 = no throttle except dedupe key still buckets repeats
+#     critical_throttle_seconds: 30
+#     throttle_by_type:              # per-type minimum seconds between Telegram sends (same type+pair+dedupe_key)
+#       analysis_regime_ai_update: 900
 
 # Regime: HMM (Ruby diagonal Gaussian), optional Ollama narrative, optional risk size multipliers.
 # See docs/hmm_regime_trading_spec.md. Ollama does not submit orders; strategy `regime_vol_tier` gates entries from HMM tier.
@@ -222,6 +251,17 @@ runtime:
 #     flicker_threshold: 4
 #     min_confidence: 0.55
 #     retrain_every_bars: 0
+#   # Offline multinomial-logistic bundle (JSON) — same 6 causal z-scored columns as HMM features
+#   # (Regime::Features). Does not predict direction; maps regime class → vol tier for regime_hint / gating.
+#   # Train: scripts/train_ml_regime.py (see script docstring).
+#   # ml:
+#   #   enabled: false
+#   #   model_path: ./data/ml_regime_model.json
+#   #   scope: global              # global = one file; per_pair = ml_regime_model_<PAIR>.json beside stem
+#   #   zscore_lookback: 60
+#   #   confirm_bars: 3            # consecutive bars with same raw argmax before switching debounced label
+#   #   immediate_probability: 0.92 # switch early when softmax max prob reaches this
+#   #   tier_precedence: hmm_first # hmm_first | ml_first — which source supplies regime_hint[:tier] first
 #   strategy:
 #     block_entries_high_vol: true
 #     block_on_flicker: false
@@ -243,6 +283,12 @@ runtime:
 #     temperature: 0.15
 #     use_retry_middleware: true
 #     retry_attempts: 3
+#     # Deterministic OHLCV feature packet (CoindcxBot::TradingAi::FeatureEnricher) for the regime Ollama prompt.
+#     include_feature_packet: false
+#     feature_min_candles: 30
+#     feature_tz_offset_minutes: 0
+#     # When true with include_feature_packet: skip per-bar OHLCV text lines (token savings; packet JSON only).
+#     omit_raw_bars_when_feature_packet: false
 #
 # regime_backtest:
 #   n_candidates: [3, 4]
@@ -268,6 +314,10 @@ runtime:
 #   planner_reset_state: false
 #   gatekeeper_enabled: false
 #   gatekeeper_min_interval_seconds: 45
+#   # Append CoindcxBot::TradingAi::FeatureEnricher JSON to the gatekeeper user payload (needs enough exec candles).
+#   gatekeeper_include_feature_packet: false
+#   gatekeeper_feature_min_candles: 30
+#   gatekeeper_feature_tz_offset_minutes: 0
 #   model: llama3.2:3b
 #   ollama_base_url: http://127.0.0.1:11434
 #   timeout_seconds: 60
