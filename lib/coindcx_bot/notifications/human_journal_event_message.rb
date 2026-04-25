@@ -20,6 +20,8 @@ module CoindcxBot
             when 'flatten' then format_flatten(h)
             when 'paper_realized' then format_paper_realized(h)
             when 'ws_order_update' then format_ws_order_update(h)
+            when 'smc_setup_identified' then format_smc_setup_identified(h)
+            when 'smc_setup_armed' then format_smc_setup_armed(h)
             when 'smc_setup_fired' then format_smc_setup_fired(h)
             when 'smc_setup_invalidated' then format_smc_setup_invalidated(h)
             when 'analysis_strategy_transition' then format_analysis_strategy_transition(h)
@@ -141,19 +143,48 @@ module CoindcxBot
           lines.size > 1 ? lines.join("\n") : "Order (WebSocket update)\n(no fields)"
         end
 
+        def format_smc_setup_identified(h)
+          (['SMC setup identified'] + smc_setup_common_lines(h)).join("\n")
+        end
+
+        def format_smc_setup_armed(h)
+          lines = ['SMC setup ARMED (awaiting price)']
+          lines.concat(smc_setup_common_lines(h))
+          lines << "Gate: #{fetch_s(h, :gate_ok)}" if fetch_s(h, :gate_ok) != ''
+          lines.join("\n")
+        end
+
         def format_smc_setup_fired(h)
-          lines = ['SMC setup entry fired']
-          lines << "Setup: #{fetch_s(h, :setup_id)}" if fetch_s(h, :setup_id) != ''
-          lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
+          lines = ['SMC setup entry FIRED']
+          lines.concat(smc_setup_common_lines(h))
+          lines << "Entry filled: #{fetch_s(h, :entry_price)}" if fetch_s(h, :entry_price) != ''
+          lines << "Size: #{fetch_s(h, :quantity)}" if fetch_s(h, :quantity) != ''
           lines.join("\n")
         end
 
         def format_smc_setup_invalidated(h)
-          lines = ['SMC setup invalidated']
-          lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
-          lines << "Setup: #{fetch_s(h, :setup_id)}" if fetch_s(h, :setup_id) != ''
+          lines = ['SMC setup INVALIDATED']
+          lines.concat(smc_setup_common_lines(h))
           lines << "Reason: #{fetch_s(h, :reason)}" if fetch_s(h, :reason) != ''
+          lines << "LTP: #{fetch_s(h, :ltp)}" if fetch_s(h, :ltp) != ''
           lines.join("\n")
+        end
+
+        def smc_setup_common_lines(h)
+          lines = []
+          lines << "Setup: #{fetch_s(h, :setup_id)}" if fetch_s(h, :setup_id) != ''
+          lines << "Pair: #{fetch_s(h, :pair)}" if fetch_s(h, :pair) != ''
+          dir = fetch_s(h, :direction)
+          lines << "Direction: #{dir.upcase}" if dir != ''
+          if fetch_s(h, :entry_min) != '' && fetch_s(h, :entry_max) != ''
+            lines << "Entry zone: #{fetch_s(h, :entry_min)} - #{fetch_s(h, :entry_max)}"
+          end
+          lines << "Stop-loss: #{fetch_s(h, :sl)}" if fetch_s(h, :sl) != ''
+          lines << "Targets: #{fetch_s(h, :targets)}" if fetch_s(h, :targets) != ''
+          lines << "Risk: #{fetch_s(h, :risk_usdt)} USDT" if fetch_s(h, :risk_usdt) != ''
+          lines << "Leverage: #{fetch_s(h, :leverage)}x" if fetch_s(h, :leverage) != ''
+          lines << "Expires: #{fetch_s(h, :expires_at)}" if fetch_s(h, :expires_at) != ''
+          lines
         end
 
         def format_analysis_strategy_transition(h)

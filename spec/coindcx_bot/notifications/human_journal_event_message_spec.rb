@@ -174,5 +174,60 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
       expect(s).to include('Liquidation')
       expect(s).to include('2.5')
     end
+
+    it 'formats smc_setup_identified with direction, zone, sl, targets' do
+      s = described_class.format(
+        'smc_setup_identified',
+        setup_id: 'sol_20260424_001',
+        pair: 'B-SOL_USDT',
+        direction: 'long',
+        entry_min: '85.0',
+        entry_max: '85.5',
+        sl: '84.2',
+        targets: '86.5,87.5',
+        risk_usdt: '30',
+        leverage: '10'
+      )
+      expect(s).to include('SMC setup identified')
+      expect(s).to include('Direction: LONG')
+      expect(s).to include('Entry zone: 85.0 - 85.5')
+      expect(s).to include('Stop-loss: 84.2')
+      expect(s).to include('Targets: 86.5,87.5')
+      expect(s).to include('Risk: 30 USDT')
+    end
+
+    it 'formats smc_setup_armed with gate flag' do
+      s = described_class.format(
+        'smc_setup_armed',
+        setup_id: 'id1', pair: 'B-ETH_USDT', direction: 'short',
+        entry_min: '2305', entry_max: '2310', sl: '2320', gate_ok: 'approved'
+      )
+      expect(s).to include('ARMED')
+      expect(s).to include('Gate: approved')
+      expect(s).to include('Direction: SHORT')
+    end
+
+    it 'formats smc_setup_fired with entry price and size' do
+      s = described_class.format(
+        'smc_setup_fired',
+        setup_id: 'id1', pair: 'B-SOL_USDT', direction: 'long',
+        entry_min: '85.0', entry_max: '85.5', sl: '84.2',
+        entry_price: '85.3', quantity: '12.5'
+      )
+      expect(s).to include('FIRED')
+      expect(s).to include('Entry filled: 85.3')
+      expect(s).to include('Size: 12.5')
+    end
+
+    it 'formats smc_setup_invalidated with reason and ltp' do
+      s = described_class.format(
+        'smc_setup_invalidated',
+        setup_id: 'id1', pair: 'B-SOL_USDT', direction: 'long',
+        sl: '84.2', reason: 'hmm_conflict:TREND_DN', ltp: '83.9'
+      )
+      expect(s).to include('INVALIDATED')
+      expect(s).to include('Reason: hmm_conflict:TREND_DN')
+      expect(s).to include('LTP: 83.9')
+    end
   end
 end

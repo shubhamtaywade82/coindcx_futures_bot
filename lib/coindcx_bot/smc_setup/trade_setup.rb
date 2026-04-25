@@ -119,6 +119,25 @@ module CoindcxBot
         h
       end
 
+      def event_payload
+        {
+          setup_id: setup_id,
+          pair: pair,
+          direction: direction.to_s,
+          entry_min: entry_min.to_f.to_s,
+          entry_max: entry_max.to_f.to_s,
+          sweep_min: sweep_min.to_f.to_s,
+          sweep_max: sweep_max.to_f.to_s,
+          sl: sl.to_f.to_s,
+          targets: targets.map(&:to_f).map(&:to_s).join(','),
+          risk_usdt: risk_usdt&.to_f.to_s,
+          leverage: leverage.to_s,
+          gatekeeper: gatekeeper.to_s,
+          confirmations: confirmations.to_s,
+          expires_at: expires_at&.iso8601.to_s
+        }
+      end
+
       def self.from_hash(h)
         h = h.transform_keys(&:to_sym)
         cond = (h[:conditions] || {}).transform_keys(&:to_sym)

@@ -511,6 +511,7 @@ module CoindcxBot
           logger: @logger,
           smc_configuration: smc_cfg,
           regime_sizer: @regime_sizer,
+          hmm_runtime: @hmm_runtime,
           setup_mutex_factory: ->(id) { @smc_setup_mutexes[id] }
         )
       end
@@ -573,6 +574,13 @@ module CoindcxBot
             sid = res.payload[:setup_id] || res.payload['setup_id']
             pair = res.payload[:pair] || res.payload['pair']
             @logger&.info("[smc_setup:planner] upserted setup_id=#{sid} pair=#{pair} (Ollama → TradeSetup store)")
+            rec = @smc_setup_store.record_by_id(sid)
+            if rec&.trade_setup
+              @journal.log_event(
+                'smc_setup_identified',
+                rec.trade_setup.event_payload.merge(dedupe_key: "identified|#{sid}")
+              )
+            end
             @smc_setup_planner_state[:error] = nil
           rescue SmcSetup::Validator::ValidationError => e
             @smc_setup_planner_state[:error] = e.message
