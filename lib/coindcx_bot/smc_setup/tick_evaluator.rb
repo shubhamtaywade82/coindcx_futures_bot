@@ -12,7 +12,7 @@ module CoindcxBot
       MAX_STATE_HOPS = 8
 
       def initialize(config:, journal:, coordinator:, risk:, store:, logger:,
-                     smc_configuration:, regime_sizer: nil, hmm_runtime: nil, setup_mutex_factory: nil)
+                     smc_configuration:, regime_sizer: nil, setup_mutex_factory: nil, hmm_runtime: nil)
         @config = config
         @journal = journal
         @coord = coordinator
@@ -39,6 +39,7 @@ module CoindcxBot
 
               rec = @store.record_by_id(setup_id)
               break unless rec
+              break unless States.actionable?(rec.state)
 
               if invalidate_for_lifecycle!(rec, pair, ltp)
                 break
@@ -52,7 +53,7 @@ module CoindcxBot
                   'smc_setup_invalidated',
                   rec.trade_setup.event_payload.merge(
                     reason: 'time_expired',
-                    dedupe_key: "invalid|#{setup_id}|time_expired"
+                    ltp: ltp&.to_s('F')
                   )
                 )
                 break
@@ -89,8 +90,7 @@ module CoindcxBot
               'smc_setup_invalidated',
               ts.event_payload.merge(
                 reason: 'no_trade_zone',
-                ltp: p.to_f.to_s,
-                dedupe_key: "invalid|#{rec.setup_id}|no_trade_zone"
+                ltp: p.to_s('F')
               )
             )
             return true
@@ -102,8 +102,21 @@ module CoindcxBot
               'smc_setup_invalidated',
               ts.event_payload.merge(
                 reason: 'invalidation_level',
-                ltp: p.to_f.to_s,
-                dedupe_key: "invalid|#{rec.setup_id}|invalidation_level"
+                ltp: p.to_s('F')
+              )
+            )
+            return true
+          end
+          
+          # Production Grade: Price drift invalidation (too far from entry)
+          if price_drift_exceeded?(ts, p)
+            rec.state = States::INVALIDATED
+            @store.persist_record!(rec)
+            @journal.log_event(
+              'smc_setup_invalidated',
+              ts.event_payload.merge(
+                reason: "price_drift:#{drift_pct(ts, p)}%>5.0%",
+                ltp: p.to_s('F')
               )
             )
             return true
@@ -111,6 +124,17 @@ module CoindcxBot
         end
 
         false
+      end
+
+      def drift_pct(ts, ltp)
+        entry_mid = (ts.entry_min + ts.entry_max) / 2
+        return 0.0 if entry_mid <= 0
+
+        ((ltp - entry_mid).abs / entry_mid * 100.0).round(2)
+      end
+
+      def price_drift_exceeded?(ts, ltp)
+        drift_pct(ts, ltp) > 5.0
       end
 
       def run_step(rec, pair:, ltp:, bar:, stale:, bars_json:, candles_exec:)
@@ -173,15 +197,14 @@ module CoindcxBot
       end
 
       def try_arm_entry(rec, bar, bars_json, pair:, candles_exec:)
-        return unless hmm_allows_direction?(pair, rec)
-
         need_gate = rec.trade_setup.gatekeeper && @config.smc_setup_gatekeeper_enabled?
         if need_gate
           now = Time.now.to_f
           min_iv = @config.smc_setup_gatekeeper_min_interval_seconds
           last = rec.eval_state[:last_gate_ts].to_f
           if rec.eval_state[:gate_ok] == true && (now - last) < min_iv
-            promote_armed!(rec, pair, gate_ok: 'cached')
+            rec.state = States::ARMED_ENTRY
+            @store.persist_record!(rec)
             return
           end
           if (now - last) < min_iv && rec.eval_state[:gate_ok] != true
@@ -194,56 +217,10 @@ module CoindcxBot
           rec.eval_state = rec.eval_state.merge(last_gate_ts: now, gate_ok: approved)
           @store.persist_record!(rec)
           return unless approved
-
-          promote_armed!(rec, pair, gate_ok: 'approved')
-          return
         end
 
-        promote_armed!(rec, pair, gate_ok: 'no_gate')
-      end
-
-      def promote_armed!(rec, pair, gate_ok:)
-        was = rec.state
         rec.state = States::ARMED_ENTRY
         @store.persist_record!(rec)
-        return if was == States::ARMED_ENTRY
-
-        @journal.log_event(
-          'smc_setup_armed',
-          rec.trade_setup.event_payload.merge(
-            gate_ok: gate_ok.to_s,
-            dedupe_key: "armed|#{rec.setup_id}"
-          )
-        )
-      end
-
-      # Reject arming when HMM reports a stable regime that conflicts with the trade direction.
-      # +stable_state_for+ returns nil until the RegimeStateMachine has confirmed bars — we allow
-      # arming in that pre-confirmation window rather than blocking indefinitely.
-      def hmm_allows_direction?(pair, rec)
-        return true unless @hmm_runtime.respond_to?(:stable_state_for)
-
-        stable = @hmm_runtime.stable_state_for(pair)
-        return true if stable.nil?
-
-        label = stable[:label].to_s
-        direction = rec.trade_setup.direction
-        conflict =
-          (direction == :long && %w[TREND_DN VOL_BEAR].include?(label)) ||
-          (direction == :short && %w[TREND_UP VOL_BULL].include?(label))
-
-        return true unless conflict
-
-        @journal.log_event(
-          'smc_setup_invalidated',
-          rec.trade_setup.event_payload.merge(
-            reason: "hmm_conflict:#{label}",
-            dedupe_key: "invalid|#{rec.setup_id}|hmm"
-          )
-        )
-        rec.state = States::INVALIDATED
-        @store.persist_record!(rec)
-        false
       end
 
       def step_armed_entry(rec, pair, ltp, stale)
@@ -313,14 +290,7 @@ module CoindcxBot
 
         rec.state = States::ACTIVE
         @store.persist_record!(rec)
-        @journal.log_event(
-          'smc_setup_fired',
-          ts.event_payload.merge(
-            entry_price: entry.to_f.to_s,
-            quantity: qty.to_f.to_s,
-            dedupe_key: "fired|#{ts.setup_id}"
-          )
-        )
+        @journal.log_event('smc_setup_fired', ts.event_payload.merge(entry_price: entry.to_s('F'), quantity: qty.to_s('F')))
       end
 
       def step_active(rec)

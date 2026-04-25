@@ -106,9 +106,23 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         to_reason: 'supertrend_bull_flip',
         ltp: '100.5'
       )
-      expect(s).to include('Strategy signal change')
+      expect(s).to include('Strategy Transition')
       expect(s).to include('B-SOL_USDT')
-      expect(s).to include('open_long')
+      expect(s).to include('OPEN_LONG')
+      expect(s).to include('LTP: 100.5')
+    end
+
+    it 'formats analysis_strategy_transition LTP without scientific notation' do
+      s = described_class.format(
+        'analysis_strategy_transition',
+        pair: 'B-SOL_USDT',
+        from_action: 'hold',
+        from_reason: 'x',
+        to_action: 'hold',
+        to_reason: 'y',
+        ltp: '0.8636e2'
+      )
+      expect(s).to include('LTP: 86.36')
     end
 
     it 'formats analysis_price_cross' do

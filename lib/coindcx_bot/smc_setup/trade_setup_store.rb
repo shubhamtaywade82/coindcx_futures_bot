@@ -132,6 +132,13 @@ module CoindcxBot
       private
 
       def sync_record_in_cache!(rec)
+        if States::TERMINAL.include?(rec.state.to_s)
+          arr = @by_pair[rec.pair]
+          arr&.reject! { |r| r.setup_id == rec.setup_id }
+          @by_pair.delete(rec.pair) if arr.nil? || arr.empty?
+          return
+        end
+
         @by_pair[rec.pair] ||= []
         arr = @by_pair[rec.pair]
         idx = arr.index { |r| r.setup_id == rec.setup_id }

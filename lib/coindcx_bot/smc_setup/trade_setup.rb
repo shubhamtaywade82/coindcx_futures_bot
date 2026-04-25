@@ -168,6 +168,21 @@ module CoindcxBot
         )
       end
 
+      def event_payload
+        {
+          setup_id: setup_id,
+          pair: pair,
+          direction: direction.to_s,
+          entry_min: entry_min.to_f,
+          entry_max: entry_max.to_f,
+          sl: sl.to_f,
+          targets: targets.map(&:to_f).join(','),
+          risk_usdt: risk_usdt&.to_f,
+          leverage: leverage,
+          expires_at: expires_at&.iso8601
+        }.compact
+      end
+
       private
 
       def no_trade_zone_present?

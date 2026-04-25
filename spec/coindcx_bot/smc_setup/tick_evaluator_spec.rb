@@ -128,8 +128,45 @@ RSpec.describe CoindcxBot::SmcSetup::TickEvaluator do
       stale: false
     )
 
-    row = store.record_by_id('ntz-1')
-    expect(row.state).to eq(CoindcxBot::SmcSetup::States::INVALIDATED)
+    row = journal.smc_setup_get_row('ntz-1')
+    expect(row[:state]).to eq(CoindcxBot::SmcSetup::States::INVALIDATED)
+  end
+
+  it 'emits smc_setup_invalidated for time_expired at most once across ticks' do
+    past = (Time.now.utc - 120).iso8601
+    store.upsert_from_hash!(
+      {
+        schema_version: 1,
+        setup_id: 'exp-once',
+        pair: 'B-SOL_USDT',
+        direction: 'long',
+        expires_at: past,
+        conditions: {
+          sweep_zone: { min: 40, max: 120 },
+          entry_zone: { min: 90, max: 102 },
+          confirmation_required: []
+        },
+        execution: { sl: 30.0 }
+      }
+    )
+    store.reload!
+
+    # LTP near entry mid avoids lifecycle price_drift invalidation (still expired).
+    5.times do
+      evaluator.evaluate_pair!(
+        pair: 'B-SOL_USDT',
+        ltp: BigDecimal('96'),
+        candles_exec: dto_candles(100),
+        stale: false
+      )
+    end
+
+    rows = journal.recent_events(30).select do |e|
+      e['type'] == 'smc_setup_invalidated' && e['payload'].to_s.include?('exp-once')
+    end
+    expect(rows.size).to eq(1)
+    payload = JSON.parse(rows.first['payload'], symbolize_names: true)
+    expect(payload[:reason]).to eq('time_expired')
   end
 
   it 'does not call apply twice when journal already has the setup id open' do

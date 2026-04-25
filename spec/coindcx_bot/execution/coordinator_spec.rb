@@ -305,7 +305,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(paper_store.open_positions.size).to eq(1)
     end
 
-    it 'returns failed when position_id does not match an open row' do
+    it 'returns ok when position_id does not match an open row (duplicate close suppressed)' do
       close_signal = CoindcxBot::Strategy::Signal.new(
         action: :close,
         pair: 'B-SOL_USDT',
@@ -314,7 +314,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
         reason: 'x',
         metadata: { position_id: 99_999 }
       )
-      expect(coordinator.apply(close_signal)).to eq(:failed)
+      expect(coordinator.apply(close_signal)).to eq(:ok)
     end
 
     it 'closes the open row by pair when position_id is missing (paper only)' do
@@ -530,16 +530,16 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       )
 
       expect(account).not_to receive(:list_positions)
-      expect(coordinator.apply(close_signal, exit_price: BigDecimal('105'))).to eq(:failed)
-      expect(journal.open_positions.size).to eq(1)
+      expect(coordinator.apply(close_signal, exit_price: BigDecimal('105'))).to eq(:ok)
+      expect(journal.open_positions).to be_empty
 
-      ev = journal.recent_events(10).find { |e| e['type'] == 'signal_close' }
-      expect(ev).not_to be_nil
-      payload = JSON.parse(ev['payload'], symbolize_names: true)
+      evs = journal.recent_events(10).select { |e| e['type'] == 'signal_close' }
+      expect(evs.size).to eq(1)
+      payload = JSON.parse(evs.first['payload'], symbolize_names: true)
       expect(payload[:outcome]).to eq('live_orders_disabled')
     end
 
-    it 'skips exchange flatten and does not close journal rows for the pair' do
+    it 'closes journal rows on flatten when live exits are disabled' do
       journal.insert_position(
         pair: 'B-SOL_USDT',
         side: 'long',
@@ -551,7 +551,7 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
 
       expect(account).not_to receive(:list_positions)
       coordinator.flatten_all(['B-SOL_USDT'], ltps: { 'B-SOL_USDT' => BigDecimal('102') })
-      expect(journal.open_positions.size).to eq(1)
+      expect(journal.open_positions).to be_empty
     end
   end
 end

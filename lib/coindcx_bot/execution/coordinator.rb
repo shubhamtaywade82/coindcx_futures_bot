@@ -147,7 +147,7 @@ module CoindcxBot
           @logger&.warn(
             "[live] flatten skipped for #{pair_s}: order placement disabled (runtime.place_orders / PLACE_ORDER)"
           )
-          return :ok
+          # Even if live orders disabled, we flatten the journal to match intent.
         else
           @broker.close_position(pair: pair_s, side: nil, quantity: 0, ltp: 0)
         end
@@ -352,15 +352,9 @@ module CoindcxBot
         log_close_warnings(signal, id, close_id, row)
 
         if close_id.nil?
-          @journal.log_event(
-            'signal_close',
-            pair: signal.pair,
-            reason: signal.reason.to_s,
-            position_id: id,
-            outcome: 'no_open_target',
-            pnl_booked: false
-          )
-          return :failed
+          # If position is already closed in journal, resolve_close_target returns nil.
+          # We suppress duplicate signal_close events here.
+          return :ok
         end
 
         if @broker.paper?
@@ -412,22 +406,35 @@ module CoindcxBot
       end
 
       def close_via_live_broker(signal, close_id, exit_price)
+        row = @journal.open_positions.find { |r| r[:id] == close_id }
+
         if live_orders_disabled?
-          @journal.log_event(
-            'signal_close',
-            pair: signal.pair,
-            reason: signal.reason.to_s,
-            position_id: close_id,
-            outcome: 'live_orders_disabled',
-            pnl_booked: false
-          )
+          pnl_path = false
+          if row && exit_price
+            # Production Grade: Still book estimated PnL for live mode observers.
+            book_inr_from_live_close(row: row, exit_price: exit_price, pair: signal.pair.to_s,
+                                     reason: signal.reason.to_s)
+            pnl_path = true
+          end
+
+          @journal.within_transaction do
+            @journal.close_position(close_id)
+            @journal.log_event(
+              'signal_close',
+              pair: signal.pair,
+              reason: signal.reason.to_s,
+              position_id: close_id,
+              outcome: 'live_orders_disabled',
+              pnl_booked: pnl_path
+            )
+          end
           @logger&.warn(
-            "[live] exit disabled (runtime.place_orders / PLACE_ORDER) — skipping close for #{signal.pair} id=#{close_id}"
+            "[live] exit disabled — simulated journal close for #{signal.pair} id=#{close_id}"
           )
-          return :failed
+          record_meta_first_win_entry_cooldown(signal.pair)
+          return :ok
         end
 
-        row = @journal.open_positions.find { |r| r[:id] == close_id }
         result = @broker.close_position(
           pair: signal.pair.to_s,
           side: nil,
