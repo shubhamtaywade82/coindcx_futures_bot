@@ -305,6 +305,13 @@ module CoindcxBot
       smc_setup_enabled? && truthy?(smc_setup_section[:gatekeeper_enabled])
     end
 
+    def smc_setup_planner_max_price_deviation_pct
+      v = smc_setup_section.fetch(:planner_max_price_deviation_pct, 5.0)
+      Float(v).clamp(0.5, 50.0)
+    rescue ArgumentError, TypeError
+      5.0
+    end
+
     def smc_setup_max_active_setups_per_pair
       n = smc_setup_section.fetch(:max_active_setups_per_pair, 3).to_i
       [[n, 1].max, 16].min

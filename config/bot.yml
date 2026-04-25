@@ -186,6 +186,7 @@ smc_setup:
   timeout_seconds: 90
   poll_interval_seconds: 120
   max_active_setups_per_pair: 3
+  planner_max_price_deviation_pct: 5.0 # reject Ollama setups whose prices drift > N% from current LTP
 
 # Regime: Baum-Welch HMM volatility classification + Ollama narrative + RegimeSizer.
 regime:

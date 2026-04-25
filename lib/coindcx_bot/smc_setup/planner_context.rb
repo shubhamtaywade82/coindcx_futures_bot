@@ -15,7 +15,7 @@ module CoindcxBot
       module_function
 
       def build(pairs:, candles_by_pair:, open_count:, exec_resolution:, htf_resolution:,
-                strategy_cfg:, config:)
+                strategy_cfg:, config:, ltps_by_pair: {})
         smc_cfg = SmcConfluence::Configuration.from_hash((strategy_cfg || {})[:smc_confluence] || {})
         min = config.smc_setup_planner_min_candles
         tail_n = config.smc_setup_planner_ohlcv_tail
@@ -67,11 +67,17 @@ module CoindcxBot
           )
         end
 
+        ltps = Array(pairs).to_h do |p|
+          v = ltps_by_pair[p] || ltps_by_pair[p.to_s]
+          [p, v ? Float(v).round(8) : nil]
+        end
+
         {
           pairs: Array(pairs),
           candles_by_pair: candles_tail_by_pair,
           market_state_by_pair: market_state_by_pair,
           features_by_pair: features_by_pair,
+          ltps_by_pair: ltps,
           open_count: open_count,
           exec_resolution: exec_resolution,
           htf_resolution: htf_resolution

@@ -576,10 +576,14 @@ module CoindcxBot
             @logger&.info("[smc_setup:planner] upserted setup_id=#{sid} pair=#{pair} (Ollama → TradeSetup store)")
             rec = @smc_setup_store.record_by_id(sid)
             if rec&.trade_setup
-              @journal.log_event(
-                'smc_setup_identified',
-                rec.trade_setup.event_payload.merge(dedupe_key: "identified|#{sid}")
-              )
+              if reject_setup_for_price_drift!(rec, pair)
+                # rejected & invalidated — do not emit identified
+              else
+                @journal.log_event(
+                  'smc_setup_identified',
+                  rec.trade_setup.event_payload.merge(dedupe_key: "identified|#{sid}")
+                )
+              end
             end
             @smc_setup_planner_state[:error] = nil
           rescue SmcSetup::Validator::ValidationError => e
@@ -593,12 +597,44 @@ module CoindcxBot
         @smc_setup_planner_state[:error] = e.message
       end
 
+      # Returns true when the setup was rejected for being too far from the current LTP.
+      def reject_setup_for_price_drift!(rec, pair)
+        ts = rec.trade_setup
+        ltp = @tracker.ltp(pair)
+        return false if ltp.nil?
+
+        ltp_f = ltp.to_f
+        return false if ltp_f <= 0
+
+        max_pct = @config.smc_setup_planner_max_price_deviation_pct
+        prices = [ts.entry_min, ts.entry_max, ts.sweep_min, ts.sweep_max, ts.sl, *ts.targets].map(&:to_f)
+        worst = prices.map { |p| ((p - ltp_f).abs / ltp_f * 100.0) }.max
+        return false if worst <= max_pct
+
+        rec.state = SmcSetup::States::INVALIDATED
+        @smc_setup_store.persist_record!(rec)
+        @journal.log_event(
+          'smc_setup_invalidated',
+          ts.event_payload.merge(
+            reason: format('price_drift:%.1f%%>%.1f%%(ltp=%s)', worst, max_pct, ltp_f),
+            ltp: ltp_f.to_s,
+            dedupe_key: "invalid|#{rec.setup_id}|price_drift"
+          )
+        )
+        @logger&.warn(
+          "[smc_setup:planner] rejected #{rec.setup_id} pair=#{pair} drift=#{worst.round(1)}% > #{max_pct}% (ltp=#{ltp_f})"
+        )
+        true
+      end
+
       def build_smc_planner_context
         pairs = @config.pairs
         candles_full = pairs.to_h { |p| [p, Array(@candles_exec[p])] }
+        ltps = pairs.to_h { |p| [p, @tracker.ltp(p)] }
         SmcSetup::PlannerContext.build(
           pairs: pairs,
           candles_by_pair: candles_full,
+          ltps_by_pair: ltps,
           open_count: @journal.open_positions.size,
           exec_resolution: @exec_res,
           htf_resolution: @htf_res,

@@ -43,6 +43,10 @@ module CoindcxBot
         }
 
         Prices must be justified by market_state or OHLCV tail. setup_id must be new per call.
+        ANCHOR RULE: every numeric price (sweep_zone, entry_zone, no_trade_zone, sl, targets, invalidation_level)
+        MUST stay within +/- 5% of the current_price provided in the user message for that pair. Never extrapolate
+        from prior knowledge or training data; recompute from the current_price + recent_ohlcv_tail. If you cannot
+        produce a valid setup within that band, return a JSON with valid_for_minutes: 1 and zones that cannot trigger.
       PROMPT
 
       Result = Struct.new(:ok, :payload, :error_message, keyword_init: true)
@@ -98,10 +102,18 @@ module CoindcxBot
         ms = context[:market_state_by_pair] || {}
         feat = context[:features_by_pair] || {}
 
+        ltps = context[:ltps_by_pair] || {}
         Array(context[:pairs]).each do |p|
           lines << "--- Pair #{p} ---"
+          ltp = ltps[p] || ltps[p.to_s]
+          if ltp
+            lines << "current_price: #{ltp}"
+            lines << "PRICE ANCHOR: All proposed sweep_zone, entry_zone, sl, targets, no_trade_zone " \
+                     "MUST be within +/- 5% of current_price (#{ltp}). Reject any setup outside that band. " \
+                     "Do not invent prices from training data."
+          end
           if ms[p]
-            lines << "market_state:"
+            lines << 'market_state:'
             lines << JSON.pretty_generate(ms[p])
           end
           if feat[p] && !feat[p].empty?
