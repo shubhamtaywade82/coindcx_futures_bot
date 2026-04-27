@@ -73,6 +73,7 @@ module CoindcxBot
         raw = resp.content.to_s
         h = JsonSlice.parse_object(raw)
         h = unwrap_array_payload(h)
+        h = repair_missing_keys!(h)
         h = Validator.validate!(h)
         Result.new(ok: true, payload: h, error_message: nil)
       rescue StandardError => e
@@ -81,6 +82,17 @@ module CoindcxBot
       end
 
       private
+
+      def repair_missing_keys!(h)
+        return h unless h.is_a?(Hash)
+
+        # If schema_version is missing but it looks like a version 1 payload (conditions + execution), inject it.
+        if !h.key?(:schema_version) && h.key?(:conditions) && h.key?(:execution)
+          h[:schema_version] = 1
+        end
+
+        h
+      end
 
       def unwrap_array_payload(h)
         return h.first if h.is_a?(Array) && h.first.is_a?(Hash)

@@ -1118,8 +1118,8 @@ module CoindcxBot
         @config.pairs.each { |pair| process_pair(pair, ws_feed_stale?(pair)) }
         emit_price_rule_crossings!
         refresh_smc_setup_planner_if_due
-        refresh_regime_ai_if_due
         refresh_exchange_positions_for_tui_if_due
+        refresh_regime_ai_if_due
         refresh_futures_wallet_for_tui_if_due
         refresh_runtime_reconcile_if_due
         apply_funding_for_live_positions!

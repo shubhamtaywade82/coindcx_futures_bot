@@ -87,7 +87,7 @@ module CoindcxBot
           ax = truthy?(s[:auto_execute]) ? accent('AUTO·EXE') : muted('AUTO·OFF')
           last = muted(format_last_run(s[:planner_last_at], s[:planner_interval_s]))
           err = s[:planner_error].to_s.strip
-          err_part = err.empty? ? nil : loss("ERR: #{err[0, 56]}")
+          err_part = err.empty? ? nil : loss("ERR: #{err[0, 120]}")
           colored = [bold('SMC·SETUP'), plan_s, gk, ax, last, err_part].compact.join('  ')
           p = strip_ansi(colored)
           return colored if p.length <= w
