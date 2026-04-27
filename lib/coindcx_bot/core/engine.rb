@@ -414,14 +414,36 @@ module CoindcxBot
             rows = [] if omit_raw && features_by_pair.key?(p)
             [p, rows]
           end
+
+        pos = if @config.tui_exchange_mirror? && !@config.dry_run?
+                build_mirrored_positions_for_ai
+              else
+                @journal.open_positions
+              end
+
         {
           pairs: pairs,
           candles_by_pair: candles_by_pair,
           features_by_pair: features_by_pair,
-          positions: @journal.open_positions,
+          positions: pos,
           exec_resolution: @exec_res,
           htf_resolution: @htf_res
         }
+      end
+
+      def build_mirrored_positions_for_ai
+        idx = {}
+        snap_rows = @exchange_positions_tui_mutex.synchronize { @exchange_positions_tui[:rows] || [] }
+        snap_rows.each do |row|
+          next unless CoindcxBot::Tui::LiveAccountMirror.row_open?(row)
+
+          pair = CoindcxBot::Tui::LiveAccountMirror.normalize_bot_pair(row)
+          next if pair.empty?
+
+          pseudo = CoindcxBot::Tui::LiveAccountMirror.pseudo_journal_from_exchange(row)
+          idx[pair] = pseudo if pseudo
+        end
+        idx.values
       end
 
       def build_regime_ai_features_by_pair(pairs)
