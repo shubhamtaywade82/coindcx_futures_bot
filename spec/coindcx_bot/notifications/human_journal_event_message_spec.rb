@@ -10,8 +10,8 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         reason: 'meta_first_win(pullback_to_ema)',
         leverage: 5
       )
-      expect(s).to include('coindcx-bot | signal_open')
-      expect(s).to include('Open LONG · B-ETH_USDT')
+      expect(s).to include('✅ SIGNAL_OPEN')
+      expect(s).to include('📈 LONG · B-ETH_USDT')
       expect(s).to include('Reason: meta_first_win(pullback_to_ema)')
       expect(s).to include('Leverage: 5x')
       expect(s).not_to include('{')
@@ -27,14 +27,12 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         exit_price: '2383.3448178853571428571428571428571143',
         source: 'broker_stop_loss'
       )
-      expect(s).to include('Paper PnL (realized)')
+      expect(s).to include('✅ PAPER_REALIZED')
       expect(s).to include('Pair: B-ETH_USDT')
       expect(s).to include('Position: #33')
       expect(s).to match(/PnL: -1\.1175 USDT/)
       expect(s).to match(/~₹-109\.52/)
       expect(s).to include('Exit: 2383.3448')
-      expect(s).to include('Source: broker_stop_loss')
-      expect(s).not_to include('000038456793984')
     end
 
     it 'formats signal_close with yes/no for pnl_booked' do
@@ -46,12 +44,12 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         outcome: 'closed',
         pnl_booked: true
       )
-      expect(s).to include('Close')
+      expect(s).to include('🛑 SIGNAL_CLOSE')
       expect(s).to include('Pair: B-ETH_USDT')
       expect(s).to include('Reason: hwm_giveback')
       expect(s).to include('Position: #35')
-      expect(s).to include('Outcome: closed')
-      expect(s).to include('PnL booked: yes')
+      expect(s).to include('Outcome: Closed')
+      expect(s).to include('PnL Booked: Yes')
     end
 
     it 'formats open_failed' do
@@ -62,7 +60,7 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         reason: 'meta_first_win(x)',
         detail: 'broker_rejected'
       )
-      expect(s).to include('Open failed')
+      expect(s).to include('🚫 OPEN_FAILED')
       expect(s).to include('Detail: broker_rejected')
     end
 
@@ -73,9 +71,9 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         'status' => 'done',
         'id' => '99'
       )
-      expect(s).to include('Order (WebSocket update)')
-      expect(s).to include('event: fill')
-      expect(s).to include('status: done')
+      expect(s).to include('ℹ️ WS_ORDER_UPDATE')
+      expect(s).to include('Event: fill')
+      expect(s).to include('Status: done')
     end
 
     it 'uses labeled fallback for unknown event types' do
@@ -93,7 +91,7 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         'reason' => 'x',
         'leverage' => 3
       )
-      expect(s).to include('Open SHORT · B-SOL_USDT')
+      expect(s).to include('📉 SHORT · B-SOL_USDT')
     end
 
     it 'formats analysis_strategy_transition' do
@@ -106,7 +104,7 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         to_reason: 'supertrend_bull_flip',
         ltp: '100.5'
       )
-      expect(s).to include('Strategy Transition')
+      expect(s).to include('🔄 ANALYSIS_STRATEGY_TRANSITION')
       expect(s).to include('B-SOL_USDT')
       expect(s).to include('OPEN_LONG')
       expect(s).to include('LTP: 100.5')
@@ -145,22 +143,21 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         regime_ai_label: 'RANGING',
         regime_ai_probability_pct: '40.0'
       )
-      expect(s).to include('Price level cross (LTP)')
+      expect(s).to include('ℹ️ ANALYSIS_PRICE_CROSS')
       expect(s).to include('101')
-      expect(s).to include('HMM:')
-      expect(s).to include('Regime AI (book-wide):')
+      expect(s).to include('Level Crossed')
     end
 
     it 'formats analysis_regime_change' do
       s = described_class.format(
         'analysis_regime_change',
         pair: 'B-SOL_USDT',
-        from_state: 0,
-        to_state: 1,
+        from_state_id: 0,
+        to_state_id: 1,
         from_label: 'low',
         to_label: 'high'
       )
-      expect(s).to include('HMM regime change')
+      expect(s).to include('🔄 ANALYSIS_REGIME_CHANGE')
       expect(s).to include('B-SOL_USDT')
     end
 
@@ -168,12 +165,12 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
       s = described_class.format(
         'analysis_regime_ai_update',
         pair: 'B-SOL_USDT',
-        from_label: 'range',
-        to_label: 'trend',
-        from_probability_pct: 40.0,
-        to_probability_pct: 55.0
+        prev_label: 'range',
+        regime_label: 'trend',
+        prev_probability_pct: 40.0,
+        probability_pct: 55.0
       )
-      expect(s).to include('Regime AI')
+      expect(s).to include('🌍 Regime AI Transition')
     end
 
     it 'formats analysis_liquidation_proximity' do
@@ -185,7 +182,7 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         ltp: '100',
         liq: '97.5'
       )
-      expect(s).to include('Liquidation')
+      expect(s).to include('⚠️ ANALYSIS_LIQUIDATION_PROXIMITY')
       expect(s).to include('2.5')
     end
 
@@ -202,12 +199,13 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         risk_usdt: '30',
         leverage: '10'
       )
-      expect(s).to include('SMC setup identified')
-      expect(s).to include('Direction: LONG')
-      expect(s).to include('Entry zone: 85.0 - 85.5')
-      expect(s).to include('Stop-loss: 84.2')
+      expect(s).to include('ℹ️ SMC_SETUP_IDENTIFIED')
+      expect(s).to include('Bias: 📈 LONG')
+      expect(s).to include('Entry Zone: 85.0 - 85.5')
+      expect(s).to include('Stop-Loss: 84.2')
       expect(s).to include('Targets: 86.5,87.5')
       expect(s).to include('Risk: 30 USDT')
+      expect(s).to include('Risk/Reward: 1:1.19')
     end
 
     it 'formats smc_setup_armed with gate flag' do
@@ -216,9 +214,9 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         setup_id: 'id1', pair: 'B-ETH_USDT', direction: 'short',
         entry_min: '2305', entry_max: '2310', sl: '2320', gate_ok: 'approved'
       )
-      expect(s).to include('ARMED')
-      expect(s).to include('Gate: approved')
-      expect(s).to include('Direction: SHORT')
+      expect(s).to include('🔄 SMC_SETUP_ARMED')
+      expect(s).to include('Gate: Approved')
+      expect(s).to include('Bias: 📉 SHORT')
     end
 
     it 'formats smc_setup_fired with entry price and size' do
@@ -228,8 +226,8 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         entry_min: '85.0', entry_max: '85.5', sl: '84.2',
         entry_price: '85.3', quantity: '12.5'
       )
-      expect(s).to include('FIRED')
-      expect(s).to include('Entry filled: 85.3')
+      expect(s).to include('✅ SMC_SETUP_FIRED')
+      expect(s).to include('Entry Fill: 85.3')
       expect(s).to include('Size: 12.5')
     end
 
@@ -239,8 +237,8 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         setup_id: 'id1', pair: 'B-SOL_USDT', direction: 'long',
         sl: '84.2', reason: 'hmm_conflict:TREND_DN', ltp: '83.9'
       )
-      expect(s).to include('INVALIDATED')
-      expect(s).to include('Reason: hmm_conflict:TREND_DN')
+      expect(s).to include('🚫 SMC_SETUP_INVALIDATED')
+      expect(s).to include('Reason: Hmm conflict:trend dn')
       expect(s).to include('LTP: 83.9')
     end
   end

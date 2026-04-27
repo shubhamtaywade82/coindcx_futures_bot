@@ -103,6 +103,8 @@ module CoindcxBot
         @ws_tick_at = {}
         @last_strategy_by_pair = {}
         @analysis_last_sig_fingerprint = {}
+        @analysis_strategy_candidate = {}
+        @analysis_strategy_candidate_count = Hash.new(0)
         @analysis_last_hmm_state = {}
         @analysis_price_rule_zone = {}
         @price_cross_cooldown = Alerts::PriceCrossCooldown.new
@@ -1680,11 +1682,26 @@ module CoindcxBot
         fp = "#{sig.action}:#{sig.reason}"
         prev = @analysis_last_sig_fingerprint[pair_s]
         return if prev == fp
+
+        # Initial transition check
         if prev.nil? && sig.action == :hold
           @analysis_last_sig_fingerprint[pair_s] = fp
           return
         end
 
+        # Persistence check: require the same new fingerprint twice before alerting
+        # to reduce chatter from flickering signals.
+        candidate = @analysis_strategy_candidate[pair_s]
+        if candidate == fp
+          @analysis_strategy_candidate_count[pair_s] += 1
+        else
+          @analysis_strategy_candidate[pair_s] = fp
+          @analysis_strategy_candidate_count[pair_s] = 1
+        end
+
+        return if @analysis_strategy_candidate_count[pair_s] < 2
+
+        # Alert and confirm
         prev_action, prev_reason = prev.to_s.split(':', 2)
         @journal.log_event(
           'analysis_strategy_transition',
@@ -1694,9 +1711,11 @@ module CoindcxBot
           to_action: sig.action.to_s,
           to_reason: sig.reason.to_s,
           ltp: ltp&.to_s,
-          dedupe_key: fp
+          dedupe_key: "#{pair_s}|#{fp}"
         )
         @analysis_last_sig_fingerprint[pair_s] = fp
+        @analysis_strategy_candidate[pair_s] = nil
+        @analysis_strategy_candidate_count[pair_s] = 0
       end
 
       def emit_regime_hmm_transitions!
@@ -1824,23 +1843,27 @@ module CoindcxBot
         return unless new_payload.is_a?(Hash)
 
         new_h = new_payload.transform_keys(&:to_sym)
-        prev_h =
-          if prev_payload.is_a?(Hash)
-            prev_payload.transform_keys(&:to_sym)
-          else
-            {}
-          end
-
+        prev_h = prev_payload.is_a?(Hash) ? prev_payload.transform_keys(&:to_sym) : {}
         return if prev_h.empty?
 
-        new_l = (new_h[:regime_label]).to_s
-        old_l = (prev_h[:regime_label]).to_s
+        new_l = new_h[:regime_label].to_s
+        old_l = prev_h[:regime_label].to_s
 
         new_p = regime_ai_probability_float(new_h[:probability_pct])
         old_p = regime_ai_probability_float(prev_h[:probability_pct])
         delta = (new_p - old_p).abs
+
+        # Noise reduction:
+        # 1. Label change is always interesting to a trader.
+        # 2. Probability crossing 70% or 90% is interesting (conviction level).
+        # 3. Massive jumps (e.g. 25%) are interesting.
         label_changed = new_l != old_l && !(new_l.empty? && old_l.empty?)
-        return unless label_changed || delta >= @config.alerts_regime_ai_min_probability_delta
+        crossed_threshold = (old_p < 70 && new_p >= 70) || (old_p < 90 && new_p >= 90)
+        massive_jump = delta >= 25.0
+
+        significant = label_changed || crossed_threshold || massive_jump
+
+        return unless significant
 
         trans = (new_h[:transition_summary]).to_s
         @journal.log_event(

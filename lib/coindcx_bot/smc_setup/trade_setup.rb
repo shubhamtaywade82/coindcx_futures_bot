@@ -80,6 +80,33 @@ module CoindcxBot
         end
       end
 
+      def valid_geometry?
+        return false if targets.empty?
+
+        if long?
+          # Long: SL < Entry < TP
+          return false unless sl < entry_min
+          targets.all? { |t| t > entry_max }
+        elsif short?
+          # Short: TP < Entry < SL
+          return false unless sl > entry_max
+          targets.all? { |t| t < entry_min }
+        else
+          false
+        end
+      end
+
+      def rr_ratio
+        return 0.0 if targets.empty? || entry_min == sl
+
+        entry_avg = (entry_min + entry_max) / 2.0
+        risk = (entry_avg - sl).abs
+        reward = (targets.first - entry_avg).abs
+        return 0.0 if risk.zero?
+
+        (reward / risk).to_f.round(2)
+      end
+
       def long?
         @direction == :long
       end

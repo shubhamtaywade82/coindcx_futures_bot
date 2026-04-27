@@ -12,7 +12,7 @@ RSpec.describe CoindcxBot::SmcSetup::Validator do
         entry_zone: { min: 95, max: 99 },
         confirmation_required: []
       },
-      execution: { sl: 85.0 }
+      execution: { sl: 85.0, targets: [110.0, 120.0] }
     }
   end
 

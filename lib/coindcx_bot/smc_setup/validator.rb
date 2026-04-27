@@ -40,6 +40,22 @@ module CoindcxBot
 
         exec = deep_symbolize(h[:execution])
         raise ValidationError, "#{ctx} execution.sl required" unless numeric?(exec[:sl])
+        raise ValidationError, "#{ctx} execution.targets required and must be an array" unless exec[:targets].is_a?(Array) && !exec[:targets].empty?
+
+        # Geometry validation
+        begin
+          setup = TradeSetup.from_hash(h)
+          unless setup.valid_geometry?
+            msg = if setup.long?
+                    "LONG setup requires SL < Entry < TP (SL=#{setup.sl}, Entry=#{setup.entry_min}-#{setup.entry_max}, Targets=#{setup.targets.join(',')})"
+                  else
+                    "SHORT setup requires TP < Entry < SL (SL=#{setup.sl}, Entry=#{setup.entry_min}-#{setup.entry_max}, Targets=#{setup.targets.join(',')})"
+                  end
+            raise ValidationError, "#{ctx} invalid geometry: #{msg}"
+          end
+        rescue ArgumentError => e
+          raise ValidationError, "#{ctx} failed to build TradeSetup for geometry check: #{e.message}"
+        end
 
         if h.key?(:leverage) && !blank?(h[:leverage])
           lev = Integer(h[:leverage])

@@ -205,6 +205,26 @@ module CoindcxBot
           end
           lines << "Stop-Loss: #{fetch_s(h, :sl)}" if fetch_s(h, :sl) != ''
           lines << "Targets: #{fetch_s(h, :targets)}" if fetch_s(h, :targets) != ''
+
+          # Add RR if possible
+          begin
+            e_min = fetch_s(h, :entry_min)
+            e_max = fetch_s(h, :entry_max)
+            sl = fetch_s(h, :sl)
+            targs = fetch_s(h, :targets).to_s.split(',')
+            if e_min != '' && e_max != '' && sl != '' && !targs.empty?
+              entry_avg = (BigDecimal(e_min) + BigDecimal(e_max)) / 2.0
+              risk = (entry_avg - BigDecimal(sl)).abs
+              reward = (BigDecimal(targs.first) - entry_avg).abs
+              if risk > 0
+                rr = (reward / risk).to_f.round(2)
+                lines << "Risk/Reward: 1:#{rr}"
+              end
+            end
+          rescue StandardError
+            # skip RR if math fails
+          end
+
           lines << "Risk: #{fetch_s(h, :risk_usdt)} USDT" if fetch_s(h, :risk_usdt) != ''
           lines << "Expires: #{fetch_s(h, :expires_at)}" if fetch_s(h, :expires_at) != ''
           lines
@@ -249,9 +269,23 @@ module CoindcxBot
         end
 
         def format_analysis_regime_ai_update(h)
-          lines = ['🧠 Regime AI Update']
-          lines << "Current: #{fetch_s(h, :regime_label)} (Prob: #{fetch_s(h, :probability_pct)}%)" if fetch_s(h, :regime_label) != ''
-          lines << "Status: #{fetch_s(h, :transition_summary).capitalize}" if fetch_s(h, :transition_summary) != ''
+          cur = fetch_s(h, :regime_label)
+          old = fetch_s(h, :prev_label)
+          prob = fetch_s(h, :probability_pct)
+
+          title = if cur != old && old != ''
+                    '🌍 Regime AI Transition'
+                  else
+                    '🧠 Regime AI Update'
+                  end
+
+          lines = [title]
+          lines << "Current: #{cur} (Prob: #{prob}%)" if cur != '' && prob != ''
+
+          summary = fetch_s(h, :transition_summary)
+          if summary != '' && summary != 'nil'
+            lines << "Status: #{summary.capitalize}"
+          end
           lines.join("\n")
         end
 
