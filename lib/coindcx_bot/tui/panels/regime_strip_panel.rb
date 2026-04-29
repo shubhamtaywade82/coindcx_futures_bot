@@ -72,10 +72,10 @@ module CoindcxBot
           buf = StringIO.new
           buf << @cursor.save
           buf << move(@row) << ui_border(top_rule(w, r))
-          buf << move(@row + 1) << ui_border("│ ") << line_primary(r, w - 4) << ui_border(" │")
-          buf << move(@row + 2) << ui_border("│ ") << line_secondary(r, w - 4) << ui_border(" │")
+          buf << move(@row + 1) << ui_border("│ ") << pad_visible(line_primary(r, w - 4), w - 4) << ui_border(" │")
+          buf << move(@row + 2) << ui_border("│ ") << pad_visible(line_secondary(r, w - 4), w - 4) << ui_border(" │")
           detail.each_with_index do |plain, i|
-            buf << move(@row + 3 + i) << ui_border("│ ") << ai_detail_box_line_inner(plain, text_w) << ui_border(" │")
+            buf << move(@row + 3 + i) << ui_border("│ ") << pad_visible(ai_detail_box_line_inner(plain, text_w), text_w) << ui_border(" │")
           end
           buf << move(@row + 3 + detail.size) << ui_border(bot_rule(w))
           buf << @cursor.restore
@@ -111,11 +111,12 @@ module CoindcxBot
         end
 
         def top_rule(w, r)
-          inner = w - 2
-          title = regime_box_title(r, inner)
-          dashes = inner - visible_len(title)
-          dashes = 0 if dashes.negative?
-          "┌#{title}#{'─' * dashes}┐"
+          p = compact_regime_pair_label(r[:regime_pair])
+          title = ui_header(p ? " REGIME · #{p} " : " REGIME ")
+          rem = w - 2 - visible_len(title)
+          l1 = (rem / 2).clamp(1, w)
+          l2 = (rem - l1).clamp(1, w)
+          "┌#{'─' * l1}#{title}#{'─' * l2}┐"
         end
 
         def regime_box_title(r, max_plain_len)

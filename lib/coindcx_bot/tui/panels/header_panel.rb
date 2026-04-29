@@ -36,11 +36,15 @@ module CoindcxBot
         r = @row
 
         # Top border with title
-        buf << move(r) << ui_border("┌─") << ui_header(" SYSTEM STATUS ") << ui_border("#{'─' * (w - 18)}┐")
+        title = ui_header(" SYSTEM STATUS ")
+        rem = w - 2 - visible_len(title)
+        l1 = (rem / 2).clamp(1, w)
+        l2 = (rem - l1).clamp(1, w)
+        buf << move(r) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
         r += 1
 
         # System row
-        buf << move(r) << ui_border("│ ") << line_mode_engine_kill_ws_lat_feed(snap, w - 4) << ui_border(" │")
+        buf << move(r) << ui_border("│ ") << pad_visible(line_mode_engine_kill_ws_lat_feed(snap, w - 4), w - 4) << ui_border(" │")
         r += 1
 
         # Set engine focus for regime AI strip overlay context
@@ -48,16 +52,16 @@ module CoindcxBot
 
         if strip
           # Account row (Live only)
-          buf << move(r) << ui_border("│ ") << line_live_equity_wallet_unreal(snap, w - 4) << ui_border(" │")
+          buf << move(r) << ui_border("│ ") << pad_visible(line_live_equity_wallet_unreal(snap, w - 4), w - 4) << ui_border(" │")
           r += 1
         end
 
         # Balance & Risk row
-        buf << move(r) << ui_border("│ ") << line_balance_net_real_unreal_dd_risk(snap, vm, w - 4) << ui_border(" │")
+        buf << move(r) << ui_border("│ ") << pad_visible(line_balance_net_real_unreal_dd_risk(snap, vm, w - 4), w - 4) << ui_border(" │")
         r += 1
 
         # Stats row
-        buf << move(r) << ui_border("│ ") << line_pos_ord_err_last(snap, vm, w - 4) << ui_border(" │")
+        buf << move(r) << ui_border("│ ") << pad_visible(line_pos_ord_err_last(snap, vm, w - 4), w - 4) << ui_border(" │")
         r += 1
 
         # Bottom border

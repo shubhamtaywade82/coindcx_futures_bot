@@ -50,9 +50,13 @@ module CoindcxBot
           end
 
           w = term_width
-          buf << move(@row) << ui_border("┌─") << ui_header(" SMC SETUP ") << ui_border("#{'─' * (w - 14)}┐")
-          buf << move(@row + 1) << ui_border("│ ") << line_planner(s, w - 4) << ui_border(" │")
-          buf << move(@row + 2) << ui_border("│ ") << line_setups(s, w - 4) << ui_border(" │")
+          title = ui_header(" SMC SETUP ")
+          rem = w - 2 - visible_len(title)
+          l1 = (rem / 2).clamp(1, w)
+          l2 = (rem - l1).clamp(1, w)
+          buf << move(@row) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
+          buf << move(@row + 1) << ui_border("│ ") << pad_visible(line_planner(s, w - 4), w - 4) << ui_border(" │")
+          buf << move(@row + 2) << ui_border("│ ") << pad_visible(line_setups(s, w - 4), w - 4) << ui_border(" │")
           buf << move(@row + 3) << ui_border("└#{'─' * (w - 2)}┘")
 
           buf << @cursor.restore
