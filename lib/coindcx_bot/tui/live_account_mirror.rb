@@ -261,14 +261,18 @@ module CoindcxBot
 
         bal = parse_wallet_decimal(row, *WALLET_BALANCE_FIELD_KEYS)
         bal ||= wallet_balance_from_sibling_row(rows, cur, inr_per_usdt)
-        return nil if bal.nil?
 
         avail = parse_wallet_decimal(row, :available_balance, :available, :free_balance, :free)
         locked = parse_wallet_decimal(row, :locked_balance, :locked, :locked_margin)
         xo = parse_wallet_decimal(row, :cross_order_margin, :crossOrderMargin)
         xu = parse_wallet_decimal(row, :cross_user_margin, :crossUserMargin)
 
-        h = { currency: cur, balance: bal }
+        # CoinDCX API often reports 'balance' as available cash, excluding margin.
+        # To show true Wallet Balance (Equity excluding PnL), we sum available + locked.
+        comp_sum = (avail || BigDecimal('0')) + (locked || BigDecimal('0'))
+        total_bal = (bal && bal >= comp_sum) ? bal : comp_sum
+
+        h = { currency: cur, balance: total_bal }
         h[:available_balance] = avail unless avail.nil?
         h[:locked_balance] = locked unless locked.nil?
         h[:cross_order_margin] = xo unless xo.nil?

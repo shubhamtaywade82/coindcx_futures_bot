@@ -9,28 +9,32 @@ module CoindcxBot
       INNER_HEIGHT_MIN = 6
       INNER_HEIGHT_CAP = 24
 
-      def self.build(engine:, tick_store:, symbols:)
+      def self.build(engine:, tick_store:, symbols:, inner_height_override: nil)
         new(
           snapshot: engine.snapshot,
           tick_ticks: tick_store.snapshot,
           symbols: Array(symbols).map(&:to_s),
           ws_stale_fn: ->(sym) { engine.ws_feed_stale?(sym) },
           config: engine.config,
-          # Same as +Engine#inr_per_usdt+: CoinDCX conversions when +fx.enabled+, else +config.inr_per_usdt+.
-          inr_per_usdt: engine.inr_per_usdt
+          inr_per_usdt: engine.inr_per_usdt,
+          inner_height_override: inner_height_override
         )
       end
 
-      def initialize(snapshot:, tick_ticks:, symbols:, ws_stale_fn:, config:, inr_per_usdt: nil)
+      def initialize(snapshot:, tick_ticks:, symbols:, ws_stale_fn:, config:, inr_per_usdt: nil,
+                     inner_height_override: nil)
         @snap = snapshot
         @tick_ticks = tick_ticks
         @symbols = symbols
         @ws_stale_fn = ws_stale_fn
         @config = config
         @inr_per_usdt = inr_per_usdt || @config.inr_per_usdt
+        @inner_height_override = inner_height_override
       end
 
       def inner_height
+        return @inner_height_override if @inner_height_override
+
         n = @symbols.size
         [[n, INNER_HEIGHT_MIN].max, INNER_HEIGHT_CAP].min
       end

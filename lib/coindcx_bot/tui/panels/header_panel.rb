@@ -43,6 +43,9 @@ module CoindcxBot
         buf << move(r) << ui_border("│ ") << line_mode_engine_kill_ws_lat_feed(snap, w - 4) << ui_border(" │")
         r += 1
 
+        # Set engine focus for regime AI strip overlay context
+        @engine.tui_focus_pair = @focus_pair_proc&.call
+
         if strip
           # Account row (Live only)
           buf << move(r) << ui_border("│ ") << line_live_equity_wallet_unreal(snap, w - 4) << ui_border(" │")
@@ -344,7 +347,7 @@ module CoindcxBot
         end
 
         def live_account_pair_label(tag, inr_amt, usdt_amt)
-          "#{bold("#{tag}: ")}#{colored_inr(inr_amt)}#{muted(' · ')}#{colored_num(usdt_amt)}#{muted(' USDT')}"
+          "#{bold("#{tag}: ")}#{colored_inr(inr_amt)}#{muted(" (#{fmt_num(usdt_amt)} USDT)")}"
         end
 
         def fmt_inr(v)

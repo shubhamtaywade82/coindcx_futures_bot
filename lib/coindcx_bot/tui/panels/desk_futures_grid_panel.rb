@@ -4,6 +4,7 @@ require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
 require_relative '../term_width'
+require_relative '../term_height'
 require_relative '../theme'
 require_relative '../ansi_string'
 require_relative '../sparkline'
@@ -19,7 +20,7 @@ module CoindcxBot
         DEPTH_BLOCKS = %w[▏ ▎ ▍ ▌ ▋ ▊ ▉ █].freeze
 
         def initialize(engine:, tick_store:, order_book_store:, symbols:, focus_pair_proc:, origin_row:,
-                       origin_col: 0, output: $stdout)
+                       origin_col: 0, output: $stdout, flexible_height: nil)
           @engine = engine
           @tick_store = tick_store
           @order_book_store = order_book_store
@@ -29,10 +30,16 @@ module CoindcxBot
           @col = origin_col
           @output = output
           @cursor = TTY::Cursor
+          @flexible_height = flexible_height
         end
 
         def render
-          vm = DeskViewModel.build(engine: @engine, tick_store: @tick_store, symbols: @symbols)
+          vm = DeskViewModel.build(
+            engine: @engine,
+            tick_store: @tick_store,
+            symbols: @symbols,
+            inner_height_override: @flexible_height
+          )
           h = vm.inner_height
           snap = @engine.snapshot
           focus = @focus_pair_proc&.call&.to_s || @symbols.first.to_s
@@ -81,7 +88,12 @@ module CoindcxBot
         end
 
         def row_count
-          vm = DeskViewModel.build(engine: @engine, tick_store: @tick_store, symbols: @symbols)
+          vm = DeskViewModel.build(
+            engine: @engine,
+            tick_store: @tick_store,
+            symbols: @symbols,
+            inner_height_override: @flexible_height
+          )
           4 + vm.inner_height
         end
 
@@ -163,7 +175,8 @@ module CoindcxBot
           focus = @focus_pair_proc&.call&.to_s
           is_focus = row[:symbol].to_s == focus
           indicator = is_focus ? sapphire('»') : ' '
-          spark = render_sparkline_for(row[:symbol])
+          spark_w = wide_exec ? 16 : 8
+          spark = render_sparkline_for(row[:symbol], width: spark_w)
 
           if wide_exec
             line = format_exec_cell_wide(row, sym, spark, indicator)
@@ -175,11 +188,11 @@ module CoindcxBot
           end
         end
 
-        def render_sparkline_for(symbol)
-          hist = @tick_store.price_history(symbol.to_s, max: 12)
+        def render_sparkline_for(symbol, width: 8)
+          hist = @tick_store.price_history(symbol.to_s, max: 20)
           return nil if hist.size < 3
 
-          raw = Sparkline.render(hist, width: 8)
+          raw = Sparkline.render(hist, width: width)
           accent(raw)
         end
 
@@ -201,7 +214,7 @@ module CoindcxBot
           ]
           parts << muted("[#{row[:lane]}]") if row[:lane]
           parts << spark if spark
-          parts.join(muted(' '))
+          parts.join(muted(' │ '))
         end
 
         def extract_pct(label)
@@ -222,26 +235,26 @@ module CoindcxBot
             color_pnl_pct(extract_pct(row[:pnl_label]), pnl_short_label(row))
           ]
           parts << spark if spark
-          parts.join(muted(' '))
+          parts.join(muted(' │ '))
         end
 
-        def shrink_exec_line_to_fit(row, sym, spark)
+        def shrink_exec_line_to_fit(row, sym, spark, indicator)
           lst = (row[:last] || row[:ltp]).to_s
           mrk = row[:mark].to_s
           side = row[:side].to_s.upcase
           side = side[0, 5].ljust(5)
           parts = [
-            warning(truncate(sym, 6).ljust(6)),
+            "#{indicator}#{warning(truncate(sym, 7).ljust(7))}",
             muted(side),
-            muted(format_exec_qty(row[:qty], 10).ljust(10)),
-            muted(row[:entry].to_s.ljust(8)),
-            accent(lst.ljust(8)),
-            muted(mrk.ljust(8)),
-            muted(row[:sl].to_s.ljust(7)),
+            muted(format_exec_qty(row[:qty], 12).ljust(12)),
+            muted(row[:entry].to_s.ljust(9)),
+            accent(lst.ljust(9)),
+            muted(mrk.ljust(9)),
+            muted(row[:sl].to_s.ljust(8)),
             color_pnl(row[:pnl_usdt], pnl_short_label(row))
           ]
           parts << spark if spark
-          parts.join(muted(' '))
+          parts.join(muted(' │ '))
         end
 
         def pnl_short_label(row)
@@ -318,9 +331,9 @@ module CoindcxBot
         def format_event(ev, w)
           ts = ev[:ts].to_i
           t = Time.at(ts).strftime('%H:%M:%S')
-          type = ev[:type].to_s
+          type = ev[:type].to_s.upcase
           hint = payload_hint(ev[:payload])
-          raw = "#{t} #{type[0, 8]} #{hint}".strip
+          raw = "#{t} #{bold(type.ljust(9))} #{hint}".strip
           raw.length > w ? "#{raw[0, w - 1]}…" : raw
         end
 
@@ -341,22 +354,12 @@ module CoindcxBot
         end
 
         def column_widths(total_w)
-          inner = [total_w - 4, 60].max
-          # Favor a wider center column so positions + orders stay readable.
-          right = (inner * 0.24).to_i.clamp(20, 44)
-          left = (inner * 0.20).to_i.clamp(20, 32)
-          mid = inner - left - right
-          if mid < 30
-            mid = 30
-            left = [inner - mid - right, 18].max
-            right = inner - left - mid
-            right = [right, 20].max
-            left = inner - mid - right
-          end
+          left = (total_w * 0.25).to_i.clamp(20, 42)
+          right = (total_w * 0.30).to_i.clamp(25, 60)
+          mid = total_w - left - right - 2
           [left, mid, right]
         end
 
-        # Split middle column: positions need more width than the order strip.
         def execution_order_widths(mid_w)
           inner = [mid_w - 1, 18].max
           ow = (inner * 0.28).to_i.clamp(18, 26)
@@ -371,10 +374,21 @@ module CoindcxBot
         def outer_top_rule(lw, mw, rw, focus)
           fp = truncate(focus.to_s, 14)
           title = ui_header(" BOOK · #{fp} ")
-          rem = lw - visible_len(title)
-          l_dash = (rem / 2).clamp(1, lw)
-          r_dash = (rem - l_dash).clamp(1, lw)
-          "┌#{'─' * l_dash}#{title}#{'─' * r_dash}┬#{ui_header(' POSITIONS · ORDERS ')}#{'─' * (mw - 20)}┬#{ui_header(' RISK · LOG ')}#{'─' * (rw - 12)}┐"
+          rem_l = lw - visible_len(title)
+          l1 = (rem_l / 2).clamp(1, lw)
+          l2 = (rem_l - l1).clamp(1, lw)
+
+          t2 = ui_header(' POSITIONS · ORDERS ')
+          rem_m = mw - visible_len(t2)
+          m1 = (rem_m / 2).clamp(1, mw)
+          m2 = (rem_m - m1).clamp(1, mw)
+
+          t3 = ui_header(' RISK · LOG ')
+          rem_r = rw - visible_len(t3)
+          r1 = (rem_r / 2).clamp(1, rw)
+          r2 = (rem_r - r1).clamp(1, rw)
+
+          "┌#{'─' * l1}#{title}#{'─' * l2}┬#{'─' * m1}#{t2}#{'─' * m2}┬#{'─' * r1}#{t3}#{'─' * r2}┐"
         end
 
         def outer_bot_rule(lw, mw, rw)

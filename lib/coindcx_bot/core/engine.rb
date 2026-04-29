@@ -681,7 +681,11 @@ module CoindcxBot
         st = @smc_setup_planner_state
         rows = []
         if @smc_setup_store
-          @config.pairs.each do |p|
+          ordered = @config.pairs.map(&:to_s)
+          fp = @tui_focus_pair.to_s.strip
+          ordered = [fp] + ordered.reject { |x| x == fp } if fp && ordered.include?(fp)
+
+          ordered.each do |p|
             @smc_setup_store.records_for_pair(p).each do |rec|
               rows << {
                 setup_id: rec.setup_id,

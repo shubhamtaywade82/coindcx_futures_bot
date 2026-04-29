@@ -77,7 +77,7 @@ module CoindcxBot
 
       # UI Elements
       def ui_border(str) = fg256(238, str)  # dark gray border
-      def ui_header(str) = fg256(250, bold(str)) # light gray bold header
+      def ui_header(str) = bg256(237, fg256(254, " #{str} ")) # dark gray pill with light text
 
       # Depth-of-market / order book
       def bar_bid(str)  = fg256(29, str)    # deep green
