@@ -50,7 +50,7 @@ module CoindcxBot
           return true unless r.is_a?(Hash)
 
           on = r[:enabled]
-          !(on == true || on.to_s.downcase == 'true' || on.to_s == '1')
+          !truthy?(on)
         end
 
         def render_disabled_compact
@@ -71,13 +71,13 @@ module CoindcxBot
           detail = ai_detail_wrap_lines(r, text_w)
           buf = StringIO.new
           buf << @cursor.save
-          buf << move(@row) << clr(top_rule(w, r))
-          buf << move(@row + 1) << clr(line_primary(r, w))
-          buf << move(@row + 2) << clr(line_secondary(r, w))
+          buf << move(@row) << ui_border(top_rule(w, r))
+          buf << move(@row + 1) << ui_border("│ ") << line_primary(r, w - 4) << ui_border(" │")
+          buf << move(@row + 2) << ui_border("│ ") << line_secondary(r, w - 4) << ui_border(" │")
           detail.each_with_index do |plain, i|
-            buf << move(@row + 3 + i) << clr(ai_detail_box_line(plain, text_w))
+            buf << move(@row + 3 + i) << ui_border("│ ") << ai_detail_box_line_inner(plain, text_w) << ui_border(" │")
           end
-          buf << move(@row + 3 + detail.size) << clr(bot_rule(w))
+          buf << move(@row + 3 + detail.size) << ui_border(bot_rule(w))
           buf << @cursor.restore
           @output.print buf.string
           @output.flush
@@ -113,23 +113,23 @@ module CoindcxBot
         def top_rule(w, r)
           inner = w - 2
           title = regime_box_title(r, inner)
-          dashes = inner - title.length
+          dashes = inner - visible_len(title)
           dashes = 0 if dashes.negative?
           "┌#{title}#{'─' * dashes}┐"
         end
 
         def regime_box_title(r, max_plain_len)
-          core = ' REGIME '
+          core = ui_header(' REGIME ')
           sym = compact_regime_pair_label(r[:regime_pair])
           return core if sym.nil? || sym.empty?
 
-          extra = "· #{sym} "
+          extra = muted(" · #{sym} ")
           full = "#{core}#{extra}"
-          return full if full.length <= max_plain_len
+          return full if visible_len(full) <= max_plain_len
 
           short_sym = sym.length > 12 ? "#{sym[0, 11]}…" : sym
-          candidate = "#{core}· #{short_sym} "
-          candidate.length <= max_plain_len ? candidate : core
+          candidate = "#{core}#{muted(" · #{short_sym} ")}"
+          visible_len(candidate) <= max_plain_len ? candidate : core
         end
 
         def compact_regime_pair_label(pair)
@@ -140,39 +140,28 @@ module CoindcxBot
         end
 
         def bot_rule(w)
-          inner = w - 2
-          "└#{'─' * inner}┘"
+          "└#{'─' * (w - 2)}┘"
         end
 
         def line_primary(r, w)
-          text_w = w - 4
-          prob = format_probability(r, r[:probability_pct])
-          stab = format_optional_int(r, r[:stability_bars])
-          conf = format_confirmed(r)
-          status = (r[:status] || '—').to_s.upcase
-          plain = [
-            "Regime:#{r[:label]}",
-            "P#{prob}",
-            "Stab:#{stab}",
-            "Flick:#{display_flicker(r)}",
-            "Conf:#{conf}",
-            status
-          ].join(' ')
-          box_line(plain, text_w)
+          s1 = "#{muted('Regime:')}#{regime_color_label(r)}"
+          s2 = "#{muted('P:')}#{emerald(format_probability(r, r[:probability_pct]))}"
+          s3 = "#{muted('Stab:')}#{accent(format_optional_int(r, r[:stability_bars]))}"
+          s4 = "#{muted('Flick:')}#{warning(display_flicker(r))}"
+          s5 = "#{muted('Conf:')}#{emerald(format_confirmed(r))}"
+          s6 = "#{muted('PIPE:')}#{emerald((r[:status] || '—').to_s.upcase)}"
+          parts = [s1, s2, s3, s4, s5, s6]
+          join_compact(w, parts)
         end
 
         def line_secondary(r, w)
-          text_w = w - 4
-          q = r[:quant_display].to_s
-          q = '—' if q.strip.empty?
-          plain = [
-            "VolRank:#{display_vol_rank(r)}",
-            secondary_transition_cell(r),
-            "Mdl:#{q}",
-            secondary_ai_cell(r)
-          ].join(' ')
-          line = plain.length > text_w ? "#{plain[0, text_w - 1]}…" : plain.ljust(text_w)
-          "│ #{muted(line)} │"
+          s1 = "#{muted('VolRank:')}#{accent(display_vol_rank(r))}"
+          s2 = "#{muted('Trans:')}#{gold(secondary_transition_cell(r))}"
+          s3 = "#{muted('Mdl:')}#{accent((r[:hmm_display] || 'off').to_s)}"
+          ai_cell = secondary_ai_cell(r)
+          s4 = "#{muted('AI:')}#{ai_cell == 'AI:—' ? muted('—') : tag_accent(ai_cell.sub('AI:', ''))}"
+          parts = [s1, s2, s3, s4]
+          join_compact(w, parts)
         end
 
         def standby_waiting?(r)
@@ -278,14 +267,8 @@ module CoindcxBot
           lines
         end
 
-        def ai_detail_box_line(plain, text_w)
-          inner = pad_visible(muted(plain), text_w)
-          "│ #{inner} │"
-        end
-
-        def box_line(plain, text_w)
-          line = plain.length > text_w ? "#{plain[0, text_w - 1]}…" : plain.ljust(text_w)
-          "│ #{line} │"
+        def ai_detail_box_line_inner(plain, text_w)
+          pad_visible(muted(plain), text_w)
         end
 
         def move(row)

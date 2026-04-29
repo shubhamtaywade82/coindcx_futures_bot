@@ -25,35 +25,49 @@ module CoindcxBot
           @cursor = TTY::Cursor
         end
 
-        def render
-          snap = @engine.snapshot
-          vm = desk_vm(snap)
-          w = term_width
-          strip = show_live_futures_account_strip?(snap)
+      def render
+        snap = @engine.snapshot
+        vm = desk_vm(snap)
+        w = term_width
+        strip = show_live_futures_account_strip?(snap)
 
-          buf = StringIO.new
-          buf << @cursor.save
-          r = @row
-          buf << move(r) << clr(line_mode_engine_kill_ws_lat_feed(snap, w))
-          r += 1
-          if strip
-            buf << move(r) << clr(line_live_equity_wallet_unreal(snap, w))
-            r += 1
-          end
-          buf << move(r) << clr(line_balance_net_real_unreal_dd_risk(snap, vm, w))
-          r += 1
-          buf << move(r) << clr(line_pos_ord_err_last(snap, vm, w))
-          r += 1
-          buf << move(r) << clr(muted('─' * [[w - 1, 40].max, 120].min))
-          buf << @cursor.restore
+        buf = StringIO.new
+        buf << @cursor.save
+        r = @row
 
-          @output.print buf.string
-          @output.flush
+        # Top border with title
+        buf << move(r) << ui_border("┌─") << ui_header(" SYSTEM STATUS ") << ui_border("#{'─' * (w - 18)}┐")
+        r += 1
+
+        # System row
+        buf << move(r) << ui_border("│ ") << line_mode_engine_kill_ws_lat_feed(snap, w - 4) << ui_border(" │")
+        r += 1
+
+        if strip
+          # Account row (Live only)
+          buf << move(r) << ui_border("│ ") << line_live_equity_wallet_unreal(snap, w - 4) << ui_border(" │")
+          r += 1
         end
+
+        # Balance & Risk row
+        buf << move(r) << ui_border("│ ") << line_balance_net_real_unreal_dd_risk(snap, vm, w - 4) << ui_border(" │")
+        r += 1
+
+        # Stats row
+        buf << move(r) << ui_border("│ ") << line_pos_ord_err_last(snap, vm, w - 4) << ui_border(" │")
+        r += 1
+
+        # Bottom border
+        buf << move(r) << ui_border("└#{'─' * (w - 2)}┘")
+        buf << @cursor.restore
+
+        @output.print buf.string
+        @output.flush
+      end
 
         def row_count
           snap = @engine.snapshot
-          show_live_futures_account_strip?(snap) ? 5 : 4
+          show_live_futures_account_strip?(snap) ? 6 : 5
         end
 
         private
@@ -78,39 +92,37 @@ module CoindcxBot
         end
 
         def line_mode_engine_kill_ws_lat_feed(snap, w)
-          mode = snap.dry_run ? bold_magenta('PAPER') : bold_red('LIVE')
-          exec_off = (!snap.dry_run && !@engine.config.place_orders?) ? on_yellow(' EXE·OFF ') : nil
-          profile = trading_profile_fragment
-          eng =
-            if @engine.engine_loop_crashed?
-              on_red(' ENGINE: CRASHED ')
-            elsif snap.running
-              profit('ENGINE: RUN')
+          m = snap.dry_run ? 'PAPER' : 'LIVE'
+          m_clr =
+            if m == 'LIVE'
+              tag_live(m)
+            elsif m == 'PAUSED'
+              tag_warning(m)
             else
-              loss('ENGINE: STOP')
+              tag_neutral(m)
             end
-          pause = snap.paused ? on_yellow(' PAUSED ') : nil
-          kill = snap.kill_switch ? on_red(' KILL: ON ') : muted('KILL: OFF')
-          ws =
-            if snap.stale
-              loss('WS: ○')
-            else
-              profit('WS: ●')
-            end
-          lat =
-            if snap.ws_last_tick_ms_ago
-              muted('LAT: ') + accent("#{snap.ws_last_tick_ms_ago}ms")
-            else
-              muted('LAT: —')
-            end
-          feed = snap.stale ? on_yellow(' FEED: STALE ') : profit('FEED: OK')
-          join_compact(
-            w,
-            [
-              "MODE: #{mode}", exec_off, profile, regime_header_fragment(snap), eng, pause,
-              kill, ws, feed, focus_fragment, leverage_fragment, lat
-            ].compact
-          )
+
+          exe_clr = truthy?(snap.live_tui_metrics[:order_placement_enabled]) ? tag_accent('EXE·ON') : tag_neutral('EXE·OFF')
+          reg_clr = regime_color_label(snap.regime)
+          eng_clr = snap.running ? tag_live('RUNNING') : tag_critical('CRASHED')
+          kill_clr = snap.kill_switch ? tag_critical('KILL: ON') : muted('KILL: OFF')
+          ws_clr = ws_status_pill(snap.ws_last_tick_ms_ago)
+          feed_clr = snap.stale ? tag_critical('FEED: STALE') : tag_live('FEED: OK')
+          focus_clr = bold_cyan(snap.pairs.first.to_s.sub(/^B-/, ''))
+
+          parts = [
+            m_clr, exe_clr, reg_clr, eng_clr, kill_clr, ws_clr, feed_clr,
+            "#{muted('FOCUS:')} #{focus_clr}",
+            "#{muted('LEV:')} #{gold(snap.live_tui_metrics[:leverage_label] || '—')}",
+            "#{muted('LAT:')} #{accent("#{snap.ws_last_tick_ms_ago || 0}ms")}"
+          ]
+          parts.join('  ')
+        end
+
+        def ws_status_pill(ms)
+          return tag_critical('WS: DOWN') if ms.nil? || ms > 5000
+
+          tag_live("WS: #{ms}ms")
         end
 
         def line_balance_net_real_unreal_dd_risk(snap, vm, w)
@@ -394,10 +406,6 @@ module CoindcxBot
 
         def compact_instrument_label(pair)
           pair.to_s.sub(/\AB-/, '').sub(/_USDT\z/i, '')
-        end
-
-        def join_compact(_w, parts)
-          parts.join(muted(' │ '))
         end
 
         def clr(content)

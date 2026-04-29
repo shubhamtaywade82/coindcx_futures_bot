@@ -82,6 +82,8 @@ REST candles and WebSocket ticks still require valid API credentials for market 
 
 The dashboard and the trading **engine share one Ruby process** — `engine.snapshot` reads live `PositionTracker` / journal state. **No Redis or separate cache** is required for the numbers to update.
 
+**Development auto-reload:** use `bin/tui-dev` while editing TUI or engine code. It supervises `bin/bot tui` and restarts the process when watched Ruby/config files change, so layout/code edits are loaded by a fresh Ruby process. Prefer this for dry-run or observe sessions, not unattended live trading.
+
 **Exchange positions (read-only):** set **`runtime.tui_exchange_positions: true`** to add an **`EXCH …`** line on the futures desk sidebar. The engine calls **`AccountGateway#list_positions`** on a throttle (default 25s) with **`tui_exchange_positions_margins`** (default: top-level **`margin_currency_short_name`**, or **`[USDT, INR]`** if blank). This is **display only** — it does not place, cancel, or exit orders (those paths still go through the coordinator / broker only).
 
 If the screen **never refreshes** (clock / LTP stuck) in **Cursor’s or another IDE’s embedded terminal**, stdin is often **not a real TTY**: `IO.select` can report stdin readable and the UI thread then **blocks on `getc`**, so the redraw loop never runs. The TUI detects non-TTY stdin and switches to **timer-only refresh** (about once per second). In that mode use **Ctrl+C** to exit; single-letter hotkeys may not work. For full keybindings, run `bin/bot tui` in a normal terminal (Windows Terminal, GNOME Terminal, iTerm, etc.). To **force** poll-only mode: `COINDCX_TUI_POLL_ONLY=1`.

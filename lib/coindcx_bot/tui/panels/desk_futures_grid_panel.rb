@@ -53,13 +53,11 @@ module CoindcxBot
           buf << @cursor.save
           r = @row
 
-          buf << move(r) << clr(outer_top_rule(left_w, mid_w, right_w))
+          buf << move(r) << ui_border(outer_top_rule(left_w, mid_w, right_w, focus))
           r += 1
-          buf << move(r) << clr(title_row(left_w, mid_w, right_w, ew, ow, focus))
+          buf << move(r) << ui_border("│") << header_row(left_w, ew, ow, right_w, wide_exec: wide_exec) << ui_border("│")
           r += 1
-          buf << move(r) << clr(mid_rule(left_w, mid_w, right_w))
-          r += 1
-          buf << move(r) << clr(header_row(left_w, ew, ow, right_w, wide_exec: wide_exec))
+          buf << move(r) << ui_border(mid_rule(left_w, mid_w, right_w))
           r += 1
 
           # Pre-compute max quantity for depth bars
@@ -69,13 +67,13 @@ module CoindcxBot
             left = format_book_cell(book_rows[i], left_w, max_qty)
             ex = pad_visible(format_exec_cell(exec_rows[i], ew, wide_exec: wide_exec), ew)
             ord = pad_visible(format_ord_cell(ord_rows[i]), ow)
-            mid = "#{ex}│#{ord}"
+            mid = "#{ex}#{muted('│')}#{ord}"
             right = format_sidebar_row(sidebar, events, i, h, right_w, sidebar_reserved: sidebar_reserved)
-            buf << move(r + i) << clr("│#{left}│#{mid}│#{right}│")
+            buf << move(r + i) << ui_border("│") << left << ui_border("│") << mid << ui_border("│") << right << ui_border("│")
           end
 
           r += h
-          buf << move(r) << clr(outer_bot_rule(left_w, mid_w, right_w))
+          buf << move(r) << ui_border(outer_bot_rule(left_w, mid_w, right_w))
           buf << @cursor.restore
 
           @output.print buf.string
@@ -84,7 +82,7 @@ module CoindcxBot
 
         def row_count
           vm = DeskViewModel.build(engine: @engine, tick_store: @tick_store, symbols: @symbols)
-          5 + vm.inner_height
+          4 + vm.inner_height
         end
 
         private
@@ -149,7 +147,7 @@ module CoindcxBot
                 else
                   ''
                 end
-              "#{side} #{accent(px.ljust(px_w))} #{muted(q.rjust(qty_w))}#{bar_str.empty? ? '' : " #{bar_str}"}"
+              " #{side} #{accent(px.ljust(px_w))} #{muted(q.rjust(qty_w))}#{bar_str.empty? ? '' : " #{bar_str}"} "
             else
               muted('·')
             end
@@ -162,15 +160,18 @@ module CoindcxBot
           return muted('·') if row.nil?
 
           sym = compact_pair_symbol(row[:symbol])
+          focus = @focus_pair_proc&.call&.to_s
+          is_focus = row[:symbol].to_s == focus
+          indicator = is_focus ? sapphire('»') : ' '
           spark = render_sparkline_for(row[:symbol])
 
           if wide_exec
-            line = format_exec_cell_wide(row, sym, spark)
-            line = shrink_exec_line_to_fit(row, sym, spark) if visible_len(line) > max_visible
-            line = format_exec_cell_compact(row, sym, spark) if visible_len(line) > max_visible
+            line = format_exec_cell_wide(row, sym, spark, indicator)
+            line = shrink_exec_line_to_fit(row, sym, spark, indicator) if visible_len(line) > max_visible
+            line = format_exec_cell_compact(row, sym, spark, indicator) if visible_len(line) > max_visible
             line
           else
-            format_exec_cell_compact(row, sym, spark)
+            format_exec_cell_compact(row, sym, spark, indicator)
           end
         end
 
@@ -182,37 +183,43 @@ module CoindcxBot
           accent(raw)
         end
 
-        def format_exec_cell_wide(row, sym, spark)
+        def format_exec_cell_wide(row, sym, spark, indicator)
           lst = (row[:last] || row[:ltp]).to_s
           mrk = row[:mark].to_s
           side = row[:side].to_s.upcase
           side = side[0, 5].ljust(5) if side.length > 5
           side = side.ljust(5)
           parts = [
-            warning(truncate(sym, 6).ljust(6)),
+            "#{indicator}#{warning(truncate(sym, 6).ljust(6))}",
             muted(side),
             muted(format_exec_qty(row[:qty], 10).ljust(10)),
             muted(row[:entry].to_s.ljust(8)),
             accent(lst.ljust(8)),
             muted(mrk.ljust(8)),
             muted(row[:sl].to_s.ljust(7)),
-            color_pnl(row[:pnl_usdt], row[:pnl_label])
+            color_pnl_pct(extract_pct(row[:pnl_label]), row[:pnl_label])
           ]
           parts << muted("[#{row[:lane]}]") if row[:lane]
           parts << spark if spark
           parts.join(muted(' '))
         end
 
-        def format_exec_cell_compact(row, sym, spark)
+        def extract_pct(label)
+          return nil unless label =~ /\(([-+]?[0-9.]+)\%\)/
+
+          Regexp.last_match(1).to_f
+        end
+
+        def format_exec_cell_compact(row, sym, spark, indicator)
           mrk = row[:mark].to_s
           px = mrk.strip.empty? || mrk == '—' ? (row[:last] || row[:ltp]).to_s : mrk
           parts = [
-            warning(truncate(sym, 5).ljust(5)),
+            "#{indicator}#{warning(truncate(sym, 5).ljust(5))}",
             muted(side_abbrev(row[:side])),
             muted(format_exec_qty(row[:qty], 9).ljust(9)),
             muted(row[:entry].to_s.ljust(7)),
             muted(px.ljust(8)),
-            color_pnl(row[:pnl_usdt], pnl_short_label(row))
+            color_pnl_pct(extract_pct(row[:pnl_label]), pnl_short_label(row))
           ]
           parts << spark if spark
           parts.join(muted(' '))
@@ -361,8 +368,13 @@ module CoindcxBot
           [ew, ow]
         end
 
-        def outer_top_rule(lw, mw, rw)
-          "┌#{'─' * lw}┬#{'─' * mw}┬#{'─' * rw}┐"
+        def outer_top_rule(lw, mw, rw, focus)
+          fp = truncate(focus.to_s, 14)
+          title = ui_header(" BOOK · #{fp} ")
+          rem = lw - visible_len(title)
+          l_dash = (rem / 2).clamp(1, lw)
+          r_dash = (rem - l_dash).clamp(1, lw)
+          "┌#{'─' * l_dash}#{title}#{'─' * r_dash}┬#{ui_header(' POSITIONS · ORDERS ')}#{'─' * (mw - 20)}┬#{ui_header(' RISK · LOG ')}#{'─' * (rw - 12)}┐"
         end
 
         def outer_bot_rule(lw, mw, rw)
@@ -370,29 +382,20 @@ module CoindcxBot
         end
 
         def mid_rule(lw, mw, rw)
-          "├#{'─' * lw}┼#{'─' * mw}┼#{'─' * rw}┤"
-        end
-
-        def title_row(lw, mw, rw, ew, ow, focus)
-          fp = truncate(focus.to_s, 10)
-          l = bold(pad_plain("BOOK #{fp}", lw))
-          m = "#{pad_visible(bold('POSITIONS'), ew)}│#{pad_visible(bold('ORDERS'), ow)}"
-          m = pad_visible(m, mw)
-          r = bold(pad_plain('RISK · LOG', rw))
-          "│#{l}│#{m}│#{r}│"
+          ui_border("├#{'─' * lw}┼#{'─' * mw}┼#{'─' * rw}┤")
         end
 
         def header_row(lw, ew, ow, rw, wide_exec:)
           px_w, qty_w = book_column_splits(lw)
           bar_w = [lw - px_w - qty_w - 5, 0].max
           bar_hdr = bar_w >= 3 ? muted('VOL'.ljust(bar_w)) : ''
-          lh = [muted('S'), muted('PRICE'.ljust(px_w)), muted('QTY'.rjust(qty_w))]
+          lh = [" #{muted('S')}", muted('PRICE'.ljust(px_w)), muted('QTY'.rjust(qty_w))]
           lh << bar_hdr unless bar_hdr.empty?
           lh_str = lh.join(muted(' '))
           eh =
             if wide_exec
               [
-                muted('SYM'.ljust(6)),
+                " #{muted('SYM'.ljust(6))}",
                 muted('SIDE'.ljust(5)),
                 muted('QTY'.ljust(10)),
                 muted('ENT'.ljust(8)),
@@ -403,7 +406,7 @@ module CoindcxBot
               ].join(muted(' '))
             else
               [
-                muted('SYM'.ljust(5)),
+                " #{muted('SYM'.ljust(5))}",
                 muted('S'),
                 muted('QTY'.ljust(9)),
                 muted('ENT'.ljust(7)),
@@ -412,13 +415,13 @@ module CoindcxBot
               ].join(muted(' '))
             end
           oh = [
-            muted('T'.ljust(3)),
+            " #{muted('T'.ljust(3))}",
             muted('PAIR'.ljust(9)),
             muted('ST'.ljust(3)),
             muted('LAT')
           ].join(muted(' '))
-          rh = muted('SUMMARY · EVENTS')
-          "│#{pad_visible(lh_str, lw)}│#{pad_visible(eh, ew)}│#{pad_visible(oh, ow)}│#{pad_visible(rh, rw)}│"
+          rh = " #{muted('SUMMARY · EVENTS')}"
+          "#{pad_visible(lh_str, lw)}#{muted('│')}#{pad_visible(eh, ew)}#{muted('│')}#{pad_visible(oh, ow)}#{muted('│')}#{pad_visible(rh, rw)}"
         end
 
         def pad_plain(text, w)
