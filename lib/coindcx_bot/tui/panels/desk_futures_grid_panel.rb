@@ -134,10 +134,10 @@ module CoindcxBot
 
         # Split the BOOK column between price and quantity using the same rules as row rendering.
         def book_column_splits(left_col_w)
-          avail = left_col_w - 4
-          avail = 12 if avail < 12
-          px_w = (avail * 0.44).to_i.clamp(8, 14)
-          qty_w = (avail - px_w - 1).clamp(7, 20)
+          # Give price and qty fixed reasonable widths to maximize the volume bar.
+          avail = left_col_w - 6
+          px_w = (avail * 0.35).to_i.clamp(8, 10)
+          qty_w = (avail * 0.35).to_i.clamp(8, 12)
           [px_w, qty_w]
         end
 
@@ -354,7 +354,9 @@ module CoindcxBot
         end
 
         def column_widths(total_w)
-          left = (total_w * 0.25).to_i.clamp(20, 42)
+          left = (total_w * 0.28).to_i
+          left = 32 if left < 32
+          left = 52 if left > 52
           right = (total_w * 0.30).to_i.clamp(25, 60)
           mid = total_w - left - right - 2
           [left, mid, right]

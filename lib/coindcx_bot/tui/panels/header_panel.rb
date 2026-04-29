@@ -50,11 +50,13 @@ module CoindcxBot
         # Set engine focus for regime AI strip overlay context
         @engine.tui_focus_pair = @focus_pair_proc&.call
 
+        # Account row (Reserving space for stability)
         if strip
-          # Account row (Live only)
           buf << move(r) << ui_border("│ ") << pad_visible(line_live_equity_wallet_unreal(snap, w - 4), w - 4) << ui_border(" │")
-          r += 1
+        else
+          buf << move(r) << ui_border("│ ") << pad_visible(muted(" (AWAITING ACCOUNT METRICS) "), w - 4) << ui_border(" │")
         end
+        r += 1
 
         # Balance & Risk row
         buf << move(r) << ui_border("│ ") << pad_visible(line_balance_net_real_unreal_dd_risk(snap, vm, w - 4), w - 4) << ui_border(" │")
@@ -72,10 +74,9 @@ module CoindcxBot
         @output.flush
       end
 
-        def row_count
-          snap = @engine.snapshot
-          show_live_futures_account_strip?(snap) ? 6 : 5
-        end
+      def row_count
+        6
+      end
 
         private
 
