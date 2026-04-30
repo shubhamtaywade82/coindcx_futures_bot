@@ -8,6 +8,9 @@ require 'tty-screen'
 
 require_relative 'engine_log_filter'
 require_relative 'theme'
+require_relative 'term_width'
+require_relative 'term_height'
+require_relative 'ansi_string'
 
 module CoindcxBot
   module Tui
@@ -176,7 +179,6 @@ module CoindcxBot
       rescue StandardError
         nil
       end
-
       def build_panels(tick_store:, order_book_store:, engine:, symbols:)
         origin = 0
 
@@ -193,13 +195,23 @@ module CoindcxBot
         smc_strip = Panels::SmcSetupStripPanel.new(engine: engine, origin_row: origin)
         origin += smc_strip.row_count
 
+        # Flexible height calculation
+        # Other panels: Header, Regime, SMC, Keybar (1 row), plus borders/padding if any.
+        # We also want to leave a small buffer (e.g. 1 row) for stability.
+        fixed_height = origin + 1 + 1 # +1 for Keybar, +1 for buffer
+        total_h = TermHeight.rows
+        avail_h = total_h - fixed_height
+        # Grid inner height = avail_h - 4 (top border, header row, mid rule, bot border)
+        flex_inner = [avail_h - 4, 6].max
+
         grid = Panels::DeskFuturesGridPanel.new(
           engine: engine,
           tick_store: tick_store,
           order_book_store: order_book_store,
           symbols: symbols,
           focus_pair_proc: -> { @focus&.current },
-          origin_row: origin
+          origin_row: origin,
+          flexible_height: flex_inner
         )
         origin += grid.row_count
 

@@ -19,13 +19,13 @@ module CoindcxBot
         @chat_client = nil
       end
 
-      def approve?(rec:, bar:, bars_json:)
+      def approve?(rec:, bar:, bars_json:, ohlcv_features: nil)
         return false if bars_json.nil? || bars_json.empty?
 
         ensure_ollama_loaded!
         messages = [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: build_user_payload(rec, bar, bars_json) }
+          { role: 'user', content: build_user_payload(rec, bar, bars_json, ohlcv_features) }
         ]
         resp = chat_client.chat(
           messages: messages,
@@ -54,7 +54,7 @@ module CoindcxBot
         v == true || v.to_s.downcase == 'true' || v.to_s == '1'
       end
 
-      def build_user_payload(rec, bar, bars_json)
+      def build_user_payload(rec, bar, bars_json, ohlcv_features = nil)
         slice = {
           setup_id: rec.setup_id,
           pair: rec.pair,
@@ -65,6 +65,7 @@ module CoindcxBot
           last_bar_flags: bar_flags(bar),
           recent_bars: bars_json
         }
+        slice[:ohlcv_features] = ohlcv_features if ohlcv_features.is_a?(Hash) && !ohlcv_features.empty?
         JSON.generate(slice)
       end
 

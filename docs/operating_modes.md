@@ -24,10 +24,10 @@ The bot supports **three** distinct ways to run. They differ by **`runtime.dry_r
 | Setting | Value |
 |--------|--------|
 | `runtime.dry_run` | **`false`** |
-| `runtime.place_orders` | **`false`** **or** env **`PLACE_ORDER=0`** / **`false`** (overrides YAML when live). |
+| `runtime.place_orders` | **`false`** **or** env **`PLACE_ORDER=0`** / **`PLACE_ORDERS=0`** / **`false`** (overrides YAML when live; **`PLACE_ORDER`** wins if both env vars are set). |
 | Broker | **`LiveBroker`** — but **`Coordinator`** skips **`place_order`**, **`close_position`**, and live **flatten** REST when `!place_orders?`. |
 | Exchange | **Read-only** account paths used for TUI (e.g. `list_positions`, futures wallet) when **`runtime.tui_exchange_positions: true`**. |
-| Journal | Still updated for **signals / events**; **no** automatic live fills. **`tui_exchange_mirror?`** is **`true`** when positions TUI is on and orders are off — execution grid and header **NET / REAL / UNREAL** align with **exchange** rows + **`Engine#inr_per_usdt`** (not static YAML alone). |
+| Journal | Still updated for **signals / events**; **no** automatic live fills. **`tui_exchange_mirror?`** is **`true`** when `tui_exchange_positions` is on and orders are off — the **execution grid shows only `list_positions` rows** (not SQLite journal), so leftover **paper** opens in `journal_path` do not appear as live positions. Header **NET / REAL / UNREAL** use exchange-derived metrics + **`Engine#inr_per_usdt`** where available. |
 | TUI header | **`LIVE`** + **`EXE·OFF`**. |
 
 **Use when:** you want the same live WebSocket and portfolio view as the mobile app, **without** the bot sending orders or exits.
@@ -39,7 +39,7 @@ The bot supports **three** distinct ways to run. They differ by **`runtime.dry_r
 | Setting | Value |
 |--------|--------|
 | `runtime.dry_run` | **`false`** |
-| `runtime.place_orders` | **`true`** (default if omitted) and **`PLACE_ORDER`** not set to `0` / `false`. |
+| `runtime.place_orders` | **`true`** (default if omitted) and **`PLACE_ORDER`** / **`PLACE_ORDERS`** not set to `0` / `false`. |
 | Broker | **`LiveBroker`** — real CoinDCX futures order and exit REST. |
 | Journal | Opens/closes book as fills/exits occur; daily INR from realized when the close path returns broker PnL (see coordinator). |
 | TUI mirror | **`tui_exchange_mirror?`** is **`false`** by default when orders are **on** (grid shows **journal** positions). Set **`runtime.tui_exchange_mirror: true`** if you want exchange rows in the grid **while** still placing live orders. |

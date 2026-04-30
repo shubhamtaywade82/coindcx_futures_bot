@@ -9,28 +9,32 @@ module CoindcxBot
       INNER_HEIGHT_MIN = 6
       INNER_HEIGHT_CAP = 24
 
-      def self.build(engine:, tick_store:, symbols:)
+      def self.build(engine:, tick_store:, symbols:, inner_height_override: nil)
         new(
           snapshot: engine.snapshot,
           tick_ticks: tick_store.snapshot,
           symbols: Array(symbols).map(&:to_s),
           ws_stale_fn: ->(sym) { engine.ws_feed_stale?(sym) },
           config: engine.config,
-          # Same as +Engine#inr_per_usdt+: CoinDCX conversions when +fx.enabled+, else +config.inr_per_usdt+.
-          inr_per_usdt: engine.inr_per_usdt
+          inr_per_usdt: engine.inr_per_usdt,
+          inner_height_override: inner_height_override
         )
       end
 
-      def initialize(snapshot:, tick_ticks:, symbols:, ws_stale_fn:, config:, inr_per_usdt: nil)
+      def initialize(snapshot:, tick_ticks:, symbols:, ws_stale_fn:, config:, inr_per_usdt: nil,
+                     inner_height_override: nil)
         @snap = snapshot
         @tick_ticks = tick_ticks
         @symbols = symbols
         @ws_stale_fn = ws_stale_fn
         @config = config
         @inr_per_usdt = inr_per_usdt || @config.inr_per_usdt
+        @inner_height_override = inner_height_override
       end
 
       def inner_height
+        return @inner_height_override if @inner_height_override
+
         n = @symbols.size
         [[n, INNER_HEIGHT_MIN].max, INNER_HEIGHT_CAP].min
       end
@@ -274,10 +278,18 @@ module CoindcxBot
         @config.respond_to?(:tui_exchange_mirror?) && @config.tui_exchange_mirror? && !@snap.dry_run
       end
 
+      # Live + +tui_exchange_mirror?+: the grid reflects **CoinDCX list_positions only** — not the SQLite journal.
+      # Merging journal underneath caused paper/dry-run rows to appear as "live" when the account was flat or
+      # when the REST poll failed after switching modes. On poll failure we still avoid journal fill-in (sidebar
+      # shows EXCH ERR); journal remains the engine's source of truth for strategy/risk elsewhere.
       def positions_index_for_execution
-        idx = index_positions(@snap.positions)
-        return idx unless mirror_live_account?
+        return index_positions(@snap.positions) unless mirror_live_account?
 
+        build_exchange_positions_index_for_grid
+      end
+
+      def build_exchange_positions_index_for_grid
+        idx = {}
         Array(@snap.exchange_positions).each do |row|
           next unless CoindcxBot::Tui::LiveAccountMirror.row_open?(row)
 

@@ -38,6 +38,11 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
 
   before { allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(100) }
 
+  it 'maps bare AI: hmm_display to AI:— so the strip never looks empty' do
+    expect(panel.send(:ai_column_fragment, 'AI:')).to eq('AI:—')
+    expect(panel.send(:ai_column_fragment, 'AI: ')).to eq('AI:—')
+  end
+
   describe '#render' do
     it 'uses one compact line when regime is disabled in the snapshot', :aggregate_failures do
       panel.render

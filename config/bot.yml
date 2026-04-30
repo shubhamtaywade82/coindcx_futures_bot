@@ -5,13 +5,13 @@
 # Live trading:     runtime.dry_run: false + runtime.place_orders: true
 #                   (ONLY enable after paper validation + risk checks)
 #
-# Env overrides: COINDCX_BOT_CONFIG, PLACE_ORDER=0/1, COINDCX_STRATEGY_SIGNALS=1
+# Env overrides: COINDCX_BOT_CONFIG, COINDCX_DRY_RUN=0/1, PLACE_ORDER / PLACE_ORDERS=0/1, COINDCX_STRATEGY_SIGNALS=1
 
 margin_currency_short_name: USDT
 
 # REST + WS instrument pair codes (run `bin/bot doctor` to verify).
 pairs:
-  # - B-SOL_USDT
+  - B-SOL_USDT
   - B-ETH_USDT
 
 # Approximate INR per USDT — updated by CoinDCX conversions API (fx.ttl_seconds).
@@ -125,6 +125,8 @@ strategy:
     fvg_confluence: true # require FVG overlap for higher-quality OB entries
     premium_discount_lookback: 20 # bars for premium/discount range calculation
     signal_mode: choch_strict # choch_strict | choch_any | bos
+    displacement_detection: true # compute impulse strength + volume support for StateBuilder
+    inducement_detection: true  # detect equal highs/lows trap logic for StateBuilder
     close_on_opposite_smc: true # close long on bearish SMC signal (and vice versa)
     opposite_smc_min_gain_pct: 0 # close on opposite signal regardless of current gain
 
@@ -172,11 +174,19 @@ smc_setup:
   auto_execute: false
   gatekeeper_enabled: false
   disable_strategy_entries: false
+  planner_enabled: true  # Ollama → TradeSetup; uses deterministic market_state + optional ohlcv_features
+  planner_include_market_state: true
+  planner_include_ohlcv_features: true
+  planner_min_candles: 30
+  planner_ohlcv_tail: 12
+  planner_tz_offset_minutes: 0
+  lifecycle_enabled: true  # time expiry + optional no_trade_zone / invalidation_level from planner JSON
   model: llama3.2:3b
   ollama_base_url: http://127.0.0.1:11434
   timeout_seconds: 90
   poll_interval_seconds: 120
   max_active_setups_per_pair: 3
+  planner_max_price_deviation_pct: 5.0 # reject Ollama setups whose prices drift > N% from current LTP
 
 # Regime: Baum-Welch HMM volatility classification + Ollama narrative + RegimeSizer.
 regime:
@@ -191,7 +201,10 @@ regime:
     em_iterations: 35 # Baum-Welch max iterations
     min_train_bars: 80 # skip fit if fewer bars available
     zscore_lookback: 60 # volatility zscore rolling window
-    retrain_every_bars: 0 # 0 = retrain every candle refresh cycle
+    retrain_every_bars: 0 # 0 = never retrain after first fit (HmmRuntime#should_retrain?)
+    alert_min_posterior: 0.70 # suppress analysis_regime_change below this posterior probability
+    alert_min_stability_bars: 2 # suppress transitions with fewer consecutive confirmed bars
+    state_machine_confirmations: 2 # RegimeStateMachine: candles of same argmax required to mark stable
 
   ai:
     enabled: true
@@ -232,6 +245,26 @@ paper:
 # When true: run `bin/paper-exchange`; orders/positions REST use api_base_url, while candles/WS/FX stay on CoinDCX production.
 paper_exchange:
   enabled: false
+
+# Multi-level analysis alerts: journal +event_log+ rows always; Telegram when COINDCX_TELEGRAM_* are set.
+# With filter_telegram: true, delivery is throttled (journal is never dropped).
+alerts:
+  filter_telegram: true
+  analysis:
+    strategy_transitions: true # analysis_strategy_transition when strategy action/reason changes (per pair)
+    regime_hmm_transitions: true # analysis_regime_change when HMM decoded state/label changes
+    regime_ai_updates: true # analysis_regime_ai_update when Ollama regime label or probability jumps enough
+    regime_ai_min_probability_delta: 10 # percentage points (vs previous AI payload)
+    # Per pair + price rule id: skip further analysis_price_cross journal/Telegram rows while LTP chops the same level.
+    price_cross_cooldown_seconds: 300
+  telegram:
+    default_throttle_seconds: 60
+    critical_throttle_seconds: 30
+    throttle_by_type:
+      analysis_regime_ai_update: 900
+      analysis_regime_change: 300
+      analysis_strategy_transition: 120
+      analysis_price_cross: 180
 
 # Optional Telegram: mirror +event_log+ rows (ENV only — no bot.yml). Off unless both are set:
 #   COINDCX_TELEGRAM_BOT_TOKEN  COINDCX_TELEGRAM_CHAT_ID

@@ -46,6 +46,8 @@ The engine subscribes to the private **order update** Socket.io stream when runn
 ```bash
 bundle exec bin/bot run           # blocking engine (WS + REST candles + strategy loop)
 bundle exec bin/bot tui           # engine + terminal dashboard (see TUI notes below)
+
+**Startup wrappers (always TUI):** `bin/start-dry-run` sets **`COINDCX_DRY_RUN=1`** (paper, overrides YAML). `bin/start-live` sets **`COINDCX_DRY_RUN=0`** and defaults **`PLACE_ORDERS=0`** (live observe); use **`PLACE_ORDERS=1 bin/start-live`** to allow real order placement. For **`run`** or other commands, call **`bundle exec bin/bot …`** directly.
 bundle exec bin/bot doctor        # REST check + list active instruments (SOL/ETH hints)
 bundle exec bin/bot paper-status  # journal snapshot: open rows, today's INR PnL, paper_realized
 bundle exec bin/bot help
@@ -79,6 +81,8 @@ REST candles and WebSocket ticks still require valid API credentials for market 
 ## TUI (`bin/bot tui`)
 
 The dashboard and the trading **engine share one Ruby process** — `engine.snapshot` reads live `PositionTracker` / journal state. **No Redis or separate cache** is required for the numbers to update.
+
+**Development auto-reload:** use `bin/tui-dev` while editing TUI or engine code. It supervises `bin/bot tui` and restarts the process when watched Ruby/config files change, so layout/code edits are loaded by a fresh Ruby process. Prefer this for dry-run or observe sessions, not unattended live trading.
 
 **Exchange positions (read-only):** set **`runtime.tui_exchange_positions: true`** to add an **`EXCH …`** line on the futures desk sidebar. The engine calls **`AccountGateway#list_positions`** on a throttle (default 25s) with **`tui_exchange_positions_margins`** (default: top-level **`margin_currency_short_name`**, or **`[USDT, INR]`** if blank). This is **display only** — it does not place, cancel, or exit orders (those paths still go through the coordinator / broker only).
 

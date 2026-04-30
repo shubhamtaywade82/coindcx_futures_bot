@@ -210,6 +210,55 @@ RSpec.describe CoindcxBot::Tui::DeskViewModel do
         expect(row[:pnl_label]).to include('-12.50')
       end
 
+      it 'does not fall back to journal rows when the account has no open exchange positions' do
+        ghost_snap = CoindcxBot::Core::Engine::Snapshot.new(
+          **snapshot.to_h.merge(
+            pairs: %w[B-ETH_USDT],
+            ticks: { 'B-ETH_USDT' => { price: '3100.0', at: Time.now } },
+            positions: [
+              { pair: 'B-ETH_USDT', side: 'long', quantity: '99', entry_price: '3000',
+                entry_lane: 'trend_continuation' }
+            ],
+            dry_run: false,
+            exchange_positions: [],
+            exchange_positions_error: nil,
+            exchange_positions_fetched_at: Time.now
+          )
+        )
+        vm_ghost = described_class.new(
+          snapshot: ghost_snap,
+          tick_ticks: tick_ticks,
+          symbols: %w[B-ETH_USDT],
+          ws_stale_fn: ->(_) { false },
+          config: config
+        )
+        expect(vm_ghost.execution_rows.first[:side]).to eq('FLAT')
+      end
+
+      it 'does not show journal positions when the exchange poll returned an error' do
+        err_snap = CoindcxBot::Core::Engine::Snapshot.new(
+          **snapshot.to_h.merge(
+            pairs: %w[B-ETH_USDT],
+            ticks: { 'B-ETH_USDT' => { price: '3100.0', at: Time.now } },
+            positions: [
+              { pair: 'B-ETH_USDT', side: 'short', quantity: '1', entry_price: '2900' }
+            ],
+            dry_run: false,
+            exchange_positions: [],
+            exchange_positions_error: 'rate limited',
+            exchange_positions_fetched_at: Time.now
+          )
+        )
+        vm_err = described_class.new(
+          snapshot: err_snap,
+          tick_ticks: tick_ticks,
+          symbols: %w[B-ETH_USDT],
+          ws_stale_fn: ->(_) { false },
+          config: config
+        )
+        expect(vm_err.execution_rows.first[:side]).to eq('FLAT')
+      end
+
       it 'shows uPnL % as ROE on estimated margin (notional / leverage) for mirrored rows' do
         row = vm.execution_rows.first
         # notional 0.5 * 3000 = 1500; leverage min(5,10)=5 → margin 300; -12.5/300*100 ≈ -4.17%

@@ -1,0 +1,206 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'find'
+
+module TuiDevReloader
+  ROOT = File.expand_path('..', __dir__)
+  POLL_INTERVAL = [ENV.fetch('COINDCX_TUI_DEV_POLL', '0.75').to_f, 0.1].max
+  GRACE_SECONDS = [ENV.fetch('COINDCX_TUI_DEV_GRACE', '8').to_f, 0.5].max
+  WATCH_DIRS = %w[lib config].freeze
+  WATCH_FILES = %w[Gemfile Gemfile.lock bin/bot].freeze
+  WATCH_EXTENSIONS = %w[.rb .yml .yaml].freeze
+  PRUNE_DIRS = %w[.git tmp log vendor coverage node_modules].freeze
+
+  module_function
+
+  def run(argv)
+    if argv.delete('--help') || argv.delete('-h')
+      print_usage
+      return 0
+    end
+
+    install_signal_handlers
+
+    previous = snapshot
+    pid = spawn_tui(argv)
+
+    loop do
+      status = reap_child(pid)
+      if status
+        @child_pid = nil if @child_pid == pid
+        return 0 if status.success?
+
+        warn "\n[tui-dev] TUI stopped (#{status_label(status)}); waiting for a file change to restart."
+        previous = wait_for_change(previous)
+        pid = spawn_tui(argv)
+        next
+      end
+
+      sleep POLL_INTERVAL
+      current = snapshot
+      changed = changed_paths(previous, current)
+      next if changed.empty?
+
+      previous = current
+      warn "\n[tui-dev] reloading after change: #{format_changed_paths(changed)}"
+      terminate_child(pid)
+      previous = snapshot
+      pid = spawn_tui(argv)
+    end
+  ensure
+    terminate_child(@child_pid) if @child_pid
+  end
+
+  def print_usage
+    puts <<~USAGE
+      Usage: bin/tui-dev [tui args]
+
+      Starts `bin/bot tui` and restarts it when watched files change.
+
+      Watched:
+        lib/**/*.rb
+        config/**/*.yml, config/**/*.yaml
+        Gemfile, Gemfile.lock, bin/bot
+
+      Environment:
+        COINDCX_TUI_DEV_POLL=0.75   Poll interval in seconds
+        COINDCX_TUI_DEV_GRACE=8     Seconds to wait before forcing a stopped child
+
+      Examples:
+        COINDCX_DRY_RUN=1 bin/tui-dev
+        COINDCX_DRY_RUN=1 bin/tui-dev --scalper
+    USAGE
+  end
+
+  def install_signal_handlers
+    %w[INT TERM].each do |signal|
+      Signal.trap(signal) do
+        terminate_child(@child_pid) if @child_pid
+        exit(signal == 'INT' ? 130 : 143)
+      end
+    end
+  end
+
+  def spawn_tui(argv)
+    cmd = ['bundle', 'exec', 'ruby', File.join(ROOT, 'bin/bot'), 'tui', *argv]
+    @child_pid = spawn(*cmd, chdir: ROOT)
+  end
+
+  def terminate_child(pid)
+    return unless pid
+
+    begin
+      Process.kill('INT', pid)
+    rescue Errno::ESRCH
+      @child_pid = nil if @child_pid == pid
+      return
+    end
+
+    deadline = Time.now + GRACE_SECONDS
+    loop do
+      status = reap_child(pid)
+      if status
+        @child_pid = nil if @child_pid == pid
+        return status
+      end
+      break if Time.now >= deadline
+
+      sleep 0.1
+    end
+
+    begin
+      Process.kill('TERM', pid)
+    rescue Errno::ESRCH
+      nil
+    end
+    _, status = Process.waitpid2(pid)
+    status
+  rescue Errno::ECHILD
+    nil
+  ensure
+    @child_pid = nil if @child_pid == pid
+  end
+
+  def reap_child(pid)
+    return unless pid
+
+    result = Process.waitpid2(pid, Process::WNOHANG)
+    result&.last
+  rescue Errno::ECHILD
+    nil
+  end
+
+  def wait_for_change(previous)
+    loop do
+      sleep POLL_INTERVAL
+      current = snapshot
+      changed = changed_paths(previous, current)
+      next if changed.empty?
+
+      warn "\n[tui-dev] restarting after change: #{format_changed_paths(changed)}"
+      return current
+    end
+  end
+
+  def snapshot
+    watched_files.each_with_object({}) do |path, acc|
+      stat = File.stat(path)
+      acc[path] = [stat.mtime.to_i, stat.mtime.nsec, stat.size]
+    rescue Errno::ENOENT, Errno::EACCES
+      nil
+    end
+  end
+
+  def watched_files
+    files = []
+
+    WATCH_DIRS.each do |dir|
+      root = File.join(ROOT, dir)
+      next unless File.directory?(root)
+
+      Find.find(root) do |path|
+        if File.directory?(path)
+          Find.prune if PRUNE_DIRS.include?(File.basename(path))
+          next
+        end
+
+        files << path if WATCH_EXTENSIONS.include?(File.extname(path))
+      end
+    end
+
+    WATCH_FILES.each do |file|
+      path = File.join(ROOT, file)
+      files << path if File.file?(path)
+    end
+
+    files.sort.uniq
+  end
+
+  def changed_paths(previous, current)
+    (previous.keys | current.keys).select { |path| previous[path] != current[path] }.sort
+  end
+
+  def format_changed_paths(paths)
+    shown = paths.first(4).map { |path| relative_path(path) }
+    extra = paths.length - shown.length
+    shown << "+#{extra} more" if extra.positive?
+    shown.join(', ')
+  end
+
+  def relative_path(path)
+    path.delete_prefix("#{ROOT}/")
+  end
+
+  def status_label(status)
+    if status.exited?
+      "exit=#{status.exitstatus}"
+    elsif status.signaled?
+      "signal=#{status.termsig}"
+    else
+      status.to_s
+    end
+  end
+end
+
+exit TuiDevReloader.run(ARGV.dup)

@@ -49,8 +49,16 @@ module CoindcxBot
             return
           end
 
-          buf << move(@row) << clr(line_planner(s, term_width))
-          buf << move(@row + 1) << clr(line_setups(s, term_width))
+          w = term_width
+          title = ui_header(" SMC SETUP ")
+          rem = w - 2 - visible_len(title)
+          l1 = (rem / 2).clamp(1, w)
+          l2 = (rem - l1).clamp(1, w)
+          buf << move(@row) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
+          buf << move(@row + 1) << ui_border("│ ") << pad_visible(line_planner(s, w - 4), w - 4) << ui_border(" │")
+          buf << move(@row + 2) << ui_border("│ ") << pad_visible(line_setups(s, w - 4), w - 4) << ui_border(" │")
+          buf << move(@row + 3) << ui_border("└#{'─' * (w - 2)}┘")
+
           buf << @cursor.restore
           @output.print buf.string
           @output.flush
@@ -59,14 +67,10 @@ module CoindcxBot
         def row_count
           s = @engine.snapshot.smc_setup
           s = SmcSetup::TuiOverlay::DISABLED if s.nil? || !s.is_a?(Hash)
-          truthy?(s[:enabled]) ? 2 : 1
+          truthy?(s[:enabled]) ? 4 : 1
         end
 
         private
-
-        def truthy?(v)
-          v == true || v.to_s.downcase == 'true' || v.to_s == '1'
-        end
 
         def term_width
           TermWidth.columns
@@ -82,13 +86,13 @@ module CoindcxBot
 
         def line_planner(s, w)
           plan_on = truthy?(s[:planner_enabled])
-          plan_s = plan_on ? profit('PLANNER·ON') : muted('PLANNER·OFF')
-          gk = truthy?(s[:gatekeeper_enabled]) ? warning('GK·ON') : muted('GK·OFF')
-          ax = truthy?(s[:auto_execute]) ? accent('AUTO·EXE') : muted('AUTO·OFF')
+          plan_s = plan_on ? tag_live('PLANNER·ON') : tag_neutral('PLANNER·OFF')
+          gk = truthy?(s[:gatekeeper_enabled]) ? tag_warning('GK·ON') : tag_neutral('GK·OFF')
+          ax = truthy?(s[:auto_execute]) ? tag_accent('AUTO·EXE') : tag_neutral('AUTO·OFF')
           last = muted(format_last_run(s[:planner_last_at], s[:planner_interval_s]))
           err = s[:planner_error].to_s.strip
-          err_part = err.empty? ? nil : loss("ERR: #{err[0, 56]}")
-          colored = [bold('SMC·SETUP'), plan_s, gk, ax, last, err_part].compact.join('  ')
+          err_part = err.empty? ? nil : loss("ERR: #{err[0, 120]}")
+          colored = [plan_s, gk, ax, last, err_part].compact.join('  ')
           p = strip_ansi(colored)
           return colored if p.length <= w
 

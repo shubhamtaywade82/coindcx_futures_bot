@@ -72,4 +72,15 @@ RSpec.describe CoindcxBot::SmcSetup::TradeSetupStore do
     store.reload!
     expect(store.pair_has_actionable?('B-SOL_USDT')).to be(true)
   end
+
+  it 'drops terminal setups from the in-memory index after persist_record!' do
+    store = described_class.new(journal: journal, max_active_setups_per_pair: 3)
+    store.upsert_from_hash!(payload('z'))
+    store.reload!
+    rec = store.record_by_id('z')
+    rec.state = CoindcxBot::SmcSetup::States::INVALIDATED
+    store.persist_record!(rec)
+    expect(store.records_for_pair('B-SOL_USDT')).to be_empty
+    expect(store.record_by_id('z')).to be_nil
+  end
 end

@@ -85,6 +85,90 @@ RSpec.describe CoindcxBot::SmcSetup::TickEvaluator do
     expect(row.state).to eq(CoindcxBot::SmcSetup::States::ARMED_ENTRY)
   end
 
+  it 'invalidates when LTP sits in conditions.no_trade_zone and lifecycle is enabled' do
+    store.upsert_from_hash!(
+      {
+        schema_version: 1,
+        setup_id: 'ntz-1',
+        pair: 'B-SOL_USDT',
+        direction: 'long',
+        conditions: {
+          sweep_zone: { min: 40, max: 120 },
+          entry_zone: { min: 90, max: 102 },
+          no_trade_zone: { min: 94.5, max: 95.5 },
+          confirmation_required: []
+        },
+        execution: { sl: 30.0 }
+      }
+    )
+    store.reload!
+
+    cfg = CoindcxBot::Config.new(
+      minimal_bot_config(
+        pairs: %w[B-SOL_USDT],
+        smc_setup: { enabled: true, auto_execute: true, sweep_consecutive_ticks: 1, lifecycle_enabled: true }
+      )
+    )
+    ev = described_class.new(
+      config: cfg,
+      journal: journal,
+      coordinator: coord,
+      risk: CoindcxBot::Risk::Manager.new(config: cfg, journal: journal, exposure_guard: guard, fx: fx),
+      store: store,
+      logger: nil,
+      smc_configuration: smc_cfg,
+      regime_sizer: nil,
+      setup_mutex_factory: ->(id) { setup_mutexes[id] }
+    )
+
+    ev.evaluate_pair!(
+      pair: 'B-SOL_USDT',
+      ltp: BigDecimal('95.0'),
+      candles_exec: dto_candles(100),
+      stale: false
+    )
+
+    row = journal.smc_setup_get_row('ntz-1')
+    expect(row[:state]).to eq(CoindcxBot::SmcSetup::States::INVALIDATED)
+  end
+
+  it 'emits smc_setup_invalidated for time_expired at most once across ticks' do
+    past = (Time.now.utc - 120).iso8601
+    store.upsert_from_hash!(
+      {
+        schema_version: 1,
+        setup_id: 'exp-once',
+        pair: 'B-SOL_USDT',
+        direction: 'long',
+        expires_at: past,
+        conditions: {
+          sweep_zone: { min: 40, max: 120 },
+          entry_zone: { min: 90, max: 102 },
+          confirmation_required: []
+        },
+        execution: { sl: 30.0 }
+      }
+    )
+    store.reload!
+
+    # LTP near entry mid avoids lifecycle price_drift invalidation (still expired).
+    5.times do
+      evaluator.evaluate_pair!(
+        pair: 'B-SOL_USDT',
+        ltp: BigDecimal('96'),
+        candles_exec: dto_candles(100),
+        stale: false
+      )
+    end
+
+    rows = journal.recent_events(30).select do |e|
+      e['type'] == 'smc_setup_invalidated' && e['payload'].to_s.include?('exp-once')
+    end
+    expect(rows.size).to eq(1)
+    payload = JSON.parse(rows.first['payload'], symbolize_names: true)
+    expect(payload[:reason]).to eq('time_expired')
+  end
+
   it 'does not call apply twice when journal already has the setup id open' do
     journal.insert_position(
       pair: 'B-SOL_USDT',

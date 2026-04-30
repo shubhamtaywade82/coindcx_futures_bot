@@ -216,14 +216,34 @@ module CoindcxBot
           sum / w
         end
 
-        labels = %w[S0 S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S11]
+        vol_sorted = vols.each_with_index.sort_by { |v, _| v }.map(&:last)
+        ret_abs_max = rets_mean.map(&:abs).max.to_f
+        ret_abs_max = 1e-9 if ret_abs_max.zero?
+
         n.times.map do |j|
           RegimeInfo.new(
             state_id: j,
-            label: labels[j] || "S#{j}",
+            label: semantic_label(rets_mean[j], vols[j], vol_sorted, n, ret_abs_max),
             expected_return: rets_mean[j],
             expected_volatility: vols[j]
           )
+        end
+      end
+
+      # Semantic label derived from return sign/strength and volatility-rank quartile.
+      # Return proxy (obs[t][0]) is rough vol-scale zscore — direction comes from sign, strength from |z|.
+      def semantic_label(ret, vol, vol_sorted, n_states, ret_abs_max)
+        vol_rank = vol_sorted.index(vol) || 0          # 0 = lowest vol
+        top_tier = vol_rank >= (n_states - 1)          # highest vol state
+        low_tier = vol_rank == 0                        # lowest vol state
+        strength = ret.abs / ret_abs_max                # 0..1 normalised
+
+        if top_tier
+          ret > 0 ? 'VOL_BULL' : 'VOL_BEAR'
+        elsif strength < 0.25
+          low_tier ? 'RANGE' : 'CHOP'
+        else
+          ret > 0 ? 'TREND_UP' : 'TREND_DN'
         end
       end
 
