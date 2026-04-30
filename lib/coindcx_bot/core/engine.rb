@@ -142,6 +142,11 @@ module CoindcxBot
         @smc_setup_mutexes = Hash.new { |h, k| h[k] = Mutex.new }
         init_smc_setup_stack! if @config.smc_setup_enabled?
 
+        @orderflow_engine =
+          if config.orderflow_enabled?
+            Orderflow::Engine.new(bus: @bus, config: config, logger: @logger)
+          end
+
         @stop_breach_queue = {}
         @stop_breach_mutex = Mutex.new
 
@@ -1076,15 +1081,23 @@ module CoindcxBot
         end
         @last_error = "ws order sub: #{ou.message}" if ou.failure?
 
-        if @order_book_store
+        if @order_book_store || @orderflow_engine
+          ws_depth = @config.orderflow_enabled? ? @config.orderflow_ws_depth : 10
           @config.pairs.each do |pair|
-            ob = @ws.subscribe_futures_order_book(instrument: pair, depth: 10) do |book|
+            ob = @ws.subscribe_futures_order_book(instrument: pair, depth: ws_depth) do |book|
               ltp_hint = order_book_ltp_hint(pair)
-              @order_book_store.update(
+              if @order_book_store
+                @order_book_store.update(
+                  pair: book[:pair],
+                  bids: book[:bids],
+                  asks: book[:asks],
+                  ltp_hint: ltp_hint
+                )
+              end
+              @orderflow_engine&.on_book_update(
                 pair: book[:pair],
                 bids: book[:bids],
-                asks: book[:asks],
-                ltp_hint: ltp_hint
+                asks: book[:asks]
               )
               @on_market_data&.call
             rescue StandardError => e

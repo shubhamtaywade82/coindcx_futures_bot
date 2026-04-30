@@ -326,6 +326,33 @@ runtime:
 #   retry_attempts: 3
 #   schema_path:   # default: config/schemas/smc_trade_setup_v1.json
 
+# Orderflow engine: converts raw WS L2 snapshots into deterministic microstructure signals.
+# Requires the WS order-book subscription (always on when this block is enabled).
+# Published EventBus events:
+#   :orderflow_imbalance       — top-N bid/ask volume imbalance (bullish/neutral/bearish)
+#   :orderflow_walls           — large resting orders (>= avg * wall_multiplier)
+#   :orderflow_liquidity_shift — levels added or pulled vs previous snapshot
+#   :orderflow_spoof_activity  — large orders that appear and vanish within spoof_max_dwell_seconds
+#   :orderflow_absorption      — price stuck in tight band while heavy book volume turns over
+#
+# Strategy hook example (in an initializer or strategy file):
+#   bus.subscribe(:orderflow_imbalance) do |ev|
+#     next unless ev[:pair] == 'SOLUSDT' && ev[:bias] == :bullish
+#     Strategy::LongPressure.call(ev)
+#   end
+#
+# orderflow:
+#   enabled: false
+#   ws_depth: 10                       # 10 | 20 | 50 — CoinDCX L2 depth levels per side
+#   imbalance_depth: 5                 # top-N levels used for bid/ask volume imbalance
+#   imbalance_spike_threshold: 0.25    # |imbalance| > this → :bullish / :bearish bias
+#   wall_multiplier: 3.0               # level size > (mean * multiplier) → wall
+#   spoof_threshold: 10000.0           # minimum size (base asset) for spoof candidate
+#   spoof_max_dwell_seconds: 60.0      # candidate expires as "likely executed" after this
+#   absorption_window: 20              # snapshots retained for mid-price stickiness check
+#   absorption_price_range_pct: 0.05   # mid must stay within X % over the window
+#   absorption_volume_threshold: 5000.0 # cumulative removed-size threshold to flag absorption
+
 # Paper broker simulation settings (only active when runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
 paper:

@@ -694,6 +694,24 @@ module CoindcxBot
       1.0
     end
 
+    # ── Orderflow engine ─────────────────────────────────────────────────────
+
+    def orderflow_section
+      raw.fetch(:orderflow, {})
+    end
+
+    # Set `orderflow.enabled: true` to activate the stateful orderflow engine.
+    # Requires the order-book WS subscription to be active (order_book_store must be present).
+    def orderflow_enabled?
+      truthy?(orderflow_section[:enabled])
+    end
+
+    # Depth of L2 book to subscribe to (10, 20, or 50 per CoinDCX docs).
+    def orderflow_ws_depth
+      v = orderflow_section.fetch(:ws_depth, 10).to_i
+      [10, 20, 50].include?(v) ? v : 10
+    end
+
     # Maximum reconnect attempts before the WS loop gives up (0 = unlimited).
     def ws_reconnect_attempts
       v = runtime.fetch(:ws_reconnect_attempts, 5).to_i
