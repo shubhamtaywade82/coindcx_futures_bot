@@ -121,16 +121,16 @@ module CoindcxBot
           parts = [
             m_clr, exe_clr, reg_clr, eng_clr, kill_clr, ws_clr, feed_clr,
             "#{muted('FOCUS:')} #{focus_clr}",
-            "#{muted('LEV:')} #{gold(snap.live_tui_metrics[:leverage_label] || '—')}",
-            "#{muted('LAT:')} #{accent("#{snap.ws_last_tick_ms_ago || 0}ms")}"
+            "#{muted('LEV:')} #{gold(snap.live_tui_metrics[:leverage_label] || '—')}"
           ]
           parts.join('  ')
         end
 
         def ws_status_pill(ms)
           return tag_critical('WS: DOWN') if ms.nil? || ms > 5000
+          return tag_warning('WS: SLOW') if ms > 2000
 
-          tag_live("WS: #{ms}ms")
+          tag_live('WS: OK')
         end
 
         def line_balance_net_real_unreal_dd_risk(snap, vm, w)
