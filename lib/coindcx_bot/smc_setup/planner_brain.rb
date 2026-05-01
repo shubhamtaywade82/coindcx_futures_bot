@@ -46,6 +46,9 @@ module CoindcxBot
         }
 
         Prices must be justified by market_state or OHLCV tail. setup_id must be new per call.
+        GEOMETRY:
+        - LONG: sl < entry_min <= entry_max < all targets.
+        - SHORT: all targets < entry_min <= entry_max < sl.
         ANCHOR RULE: every numeric price (sweep_zone, entry_zone, no_trade_zone, sl, targets, invalidation_level)
         MUST stay within +/- 5% of the current_price provided in the user message for that pair. Reject any setup outside that band.
         Do not invent prices from training data.
@@ -78,7 +81,15 @@ module CoindcxBot
         h = unwrap_array_payload(h)
         h = repair_missing_keys!(h)
 
-        if h.is_a?(Hash) && (h[:no_trade] || h['no_trade'] || h[:setup_id].to_s.include?('no_trade'))
+        is_no_trade = h.is_a?(Hash) && (
+          h[:no_trade] || h['no_trade'] ||
+          h[:setup_id].to_s.include?('no_trade') ||
+          h['setup_id'].to_s.include?('no_trade') ||
+          h[:reason].to_s.downcase.include?('no trade') ||
+          h['reason'].to_s.downcase.include?('no trade')
+        )
+
+        if is_no_trade
           @logger&.info("[smc_setup:planner] planner returned no_trade: #{h[:reason] || h['reason']}")
           return Result.new(ok: true, payload: nil, error_message: nil)
         end
