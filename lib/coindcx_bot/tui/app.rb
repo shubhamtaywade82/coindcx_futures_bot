@@ -195,9 +195,15 @@ module CoindcxBot
         smc_strip = Panels::SmcSetupStripPanel.new(engine: engine, origin_row: origin)
         origin += smc_strip.row_count
 
+        orderflow = Panels::OrderflowPanel.new(
+          bus: engine.instance_variable_get(:@bus),
+          origin_row: origin,
+          focus_pair_proc: -> { @focus&.current }
+        )
+        origin += orderflow.row_count
+
         # Flexible height calculation
-        # Other panels: Header, Regime, SMC, Keybar (1 row), plus borders/padding if any.
-        # We also want to leave a small buffer (e.g. 1 row) for stability.
+        # Other panels: Header, Regime, SMC, Orderflow, Keybar (1 row), plus borders/padding if any.
         fixed_height = origin + 1 + 1 # +1 for Keybar, +1 for buffer
         total_h = TermHeight.rows
         avail_h = total_h - fixed_height
@@ -220,7 +226,7 @@ module CoindcxBot
           footer_text_proc: -> { footer_hint_text },
           command_line_proc: -> { command_palette_line }
         )
-        [header, regime_strip, smc_strip, grid, keybar]
+        [header, regime_strip, smc_strip, orderflow, grid, keybar]
       end
 
       def start_engine(engine)
