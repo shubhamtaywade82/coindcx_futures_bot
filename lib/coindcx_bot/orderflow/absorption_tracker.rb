@@ -4,9 +4,9 @@ module CoindcxBot
   module Orderflow
     # Detects absorption: a price level being repeatedly defended while the mid-price barely moves.
     #
-    # Without a live trades feed we proxy "volume consumed at level" via cumulative removed-size
-    # in successive book diffs.  When mid stays within a tight band AND cumulative removed-size
-    # at any level exceeds the threshold, absorption is flagged.
+    # We track real trade volume executed at specific price levels. When mid stays within
+    # a tight band AND cumulative trade volume at any level exceeds the threshold,
+    # absorption is flagged.
     class AbsorptionTracker
       DEFAULT_WINDOW          = 20     # snapshots to retain per pair
       DEFAULT_PRICE_RANGE_PCT = 0.05   # mid must stay within 0.05 % over the window
@@ -19,6 +19,20 @@ module CoindcxBot
         @consumed = Hash.new { |h, k| h[k] = {} }   # pair => { price_str => Float }
       end
 
+      # Called from the WS thread when a new trade arrives.
+      def on_trade(trade)
+        pair = trade[:pair]
+        price = trade[:price].to_s
+        size = trade[:size].to_f
+
+        @mutex.synchronize do
+          c = @consumed[pair]
+          c[price] = (c[price] || 0.0) + size
+          # Prune old levels if it gets too large
+          c.reject! { |_, v| v < 0.1 } if c.size > 500
+        end
+      end
+
       # Called from the WS thread after each book update.
       # Returns a signal Hash or nil.
       def on_book_update(pair:, snap:, diff:)
@@ -29,7 +43,6 @@ module CoindcxBot
 
         @mutex.synchronize do
           track_mid(pair, mid)
-          track_consumed(pair, diff)
           evaluate(pair, mid)
         end
       rescue StandardError
@@ -52,14 +65,6 @@ module CoindcxBot
         arr.shift while arr.size > window
       end
 
-      def track_consumed(pair, diff)
-        c = @consumed[pair]
-        diff.bid_removed.each { |p, s| c[p] = (c[p] || 0.0) + s }
-        diff.ask_removed.each { |p, s| c[p] = (c[p] || 0.0) + s }
-        # Prune noise entries to prevent unbounded growth
-        c.reject! { |_, v| v < 1.0 } if c.size > 300
-      end
-
       def evaluate(pair, _current_mid)
         mids = @mids[pair]
         return nil if mids.size < (window / 2)
@@ -73,8 +78,13 @@ module CoindcxBot
         c = @consumed[pair]
         return nil if c.empty?
 
+        # Find the level with the most volume in the current "stuck" range
         price_str, volume = c.max_by { |_, v| v }
         return nil if volume < min_volume
+
+        # Once flagged, we clear the volume for that level to avoid double-triggering
+        # until more volume is absorbed.
+        c[price_str] = 0.0
 
         {
           type:       :absorption,

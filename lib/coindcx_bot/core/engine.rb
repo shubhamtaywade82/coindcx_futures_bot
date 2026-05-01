@@ -1104,12 +1104,22 @@ module CoindcxBot
               @logger&.warn("order book ws #{pair}: #{e.message}")
             end
             @last_error = "ws orderbook #{pair}: #{ob.message}" if ob.failure?
+
+            if @orderflow_engine
+              tr = @ws.subscribe_futures_trades(instrument: pair) do |trade|
+                @orderflow_engine.on_trade(trade)
+              rescue StandardError => e
+                @logger&.warn("trade ws #{pair}: #{e.message}")
+              end
+              @last_error = "ws trades #{pair}: #{tr.message}" if tr.failure?
+            end
           end
         end
 
         until @stop
           sleep 0.1
         end
+        @orderflow_engine&.shutdown
       rescue StandardError => e
         @last_error = e.message
         @logger.error("[ws] session error: #{e.message}")

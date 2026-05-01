@@ -56,7 +56,28 @@ module CoindcxBot
         map_coin_dcx_error(e)
       end
 
+      def subscribe_futures_trades(instrument:, &block)
+        channel = CoinDCX::WS::PublicChannels.futures_new_trade(instrument: instrument)
+        @ws.subscribe_public(channel_name: channel, event_name: 'new-trade') do |payload|
+          h = normalize_payload_hash(payload)
+          next unless payload_instrument_matches?(instrument, h)
+
+          block.call(
+            pair: instrument.to_s,
+            price: (h[:p] || h[:last_price] || h[:price]).to_f,
+            size: (h[:q] || h[:quantity] || h[:size] || h[:v] || h[:volume]).to_f,
+            side: (h[:m] || h[:is_maker_buyer] == true) ? :sell : :buy, # CoinDCX 'm' is isBuyerMaker
+            ts: (h[:T] || h[:time] || Time.now.to_f * 1000).to_f
+          )
+        end
+
+        Result.ok(self)
+      rescue CoinDCX::Errors::Error => e
+        map_coin_dcx_error(e)
+      end
+
       def subscribe_order_updates(&block)
+
         @ws.subscribe_private(event_name: CoinDCX::WS::PrivateChannels::ORDER_UPDATE_EVENT, &block)
         Result.ok(self)
       rescue CoinDCX::Errors::Error => e

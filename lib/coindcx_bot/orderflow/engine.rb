@@ -2,14 +2,14 @@
 
 require_relative 'order_book_store'
 require_relative 'absorption_tracker'
+require_relative 'recorder'
 
 module CoindcxBot
   module Orderflow
     # Stateful, event-driven orderflow engine.
     #
-    # Converts raw WS L2 snapshots into deterministic signals and publishes
-    # them on the shared EventBus.  All detection is diff-based — static
-    # snapshots are never used as standalone signals.
+    # Converts raw WS L2 snapshots and trades into deterministic signals and publishes
+    # them on the shared EventBus.
     #
     # Signals published (EventBus event → payload):
     #   :orderflow_imbalance        — { pair, value, bias, depth }
@@ -21,7 +21,7 @@ module CoindcxBot
       DEFAULT_IMBALANCE_DEPTH          = 5
       DEFAULT_WALL_MULTIPLIER          = 3.0
       DEFAULT_SPOOF_THRESHOLD          = 10_000.0
-      DEFAULT_SPOOF_MAX_DWELL_SECONDS  = 60.0    # candidate expires (executed, not spoofed)
+      DEFAULT_SPOOF_MAX_DWELL_SECONDS  = 60.0
       DEFAULT_IMBALANCE_SPIKE_THRESHOLD = 0.25
 
       def initialize(bus:, config:, logger: nil)
@@ -30,13 +30,23 @@ module CoindcxBot
         @logger             = logger
         @store              = OrderBookStore.new
         @absorption         = AbsorptionTracker.new(config: config)
-        @spoof_candidates   = Hash.new { |h, k| h[k] = {} } # pair => { price_str => {side, size, seen_at} }
+        @recorder           = Recorder.new(config: config, logger: logger)
+        @spoof_candidates   = Hash.new { |h, k| h[k] = {} }
         @spoof_mutex        = Mutex.new
       end
 
-      # Entry point called from the WS order-book callback (WS thread).
-      # Runs all detectors, publishes non-nil signals to EventBus.
+      # Called from the WS trade callback.
+      def on_trade(trade)
+        @recorder.record_trade(trade)
+        @absorption.on_trade(trade)
+      rescue StandardError => e
+        @logger&.warn("[orderflow:engine] trade error: #{e.message}")
+      end
+
+      # Called from the WS order-book callback.
       def on_book_update(pair:, bids:, asks:)
+        @recorder.record_snapshot(pair, bids, asks)
+
         diff = @store.update!(pair: pair, bids: bids, asks: asks)
         snap = @store.snapshot_for(pair)
 
@@ -50,14 +60,14 @@ module CoindcxBot
 
         publish(signals)
       rescue StandardError => e
-        @logger&.warn("[orderflow:engine] #{pair}: #{e.message}")
+        @logger&.warn("[orderflow:engine] book error #{pair}: #{e.message}")
+      end
+
+      def shutdown
+        @recorder.close
       end
 
       private
-
-      # ── Imbalance ───────────────────────────────────────────────────────────
-      # imbalance = (bid_vol − ask_vol) / (bid_vol + ask_vol)
-      # Range: −1.0 (fully ask-heavy) … +1.0 (fully bid-heavy)
 
       def detect_imbalance(pair, snap)
         depth   = imbalance_depth
@@ -79,10 +89,6 @@ module CoindcxBot
         { type: :imbalance, pair: pair, value: value.round(4), bias: bias, depth: depth }
       end
 
-      # ── Walls ────────────────────────────────────────────────────────────────
-      # Wall = level whose size exceeds (mean_size × wall_multiplier).
-      # Dynamic threshold adapts to the current book; avoids hard-coded notional values.
-
       def detect_walls(pair, snap)
         all_sizes = snap[:bids].values + snap[:asks].values
         return nil if all_sizes.empty?
@@ -97,28 +103,16 @@ module CoindcxBot
         { type: :walls, pair: pair, bid_walls: bid_walls, ask_walls: ask_walls, threshold: threshold.round(2) }
       end
 
-      # ── Liquidity shift ──────────────────────────────────────────────────────
-      # Emit any level that was added or removed vs the previous snapshot.
-      # ask_pull (large ask removed) → potential bullish breakout.
-      # bid_pull (large bid removed) → potential breakdown.
-
       def detect_liquidity_shift(pair, diff)
         events = []
-
         diff.ask_removed.each { |p, s| events << { type: :ask_pull, price: p, size: s } }
         diff.bid_removed.each { |p, s| events << { type: :bid_pull, price: p, size: s } }
         diff.ask_added.each   { |p, s| events << { type: :ask_add,  price: p, size: s } }
         diff.bid_added.each   { |p, s| events << { type: :bid_add,  price: p, size: s } }
-
         return nil if events.empty?
 
         { type: :liquidity_shift, pair: pair, events: events }
       end
-
-      # ── Spoof detection ──────────────────────────────────────────────────────
-      # Stage 1 (add):   large order appears → remember it as a candidate.
-      # Stage 2 (remove): candidate vanishes before DEFAULT_SPOOF_MAX_DWELL expires → suspicious.
-      # Candidates that persist (actually executed / moved slowly) expire after 60 s.
 
       def detect_spoof(pair, diff)
         threshold = spoof_threshold
@@ -127,8 +121,6 @@ module CoindcxBot
 
         @spoof_mutex.synchronize do
           candidates = @spoof_candidates[pair]
-
-          # Register newly-added large levels as candidates
           diff.bid_added.each do |price, size|
             candidates[price] = { side: :bid, size: size, seen_at: now } if size >= threshold
           end
@@ -136,7 +128,6 @@ module CoindcxBot
             candidates[price] = { side: :ask, size: size, seen_at: now } if size >= threshold
           end
 
-          # Check whether a known candidate just disappeared
           (diff.bid_removed.merge(diff.ask_removed)).each do |price, size|
             next unless size >= threshold
             next unless (c = candidates.delete(price))
@@ -149,17 +140,12 @@ module CoindcxBot
               dwell_seconds: (now - c[:seen_at]).round(2)
             }
           end
-
-          # Expire stale candidates: they likely executed (not spoofed)
           candidates.reject! { |_, v| now - v[:seen_at] > spoof_max_dwell }
         end
 
         return nil if suspicious.empty?
-
         { type: :spoof_activity, pair: pair, events: suspicious }
       end
-
-      # ── EventBus publish ─────────────────────────────────────────────────────
 
       def publish(signals)
         signals.each do |signal|
@@ -167,8 +153,6 @@ module CoindcxBot
           @bus.publish(event, signal)
         end
       end
-
-      # ── Config helpers ────────────────────────────────────────────────────────
 
       def section
         @config.respond_to?(:orderflow_section) ? @config.orderflow_section : {}
