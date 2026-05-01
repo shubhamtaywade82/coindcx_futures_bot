@@ -16,10 +16,13 @@ module CoindcxBot
         Prefer setups when smc.displacement.present is true, liquidity.event is not none OR state.is_post_sweep is true,
         and smc.mitigation.status is untouched or partial with a real OB zone.
 
-        Return exactly one JSON object matching schema_version 1.
-        CRITICAL: conditions.sweep_zone {min, max} and conditions.entry_zone {min, max} are REQUIRED.
-        If a sweep has ALREADY occurred, set sweep_zone {min, max} to include the current price so it triggers immediately.
-        If no trade is found, return a valid JSON with zones that are logically impossible to hit (e.g., extremely far away) or set valid_for_minutes to 1.
+        If no trade is found, return exactly:
+        {
+          "schema_version": 1,
+          "no_trade": true,
+          "pair": "B-SOL_USDT",
+          "reason": "short explanation why no trade was found"
+        }
 
         JSON structure:
         {
@@ -44,9 +47,9 @@ module CoindcxBot
 
         Prices must be justified by market_state or OHLCV tail. setup_id must be new per call.
         ANCHOR RULE: every numeric price (sweep_zone, entry_zone, no_trade_zone, sl, targets, invalidation_level)
-        MUST stay within +/- 5% of the current_price provided in the user message for that pair. Never extrapolate
-        from prior knowledge or training data; recompute from the current_price + recent_ohlcv_tail. If you cannot
-        produce a valid setup within that band, return a JSON with valid_for_minutes: 1 and zones that cannot trigger.
+        MUST stay within +/- 5% of the current_price provided in the user message for that pair. Reject any setup outside that band.
+        Do not invent prices from training data.
+        If you cannot produce a valid setup within that band, return a "no_trade": true JSON.
       PROMPT
 
       Result = Struct.new(:ok, :payload, :error_message, keyword_init: true)
@@ -74,6 +77,12 @@ module CoindcxBot
         h = JsonSlice.parse_object(raw)
         h = unwrap_array_payload(h)
         h = repair_missing_keys!(h)
+
+        if h.is_a?(Hash) && (h[:no_trade] || h['no_trade'] || h[:setup_id].to_s.include?('no_trade'))
+          @logger&.info("[smc_setup:planner] planner returned no_trade: #{h[:reason] || h['reason']}")
+          return Result.new(ok: true, payload: nil, error_message: nil)
+        end
+
         h = Validator.validate!(h)
         Result.new(ok: true, payload: h, error_message: nil)
       rescue StandardError => e
@@ -86,11 +95,7 @@ module CoindcxBot
       def repair_missing_keys!(h)
         return h unless h.is_a?(Hash)
 
-        # If schema_version is missing but it looks like a version 1 payload (conditions + execution), inject it.
-        if !h.key?(:schema_version) && h.key?(:conditions) && h.key?(:execution)
-          h[:schema_version] = 1
-        end
-
+        h[:schema_version] ||= 1
         h
       end
 
