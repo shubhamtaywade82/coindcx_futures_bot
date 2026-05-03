@@ -29,9 +29,11 @@ clearly present. Re-verify before relying on a tick.
 
 - [ ] PR-02 Config and logging core
   - [x] `lib/coindcx_bot/config.rb` schema + ENV via dotenv
-  - [ ] Secret redactor (API key/secret) in logs
-  - [x] `tty-logger` structured log wrapper
-  - [ ] Spec: schema parsing, redaction, log shape
+  - [x] Secret redactor (`lib/coindcx_bot/logging/redactor.rb`) — keys + HMAC hex
+  - [x] Central structured logger (`lib/coindcx_bot/logging/logger.rb`) wraps tty-logger + redactor
+  - [x] Specs: redaction (5) + logger (3) green
+  - [ ] Wire `Logging::Logger` into gateways/cli (replace ad-hoc `puts`/`warn`) — separate slice
+  - [ ] Schema parsing/validation spec on `Config` — separate slice (1049 LoC, needs scoping)
 
 - [ ] PR-03 Persistence bootstrap
   - [x] SQLite store (`lib/coindcx_bot/persistence/paper_store.rb`)
