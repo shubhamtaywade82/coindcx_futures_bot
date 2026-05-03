@@ -96,10 +96,17 @@ module CoindcxBot
           volf = vol_factor(atr5, atr14)
           dist = trail_distance(atr14, tier_mult, vf, volf)
 
-          # Use ltp (bar high for longs, passed as `high || ltp` by the caller) as the chandelier
-          # reference — conventional chandelier-exit semantics anchor the trail to the bar high,
-          # not close, to give the position room to breathe on wick-heavy candles.
-          ref_price = ltp
+          # Conventional chandelier anchors trail to bar high (long) / bar low (short),
+          # not close/ltp — gives position room on wick-heavy candles, prevents premature exits.
+          last_bar = candles.last
+          ref_price =
+            if side == :long
+              bar_hi = last_bar && (last_bar[:high] || last_bar.respond_to?(:high) && last_bar.high)
+              bar_hi ? [bd(bar_hi), ltp].max : ltp
+            else
+              bar_lo = last_bar && (last_bar[:low] || last_bar.respond_to?(:low) && last_bar.low)
+              bar_lo ? [bd(bar_lo), ltp].min : ltp
+            end
           candidate =
             if side == :long
               candidate_long(candles, ref_price, dist)

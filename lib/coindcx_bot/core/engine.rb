@@ -1507,7 +1507,11 @@ module CoindcxBot
 
           @coord.apply(sig, quantity: qty, entry_price: entry)
         else
-          exit_for_close = sig.action == :close ? ltp : nil
+          exit_for_close = sig.action == :close ? (ltp || @tracker.ltp(sig.pair)) : nil
+          if sig.action == :close && exit_for_close.nil?
+            @logger&.warn("[engine] #{sig.pair} close deferred: no LTP available (will retry on next tick)")
+            return
+          end
           @coord.apply(sig, exit_price: exit_for_close)
         end
       end

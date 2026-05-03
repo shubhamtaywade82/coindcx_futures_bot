@@ -23,12 +23,16 @@ module CoindcxBot
         @regime_sizer = regime_sizer
         @hmm_runtime = hmm_runtime
         @mutex_for = setup_mutex_factory || ->(_setup_id) { Mutex.new }
+        @pair_mutexes = Hash.new { |h, k| h[k] = Mutex.new }
+        @pair_mutex_guard = Mutex.new
         @consecutive = config.smc_setup_sweep_consecutive_ticks
       end
 
       def evaluate_pair!(pair:, ltp:, candles_exec:, stale:)
         bar = last_bar_result(candles_exec)
         bars_json = compact_bars_json(candles_exec, 10)
+        pair_mutex = @pair_mutex_guard.synchronize { @pair_mutexes[pair.to_s] }
+        pair_mutex.synchronize do
         @store.records_for_pair(pair).map(&:setup_id).uniq.each do |setup_id|
           mutex = @mutex_for.call(setup_id)
           mutex.synchronize do
@@ -71,6 +75,7 @@ module CoindcxBot
               break unless cont
             end
           end
+        end
         end
       end
 

@@ -82,16 +82,17 @@ module CoindcxBot
         # --- Layer 1C: Order blocks ---
         s.bull_ob_age += 1
         s.bear_ob_age += 1
-        impulse_body_pct = close.abs.positive? ? ((close - open).abs / close * 100.0) : 0.0
+        candle_range = (high - low).abs
+        impulse_body_ratio = candle_range.positive? ? (close - open).abs / candle_range : 0.0
         if i.positive?
-          if (bos_bull || choch_bull) && impulse_body_pct >= cfg.ob_body_pct && prev_close < prev_open
+          if (bos_bull || choch_bull) && impulse_body_ratio >= cfg.ob_body_pct && prev_close < prev_open
             prev = candles[i - 1]
             s.bull_ob_hi = prev[:high].to_f
             s.bull_ob_lo = prev[:low].to_f
             s.bull_ob_bar = i - 1
             s.bull_ob_age = 0
           end
-          if (bos_bear || choch_bear) && impulse_body_pct >= cfg.ob_body_pct && prev_close > prev_open
+          if (bos_bear || choch_bear) && impulse_body_ratio >= cfg.ob_body_pct && prev_close > prev_open
             prev = candles[i - 1]
             s.bear_ob_hi = prev[:high].to_f
             s.bear_ob_lo = prev[:low].to_f
