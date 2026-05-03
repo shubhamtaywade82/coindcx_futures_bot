@@ -25,12 +25,11 @@ clearly present. Re-verify before relying on a tick.
   - [x] RSpec wired (`spec/`)
   - [x] CI script (`bin/ci` + `rake ci`) running rubocop + rspec
   - [x] GitHub Actions workflow (`.github/workflows/ci.yml`)
-  - [ ] Sanity spec passes from clean checkout — 3 failing, 4 pending
-    - [x] Mechanical Class A fixes (23). 578 examples, 35 → 12.
-    - [x] header_panel content drift rewrites (9). 578 examples, 12 → 3 failures + 4 pending.
-    - [ ] header_panel `row_count` (2 failing) — production hardcodes 6, specs want 4/5 conditional. Decide: bug or stale spec.
-    - [ ] live_account_mirror (1 failing) — `available_balance + locked` synthesis contradicts spec contract. Product decision.
-    - [ ] 4 pending awaiting production decisions: SCALP fragment never called; LEV reads live_tui_metrics not config; regime_header_fragment dead; `m == 'PAUSED'` branch unreachable.
+  - [x] Sanity spec passes from clean checkout — 578 examples, 0 failures
+    - [x] Mechanical Class A fixes (23): 35 → 12
+    - [x] header_panel content rewrites (9): 12 → 3 + 4 pending
+    - [x] Production wiring per product decisions (SCALP, REGIME·ON, PAUSED, conditional row_count, live_account_mirror synthesis): 3 + 4 → 0
+    - [x] LEV spec updated to read `live_tui_metrics[:leverage_label]`
 
 - [ ] PR-02 Config and logging core
   - [x] `lib/coindcx_bot/config.rb` schema + ENV via dotenv

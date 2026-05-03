@@ -50,24 +50,19 @@ module CoindcxBot
         # Set engine focus for regime AI strip overlay context
         @engine.tui_focus_pair = @focus_pair_proc&.call
 
-        # Account row (Reserving space for stability)
+        # Account row — only when live futures strip is active. No placeholder
+        # row when absent so the panel can reflow cleanly.
         if strip
           buf << move(r) << ui_border("│ ") << pad_visible(line_live_equity_wallet_unreal(snap, w - 4), w - 4) << ui_border(" │")
-        else
-          buf << move(r) << ui_border("│ ") << pad_visible(muted(" (AWAITING ACCOUNT METRICS) "), w - 4) << ui_border(" │")
+          r += 1
         end
-        r += 1
 
         # Balance & Risk row
         buf << move(r) << ui_border("│ ") << pad_visible(line_balance_net_real_unreal_dd_risk(snap, vm, w - 4), w - 4) << ui_border(" │")
         r += 1
 
-        # Stats row
+        # Stats row (last drawn row; bottom border merges with adjacent panel above next).
         buf << move(r) << ui_border("│ ") << pad_visible(line_pos_ord_err_last(snap, vm, w - 4), w - 4) << ui_border(" │")
-        r += 1
-
-        # Bottom border
-        buf << move(r) << ui_border("└#{'─' * (w - 2)}┘")
         buf << @cursor.restore
 
         @output.print buf.string
@@ -75,7 +70,8 @@ module CoindcxBot
       end
 
       def row_count
-        6
+        snap = @engine.snapshot
+        show_live_futures_account_strip?(snap) ? 5 : 4
       end
 
         private
@@ -100,18 +96,21 @@ module CoindcxBot
         end
 
         def line_mode_engine_kill_ws_lat_feed(snap, w)
-          m = snap.dry_run ? 'PAPER' : 'LIVE'
-          m_clr =
-            if m == 'LIVE'
-              tag_live(m)
-            elsif m == 'PAUSED'
-              tag_warning(m)
+          m =
+            if snap.paused
+              'PAUSED'
             else
-              tag_neutral(m)
+              snap.dry_run ? 'PAPER' : 'LIVE'
+            end
+          m_clr =
+            case m
+            when 'LIVE'   then tag_live(m)
+            when 'PAUSED' then tag_warning(m)
+            else tag_neutral(m)
             end
 
           exe_clr = truthy?(snap.live_tui_metrics[:order_placement_enabled]) ? tag_accent('EXE·ON') : tag_neutral('EXE·OFF')
-          reg_clr = regime_color_label(snap.regime)
+          reg_clr = regime_header_fragment(snap) || regime_color_label(snap.regime)
           eng_clr = snap.running ? tag_live('RUNNING') : tag_critical('CRASHED')
           kill_clr = snap.kill_switch ? tag_critical('KILL: ON') : muted('KILL: OFF')
           ws_clr = ws_status_pill(snap.ws_last_tick_ms_ago)
@@ -120,9 +119,10 @@ module CoindcxBot
 
           parts = [
             m_clr, exe_clr, reg_clr, eng_clr, kill_clr, ws_clr, feed_clr,
+            trading_profile_fragment,
             "#{muted('FOCUS:')} #{focus_clr}",
-            "#{muted('LEV:')} #{gold(snap.live_tui_metrics[:leverage_label] || '—')}"
-          ]
+            "#{muted('LEV:')} #{gold(snap.live_tui_metrics[:leverage_label] || '—')}",
+          ].compact
           parts.join('  ')
         end
 
