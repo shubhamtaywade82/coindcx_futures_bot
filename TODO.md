@@ -171,9 +171,12 @@ clearly present. Re-verify before relying on a tick.
   - [ ] Canonical JSON serialization spec
   - [ ] Clock-skew handling + retry guard
 
-- [ ] `MarketCatalog` built/persisted from `/exchange/v1/markets_details`
-  - [ ] Cache `pair ↔ symbol ↔ ecode ↔ precision ↔ step ↔ min_notional ↔ max_leverage`
-  - [ ] Refresh job + stale-data alert
+- [x] `MarketCatalog` built/persisted from `/exchange/v1/markets_details`
+  - [x] `lib/coindcx_bot/market_data/market_catalog.rb` — refresh!/lookup/all/stale?
+  - [x] Cache `pair ↔ symbol ↔ ecode ↔ price_step ↔ qty_step ↔ min_notional ↔ max_leverage` + raw `meta` JSON
+  - [x] `stale?(ttl_seconds:)` predicate (default 24h) — drives refresh decision
+  - [x] 7 specs green
+  - [ ] Wire into bot bootstrap (refresh job + stale-data `risk_event` emission)
 
 - [ ] Spot REST wrappers + smoke specs (provided by `coindcx-client`)
   - [ ] Public: ticker, markets, markets_details, trade_history, orderbook, candles
@@ -402,7 +405,7 @@ clearly present. Re-verify before relying on a tick.
 
 - [ ] Stage 0 Foundations
   - [ ] WS gateway + in-process bus verified on public channels
-  - [ ] MarketCatalog built
+  - [x] MarketCatalog built (refresh + lookup + stale?)
   - [ ] HMAC signer smoke-tested (via `coindcx-client`)
   - [x] Futures endpoint YAML captured + versioned
 
