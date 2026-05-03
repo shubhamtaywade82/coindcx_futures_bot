@@ -19,12 +19,13 @@ clearly present. Re-verify before relying on a tick.
 
 ### A1. NOW (Critical Path)
 
-- [ ] PR-01 Foundation tooling baseline
+- [x] PR-01 Foundation tooling baseline
   - [x] Ruby version pin (`Gemfile` `>= 3.3.4, < 3.4`)
-  - [ ] RuboCop config + `bundle exec rubocop` clean baseline
+  - [x] RuboCop config + `bundle exec rubocop` clean baseline (via `.rubocop_todo.yml`)
   - [x] RSpec wired (`spec/`)
-  - [ ] CI script (`bin/ci` or rake task) running rubocop + rspec
-  - [ ] Sanity spec passes from clean checkout
+  - [x] CI script (`bin/ci` + `rake ci`) running rubocop + rspec
+  - [x] GitHub Actions workflow (`.github/workflows/ci.yml`)
+  - [ ] Sanity spec passes from clean checkout — BLOCKED: 35 pre-existing failures (header_panel, regime_strip_panel). Track separately.
 
 - [ ] PR-02 Config and logging core
   - [x] `lib/coindcx_bot/config.rb` schema + ENV via dotenv

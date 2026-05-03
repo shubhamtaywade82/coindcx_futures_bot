@@ -1,0 +1,87 @@
+inherit_from: .rubocop_todo.yml
+
+plugins:
+  - rubocop-performance
+  - rubocop-rake
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 3.3
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - 'bin/{bundle,rails,rake,setup,update}'
+    - 'tmp/**/*'
+    - 'data/**/*'
+    - 'docs/**/*'
+    - 'vendor/**/*'
+    - 'Gemfile.lock'
+
+# Style
+Style/Documentation:
+  Enabled: false
+Style/StringLiterals:
+  EnforcedStyle: single_quotes
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: single_quotes
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always
+Style/HashSyntax:
+  EnforcedStyle: ruby19
+Style/TrailingCommaInArrayLiteral:
+  EnforcedStyleForMultiline: consistent_comma
+Style/TrailingCommaInHashLiteral:
+  EnforcedStyleForMultiline: consistent_comma
+
+# Layout
+Layout/LineLength:
+  Max: 140
+  AllowedPatterns: ['\A\s*#'] # comments / URLs
+
+# Metrics — trading code is naturally complex; relax but keep signal
+Metrics/MethodLength:
+  Max: 30
+Metrics/ClassLength:
+  Max: 400
+Metrics/ModuleLength:
+  Max: 400
+Metrics/BlockLength:
+  Max: 50
+  Exclude:
+    - 'spec/**/*'
+    - 'Rakefile'
+    - 'config/**/*'
+Metrics/AbcSize:
+  Max: 40
+Metrics/CyclomaticComplexity:
+  Max: 12
+Metrics/PerceivedComplexity:
+  Max: 12
+Metrics/ParameterLists:
+  Max: 6
+  CountKeywordArgs: false
+
+# Naming
+Naming/AccessorMethodName:
+  Enabled: false
+Naming/MethodParameterName:
+  AllowedNames: [_, io, id, x, y, n, k, v, fx, c1, c2, c3]
+
+# RSpec
+RSpec/ExampleLength:
+  Max: 20
+RSpec/MultipleExpectations:
+  Max: 5
+RSpec/NestedGroups:
+  Max: 5
+RSpec/MultipleMemoizedHelpers:
+  Max: 10
+RSpec/DescribeClass:
+  Enabled: false
+RSpec/SpecFilePathFormat:
+  Enabled: false
+
+# Lint
+Lint/MissingSuper:
+  Enabled: false

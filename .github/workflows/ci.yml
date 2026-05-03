@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Checkout sibling coindcx-client
+        uses: actions/checkout@v4
+        with:
+          repository: shubhamtaywade82/coindcx-client
+          path: ../coindcx-client
+          ref: main
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3.6'
+          bundler-cache: true
+
+      - name: RuboCop
+        run: bundle exec rake rubocop
+
+      - name: RSpec
+        run: bundle exec rake spec
