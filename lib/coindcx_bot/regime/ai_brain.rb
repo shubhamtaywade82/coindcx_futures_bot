@@ -86,7 +86,6 @@ module CoindcxBot
           msg = scrub_json_string(err.to_s)
           return {
             active: false,
-            hmm_display: truncate(msg, 56),
             ai_transition_full: '',
             ai_notes_full: msg,
             status: 'PIPE:ERR'
@@ -114,17 +113,6 @@ module CoindcxBot
         trans = scrub_json_string((p[:transition_summary] || p['transition_summary']).to_s)
         notes_stripped = notes.strip
         trans_stripped = trans.strip
-        label_stripped = label.strip
-        hmm_line =
-          if !notes_stripped.empty?
-            notes_stripped
-          elsif !trans_stripped.empty?
-            trans_stripped
-          elsif !label_stripped.empty?
-            label_stripped
-          else
-            '—'
-          end
 
         {
           active: true,
@@ -135,7 +123,6 @@ module CoindcxBot
           confirmed: coerce_bool(p[:confirmed] || p['confirmed']),
           vol_rank_display: truncate(vol_disp, 14),
           transition_display: truncate(trans, 40),
-          hmm_display: truncate("AI: #{hmm_line}", 52),
           ai_transition_full: trans_stripped,
           ai_notes_full: notes_stripped,
           status: 'PIPE:RUN'

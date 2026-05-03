@@ -270,3 +270,15 @@ alerts:
 #   COINDCX_TELEGRAM_BOT_TOKEN  COINDCX_TELEGRAM_CHAT_ID
 # Optional second chat: COINDCX_TELEGRAM_OPS_CHAT_ID, COINDCX_TELEGRAM_OPS_BOT_TOKEN (if another bot),
 #   COINDCX_TELEGRAM_OPS_TYPES=comma,separated,event_types (default: open_failed,smc_setup_invalidated)
+
+orderflow:
+  enabled: true
+  ws_depth: 10                       # 10 | 20 | 50 — CoinDCX L2 depth levels per side
+  imbalance_depth: 5                 # top-N levels used for bid/ask volume imbalance
+  imbalance_spike_threshold: 0.25    # |imbalance| > this → :bullish / :bearish bias
+  wall_multiplier: 3.0               # level size > (mean * multiplier) → wall
+  spoof_threshold: 10000.0           # minimum size (base asset) for spoof candidate
+  spoof_max_dwell_seconds: 60.0      # candidate expires as "likely executed" after this
+  absorption_window: 20              # snapshots retained for mid-price stickiness check
+  absorption_price_range_pct: 0.05   # mid must stay within X % over the window
+  absorption_volume_threshold: 5000.0 # cumulative removed-size threshold to flag absorption

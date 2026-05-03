@@ -218,21 +218,13 @@ module CoindcxBot
         end
 
         def secondary_ai_cell(r)
-          cell = ai_column_fragment(r[:hmm_display])
-          return cell if r[:ai_notes_full].to_s.strip.empty?
-          return cell if cell == 'AI:—'
-
-          'AI:↓'
-        end
-
-        def ai_column_fragment(hmm_display)
-          t = hmm_display.to_s.strip
-          return 'AI:—' if t.empty?
-          return 'AI:—' if t.match?(/\AAI:?\z/i)
-
-          return t if t.match?(/\AAI[ :]/)
-
-          "AI:#{t}"
+          notes = r[:ai_notes_full].to_s.strip
+          trans = r[:ai_transition_full].to_s.strip
+          if notes.empty? && trans.empty?
+            'AI:—'
+          else
+            'AI:↓'
+          end
         end
 
         def ai_detail_wrap_lines(r, text_w)

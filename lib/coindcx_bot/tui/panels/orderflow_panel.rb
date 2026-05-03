@@ -43,19 +43,19 @@ module CoindcxBot
 
             buf = StringIO.new
             buf << @cursor.save
-            buf << move(@row) << bold('ORDERFLOW ENGINE') << muted("  #{'─' * [w - 22, 8].max}")
+            buf << move(@row) << bold('ORDERFLOW ENGINE') << muted("  #{'─' * [w - 22, 8].max}") << "\e[K"
 
             # Imbalance Gauge
-            buf << move(@row + 1) << "Imbalance: #{format_imbalance(imb)}"
+            buf << move(@row + 1) << "Imbalance: #{format_imbalance(imb)}\e[K"
 
             # Walls
-            buf << move(@row + 2) << "Walls:     #{format_walls(walls)}"
+            buf << move(@row + 2) << "Walls:     #{format_walls(walls)}\e[K"
 
             # Event Log
-            buf << move(@row + 3) << muted('Recent Events:')
+            buf << move(@row + 3) << muted('Recent Events:') << "\e[K"
             @log.first(MAX_LOG_SIZE).each_with_index do |ev, idx|
               next unless ev[:pair] == pair
-              buf << move(@row + 4 + idx) << "  #{format_event(ev)}"
+              buf << move(@row + 4 + idx) << "  #{format_event(ev)}\e[K"
             end
 
             buf << @cursor.restore
