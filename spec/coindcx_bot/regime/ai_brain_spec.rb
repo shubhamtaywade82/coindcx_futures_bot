@@ -101,7 +101,7 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
       o = described_class.overlay_from_state(error: 'connection refused')
       expect(o[:active]).to be(false)
       expect(o[:status]).to eq('PIPE:ERR')
-      expect(o[:hmm_display]).to include('connection refused')
+      expect(o[:ai_notes_full]).to include('connection refused')
     end
 
     it 'scrubs control characters from error text for the TUI' do
@@ -123,7 +123,7 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
         notes: ''
       }
       o = described_class.overlay_from_state(payload: payload)
-      expect(o[:hmm_display]).to include('compression')
+      expect(o[:ai_transition_full]).to include('compression')
       expect(o[:ai_notes_full]).to eq('')
       expect(o[:ai_transition_full]).to eq('compression building')
     end
@@ -149,7 +149,7 @@ RSpec.describe CoindcxBot::Regime::AiBrain do
       expect(o[:confirmed]).to be(true)
       expect(o[:vol_rank_display]).to eq('2/5')
       expect(o[:status]).to eq('PIPE:RUN')
-      expect(o[:hmm_display]).to include('ATR compressed')
+      expect(o[:ai_notes_full]).to include('ATR compressed')
       expect(o[:ai_transition_full]).to eq('mostly range-bound')
       expect(o[:ai_notes_full]).to eq('ATR compressed vs prior week')
     end

@@ -25,7 +25,11 @@ clearly present. Re-verify before relying on a tick.
   - [x] RSpec wired (`spec/`)
   - [x] CI script (`bin/ci` + `rake ci`) running rubocop + rspec
   - [x] GitHub Actions workflow (`.github/workflows/ci.yml`)
-  - [ ] Sanity spec passes from clean checkout — BLOCKED: 35 pre-existing failures (header_panel, regime_strip_panel). Track separately.
+  - [ ] Sanity spec passes from clean checkout — 12/35 still failing
+    - [x] Mechanical Class A fixes applied (23 fixed). 578 examples → 12 failures.
+    - [ ] header_panel content drift (9 specs) — production no longer emits literals `MODE:`, `ENGINE: RUN`, `LAT`, `SCALP`, `EXE·OFF`, `REGIME·ON`, `LEV:`, `WALLET USDT:`, `KILL: ON`. Needs content rewrite (Class B).
+    - [ ] header_panel `row_count` (2 specs) — production hardcodes 6, specs want 4/5 conditional. Either bug or stale spec — needs decision.
+    - [ ] live_account_mirror (1 spec) — `available_balance + locked` synthesis contradicts spec contract. Needs decision.
 
 - [ ] PR-02 Config and logging core
   - [x] `lib/coindcx_bot/config.rb` schema + ENV via dotenv

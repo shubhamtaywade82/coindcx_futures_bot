@@ -53,6 +53,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
     allow(engine).to receive(:ws_feed_stale?).and_return(false)
     allow(engine).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
     allow(engine).to receive(:engine_loop_crashed?).and_return(false)
+    allow(engine).to receive(:tui_focus_pair=)
   end
 
   describe '#render' do

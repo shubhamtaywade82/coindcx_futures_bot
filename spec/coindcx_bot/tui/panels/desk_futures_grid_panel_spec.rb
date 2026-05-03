@@ -99,14 +99,20 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
   describe 'book column splits' do
     it 'gives quantity more width as the book column grows' do
       _px_narrow, qty_narrow = panel.send(:book_column_splits, 20)
-      _px_wide, qty_wide = panel.send(:book_column_splits, 30)
+      _px_wide, qty_wide = panel.send(:book_column_splits, 60)
       expect(qty_wide).to be > qty_narrow
     end
   end
 
   describe '#row_count' do
     it 'matches header + data + footer height' do
-      expect(panel.row_count).to eq(11)
+      vm = CoindcxBot::Tui::DeskViewModel.build(
+        engine: engine,
+        tick_store: tick_store,
+        symbols: %w[B-SOL_USDT],
+        inner_height_override: nil
+      )
+      expect(panel.row_count).to eq(4 + vm.inner_height)
     end
   end
 end

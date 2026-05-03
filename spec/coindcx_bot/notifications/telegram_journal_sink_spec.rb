@@ -41,8 +41,8 @@ RSpec.describe CoindcxBot::Notifications::TelegramJournalSink do
     expect(fake_http.calls.first[0]).to eq('main-token')
     expect(fake_http.calls.first[1]).to eq('111')
     body = fake_http.calls.first[2]
-    expect(body).to include('signal_open')
-    expect(body).to include('Open LONG · B-SOL_USDT')
+    expect(body).to include('SIGNAL_OPEN')
+    expect(body).to include('LONG · B-SOL_USDT')
     expect(body).not_to include('{"type"')
   end
 

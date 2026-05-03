@@ -63,7 +63,7 @@ RSpec.describe CoindcxBot::SmcSetup::TickEvaluator do
           entry_zone: { min: 90, max: 102 },
           confirmation_required: []
         },
-        execution: { sl: 30.0 }
+        execution: { sl: 30.0, targets: [110.0] }
       }
     )
     store.reload!
@@ -98,7 +98,7 @@ RSpec.describe CoindcxBot::SmcSetup::TickEvaluator do
           no_trade_zone: { min: 94.5, max: 95.5 },
           confirmation_required: []
         },
-        execution: { sl: 30.0 }
+        execution: { sl: 30.0, targets: [110.0] }
       }
     )
     store.reload!
@@ -146,7 +146,7 @@ RSpec.describe CoindcxBot::SmcSetup::TickEvaluator do
           entry_zone: { min: 90, max: 102 },
           confirmation_required: []
         },
-        execution: { sl: 30.0 }
+        execution: { sl: 30.0, targets: [110.0] }
       }
     )
     store.reload!
@@ -190,7 +190,7 @@ RSpec.describe CoindcxBot::SmcSetup::TickEvaluator do
           entry_zone: { min: 90, max: 102 },
           confirmation_required: []
         },
-        execution: { sl: 30.0 }
+        execution: { sl: 30.0, targets: [110.0] }
       }
     )
     journal.smc_setup_update_state_and_eval(setup_id: 'already', state: CoindcxBot::SmcSetup::States::ARMED_ENTRY)
