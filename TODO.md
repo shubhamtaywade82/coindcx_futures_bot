@@ -42,9 +42,11 @@ clearly present. Re-verify before relying on a tick.
 - [ ] PR-03 Persistence bootstrap
   - [x] SQLite store (`lib/coindcx_bot/persistence/paper_store.rb`)
   - [x] Journal (`lib/coindcx_bot/persistence/journal.rb`)
-  - [ ] Migration runner (idempotent schema bootstrap)
-  - [ ] Schema covers: signals, trades, positions, risk_events, orderbook_snapshots
-  - [ ] End-to-end migration smoke (`bin/console` boot)
+  - [x] Versioned migration runner (`lib/coindcx_bot/persistence/migration_runner.rb`) — idempotent, transactional, `schema_migrations` tracking
+  - [x] Canonical schema migration (`migrations/canonical_tables.rb`): markets, candles, signals, trades, risk_events, order_book_snapshots, client_event_dedup
+  - [x] 6 specs green (idempotency, unique candles, composite PK on dedup)
+  - [ ] Wire `Migrations.runner_for(...).run!` into bot bootstrap
+  - [ ] End-to-end migration smoke via `bin/console`
 
 - [ ] PR-04 Signal plumbing
   - [ ] Audit module (immutable signal log)
