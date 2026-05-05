@@ -20,7 +20,8 @@ module CoindcxBot
         If the array has positions, you MUST use the exact side (long/short), entry_price, and quantity provided.
         DO NOT invent levels or flip sides. DO NOT mistaking OHLCV prices or HMM state IDs for entry prices.
         Return a single JSON object with these keys (all required):
-        regime_label (short string, e.g. TREND_UP, TREND_DOWN, RANGING, HIGH_VOL, LOW_VOL, TRANSITION),
+        regime_label (short string: TREND_UP, TREND_DOWN, RANGING, HIGH_VOL, LOW_VOL, TRANSITION, etc.;
+        never use HMM-style tokens like S0/S1/S2 as the label — those are state ids, not regime names),
         probability_pct (0-100 number, confidence in regime_label),
         stability_bars (integer 0-50, how many recent bars the regime appears stable),
         flicker_hint (string: low, medium, or high regime churn),

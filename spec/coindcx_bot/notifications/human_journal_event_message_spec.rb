@@ -168,9 +168,31 @@ RSpec.describe CoindcxBot::Notifications::HumanJournalEventMessage do
         prev_label: 'range',
         regime_label: 'trend',
         prev_probability_pct: 40.0,
-        probability_pct: 55.0
+        probability_pct: 55.0,
+        transition_summary: 'shift to directional',
+        notes: 'Breakout follow-through',
+        confirmed: true,
+        flicker_hint: 'low',
+        vol_rank: 2,
+        vol_rank_total: 5
       )
-      expect(s).to include('🌍 Regime AI Transition')
+      expect(s).to include('🧠 ANALYSIS_REGIME_AI_UPDATE')
+      expect(s).to include('Regime label changed (LLM)')
+      expect(s).to include('Previous alert: range @ 40.0%')
+      expect(s).to include('Story: shift to directional')
+      expect(s).to include('Why: Breakout follow-through')
+      expect(s).to include('Vol rank in AI view: 2/5')
+    end
+
+    it 'warns when regime_label looks like an HMM state id' do
+      s = described_class.format(
+        'analysis_regime_ai_update',
+        prev_label: '',
+        regime_label: 'S0',
+        probability_pct: '99.98'
+      )
+      expect(s).to include('S0/S1')
+      expect(s).to include('quant model state ids')
     end
 
     it 'formats analysis_liquidation_proximity' do

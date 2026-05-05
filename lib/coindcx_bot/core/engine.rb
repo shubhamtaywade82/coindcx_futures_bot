@@ -1897,6 +1897,10 @@ module CoindcxBot
         return unless significant
 
         trans = (new_h[:transition_summary]).to_s
+        notes = (new_h[:notes]).to_s
+        flick = (new_h[:flicker_hint]).to_s
+        vr = new_h[:vol_rank]
+        vrt = new_h[:vol_rank_total]
         @journal.log_event(
           'analysis_regime_ai_update',
           regime_label: new_l,
@@ -1904,6 +1908,11 @@ module CoindcxBot
           probability_pct: new_p.to_s,
           prev_probability_pct: old_p.to_s,
           transition_summary: trans,
+          notes: notes,
+          confirmed: new_h[:confirmed],
+          flicker_hint: flick,
+          vol_rank: vr,
+          vol_rank_total: vrt,
           dedupe_key: 'regime_ai_global'
         )
       end
