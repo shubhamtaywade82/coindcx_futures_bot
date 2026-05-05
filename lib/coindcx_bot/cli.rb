@@ -174,10 +174,22 @@ module CoindcxBot
 
       brain = SmcSetup::PlannerBrain.new(config: config, logger: logger)
       result = brain.plan!(ctx)
-      unless result.ok && result.payload
+      unless result.ok
         warn("Planner failed: #{result.error_message}")
         journal.close
         return false
+      end
+
+      if result.payload.nil?
+        reason = result.no_trade_reason.to_s.strip
+        if reason.empty?
+          puts 'OK — planner ran; no_trade (nothing written to journal).'
+        else
+          puts "OK — planner ran; no_trade: #{reason}"
+        end
+        puts 'Run: bin/bot smc-setup status'
+        journal.close
+        return true
       end
 
       store.upsert_from_hash!(result.payload, reset_state: config.smc_setup_planner_reset_state?)

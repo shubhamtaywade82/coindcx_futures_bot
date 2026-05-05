@@ -3,6 +3,7 @@
 require 'tty-cursor'
 require 'tty-screen'
 require 'stringio'
+require_relative '../term_width'
 require_relative '../theme'
 require_relative '../ansi_string'
 
@@ -37,26 +38,43 @@ module CoindcxBot
           return unless pair
 
           @mutex.synchronize do
-            imb = @imbalance[pair] || { value: 0.0, bias: :neutral }
+            imb   = @imbalance[pair] || { value: 0.0, bias: :neutral }
             walls = @walls[pair] || { bids: [], asks: [] }
-            w = [TTY::Screen.width || 80, 40].max
+            w     = [TermWidth.columns, 40].max
+
+            # Filter log events for the focused pair before indexing
+            pair_log = @log.select { |ev| ev[:pair] == pair }.first(MAX_LOG_SIZE)
 
             buf = StringIO.new
             buf << @cursor.save
-            buf << move(@row) << bold('ORDERFLOW ENGINE') << muted("  #{'─' * [w - 22, 8].max}") << "\e[K"
 
-            # Imbalance Gauge
-            buf << move(@row + 1) << "Imbalance: #{format_imbalance(imb)}\e[K"
+            # ── Top border with pill title ──────────────────────────────
+            title = ui_header(' ORDERFLOW ENGINE ')
+            rem = w - 2 - visible_len(title)
+            l1 = (rem / 2).clamp(1, w)
+            l2 = (rem - l1).clamp(1, w)
+            buf << move(@row) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
 
-            # Walls
-            buf << move(@row + 2) << "Walls:     #{format_walls(walls)}\e[K"
+            # ── Imbalance row ───────────────────────────────────────────
+            imb_content = "Imbalance: #{format_imbalance(imb)}"
+            buf << move(@row + 1) << ui_border('│ ') << pad_visible(imb_content, w - 4) << ui_border(' │')
 
-            # Event Log
-            buf << move(@row + 3) << muted('Recent Events:') << "\e[K"
-            @log.first(MAX_LOG_SIZE).each_with_index do |ev, idx|
-              next unless ev[:pair] == pair
-              buf << move(@row + 4 + idx) << "  #{format_event(ev)}\e[K"
+            # ── Walls row ───────────────────────────────────────────────
+            walls_content = "Walls:     #{format_walls(walls)}"
+            buf << move(@row + 2) << ui_border('│ ') << pad_visible(walls_content, w - 4) << ui_border(' │')
+
+            # ── Event log label row ─────────────────────────────────────
+            buf << move(@row + 3) << ui_border('│ ') << pad_visible(muted('Recent Events:'), w - 4) << ui_border(' │')
+
+            # ── Event log rows (pre-filtered, no gaps) ──────────────────
+            MAX_LOG_SIZE.times do |i|
+              ev = pair_log[i]
+              content = ev ? "  #{format_event(ev)}" : muted('·')
+              buf << move(@row + 4 + i) << ui_border('│ ') << pad_visible(content, w - 4) << ui_border(' │')
             end
+
+            # ── Bottom border ───────────────────────────────────────────
+            buf << move(@row + 4 + MAX_LOG_SIZE) << ui_border("└#{'─' * (w - 2)}┘")
 
             buf << @cursor.restore
             @output.print buf.string
@@ -65,7 +83,8 @@ module CoindcxBot
         end
 
         def row_count
-          4 + MAX_LOG_SIZE
+          # top border + imbalance + walls + events label + MAX_LOG_SIZE event rows + bottom border
+          1 + 1 + 1 + 1 + MAX_LOG_SIZE + 1
         end
 
         private
@@ -124,7 +143,7 @@ module CoindcxBot
             gauge << (i == pos ? '█' : '─')
           end
 
-          "#{color_func.call(val.to_s.ljust(6))} [#{gauge}] #{imb[:bias].to_s.upcase}"
+          "#{color_func.call(format('%+.4f', val).ljust(8))} [#{muted(gauge)}] #{color_func.call(imb[:bias].to_s.upcase)}"
         end
 
         def format_walls(walls)
@@ -139,7 +158,7 @@ module CoindcxBot
           time = ev[:ts].strftime('%H:%M:%S')
           col =
             case ev[:type]
-            when :orderflow_absorption then method(:warning)
+            when :orderflow_absorption     then method(:warning)
             when :orderflow_spoof_activity then method(:loss)
             else method(:muted)
             end

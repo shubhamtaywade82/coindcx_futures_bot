@@ -25,54 +25,59 @@ module CoindcxBot
           @cursor = TTY::Cursor
         end
 
-      def render
-        snap = @engine.snapshot
-        vm = desk_vm(snap)
-        w = term_width
-        strip = show_live_futures_account_strip?(snap)
+        def render
+          snap = @engine.snapshot
+          vm = desk_vm(snap)
+          w = term_width
+          strip = show_live_futures_account_strip?(snap)
 
-        buf = StringIO.new
-        buf << @cursor.save
-        r = @row
+          buf = StringIO.new
+          buf << @cursor.save
+          r = @row
 
-        # Top border with title
-        title = ui_header(" SYSTEM STATUS ")
-        rem = w - 2 - visible_len(title)
-        l1 = (rem / 2).clamp(1, w)
-        l2 = (rem - l1).clamp(1, w)
-        buf << move(r) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
-        r += 1
-
-        # System row
-        buf << move(r) << ui_border("│ ") << pad_visible(line_mode_engine_kill_ws_lat_feed(snap, w - 4), w - 4) << ui_border(" │")
-        r += 1
-
-        # Set engine focus for regime AI strip overlay context
-        @engine.tui_focus_pair = @focus_pair_proc&.call
-
-        # Account row — only when live futures strip is active. No placeholder
-        # row when absent so the panel can reflow cleanly.
-        if strip
-          buf << move(r) << ui_border("│ ") << pad_visible(line_live_equity_wallet_unreal(snap, w - 4), w - 4) << ui_border(" │")
+          # Top border with title
+          title = ui_header(" SYSTEM STATUS ")
+          rem = w - 2 - visible_len(title)
+          l1 = (rem / 2).clamp(1, w)
+          l2 = (rem - l1).clamp(1, w)
+          buf << move(r) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
           r += 1
+
+          # System row
+          buf << move(r) << ui_border('│ ') << pad_visible(line_mode_engine_kill_ws_lat_feed(snap, w - 4), w - 4) << ui_border(' │')
+          r += 1
+
+          # Set engine focus for regime AI strip overlay context
+          @engine.tui_focus_pair = @focus_pair_proc&.call
+
+          # Account row — only when live futures strip is active. No placeholder
+          # row when absent so the panel can reflow cleanly.
+          if strip
+            buf << move(r) << ui_border('│ ') << pad_visible(line_live_equity_wallet_unreal(snap, w - 4), w - 4) << ui_border(' │')
+            r += 1
+          end
+
+          # Balance & Risk row
+          buf << move(r) << ui_border('│ ') << pad_visible(line_balance_net_real_unreal_dd_risk(snap, vm, w - 4), w - 4) << ui_border(' │')
+          r += 1
+
+          # Stats row
+          buf << move(r) << ui_border('│ ') << pad_visible(line_pos_ord_err_last(snap, vm, w - 4), w - 4) << ui_border(' │')
+          r += 1
+
+          # Bottom border
+          buf << move(r) << ui_border("└#{'─' * (w - 2)}┘")
+          buf << @cursor.restore
+
+          @output.print buf.string
+          @output.flush
         end
 
-        # Balance & Risk row
-        buf << move(r) << ui_border("│ ") << pad_visible(line_balance_net_real_unreal_dd_risk(snap, vm, w - 4), w - 4) << ui_border(" │")
-        r += 1
-
-        # Stats row (last drawn row; bottom border merges with adjacent panel above next).
-        buf << move(r) << ui_border("│ ") << pad_visible(line_pos_ord_err_last(snap, vm, w - 4), w - 4) << ui_border(" │")
-        buf << @cursor.restore
-
-        @output.print buf.string
-        @output.flush
-      end
-
-      def row_count
-        snap = @engine.snapshot
-        show_live_futures_account_strip?(snap) ? 5 : 4
-      end
+        def row_count
+          snap = @engine.snapshot
+          # top border + system row + (optional EQ row) + balance row + stats row + bottom border
+          show_live_futures_account_strip?(snap) ? 6 : 5
+        end
 
         private
 

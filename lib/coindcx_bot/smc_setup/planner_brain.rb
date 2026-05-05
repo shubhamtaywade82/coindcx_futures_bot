@@ -55,7 +55,7 @@ module CoindcxBot
         If you cannot produce a valid setup within that band, return a "no_trade": true JSON.
       PROMPT
 
-      Result = Struct.new(:ok, :payload, :error_message, keyword_init: true)
+      Result = Struct.new(:ok, :payload, :error_message, :no_trade_reason, keyword_init: true)
 
       def initialize(config:, logger: nil)
         @config = config
@@ -90,15 +90,16 @@ module CoindcxBot
         )
 
         if is_no_trade
-          @logger&.info("[smc_setup:planner] planner returned no_trade: #{h[:reason] || h['reason']}")
-          return Result.new(ok: true, payload: nil, error_message: nil)
+          reason = (h[:reason] || h['reason']).to_s
+          @logger&.info("[smc_setup:planner] planner returned no_trade: #{reason}")
+          return Result.new(ok: true, payload: nil, error_message: nil, no_trade_reason: reason)
         end
 
         h = Validator.validate!(h)
-        Result.new(ok: true, payload: h, error_message: nil)
+        Result.new(ok: true, payload: h, error_message: nil, no_trade_reason: nil)
       rescue StandardError => e
         @logger&.warn("[smc_setup:planner] #{e.class}: #{e.message}")
-        Result.new(ok: false, payload: nil, error_message: e.message.to_s)
+        Result.new(ok: false, payload: nil, error_message: e.message.to_s, no_trade_reason: nil)
       end
 
       private
