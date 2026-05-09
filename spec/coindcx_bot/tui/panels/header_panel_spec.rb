@@ -237,12 +237,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         expect(rendered).not_to include('BAL:')
       end
 
-      it 'shows NET as exchange REAL+UNREAL USDT at inr_per_usdt (not journal)' do
+      it 'shows NET as exchange unrealized USDT at inr_per_usdt (not journal)' do
         panel.render
-        # (0 + (-41.82)) * 83 = -3471.06
+        # (-41.82) * 83 = -3471.06
         expect(output.string).to include('3471.06')
-        expect(output.string).to include('REAL USDT:')
-        expect(output.string).to include('0.00')
+        expect(output.string).to include('UNREAL USDT:')
+        expect(output.string).to include('41.82')
       end
     end
 
@@ -334,13 +334,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         )
       end
 
-      it 'renders USDT realized/unrealized, BAL from capital plus (realized+unrealized) at inr_per_usdt, DD and risk' do
+      it 'renders USDT unrealized, BAL from capital plus (realized+unrealized) at inr_per_usdt, DD and risk' do
         panel.render
         rendered = output.string
 
-        expect(rendered).to include('REAL USDT:')
-        expect(rendered).to include('15.50')
         expect(rendered).to include('UNREAL USDT:')
+        expect(rendered).to include('3.20')
         # 100_000 + (15.5 + 3.2) * 83 = 101_552.10
         expect(rendered).to include('101552.10')
         expect(rendered).to include('DD:')
@@ -350,11 +349,11 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
   end
 
   describe '#row_count' do
-    it 'returns 4 without live futures account strip' do
-      expect(panel.row_count).to eq(4)
+    it 'returns 5 without live futures account strip' do
+      expect(panel.row_count).to eq(5)
     end
 
-    it 'returns 5 when live futures EQ/WAL/UR strip is active' do
+    it 'returns 6 when live futures EQ/WAL/UR strip is active' do
       snap = CoindcxBot::Core::Engine::Snapshot.new(
         pairs: %w[B-ETH_USDT],
         ticks: {},
@@ -389,7 +388,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       allow(eng).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
       allow(eng).to receive(:ws_feed_stale?).and_return(false)
       allow(eng).to receive(:engine_loop_crashed?).and_return(false)
-      expect(described_class.new(engine: eng, origin_row: 0, output: output).row_count).to eq(5)
+      expect(described_class.new(engine: eng, origin_row: 0, output: output).row_count).to eq(6)
     end
   end
 end

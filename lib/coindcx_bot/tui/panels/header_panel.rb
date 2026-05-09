@@ -147,7 +147,6 @@ module CoindcxBot
               pm = snap.paper_metrics
               funding_s = pm[:total_funding_fees] ? "#{bold('FUND: ')}#{fmt_num(pm[:total_funding_fees])}" : nil
               parts = [
-                "#{bold('REAL USDT: ')}#{fmt_num(pm[:total_realized_pnl])}",
                 "#{bold('UNREAL USDT: ')}#{colored_num(pm[:unrealized_pnl])}",
                 funding_s,
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
@@ -155,17 +154,14 @@ module CoindcxBot
               ].compact.join(muted(' │ '))
             elsif live_tui_metrics?(snap)
               m = snap.live_tui_metrics
-              real = m[:realized_usdt] || BigDecimal('0')
               unreal = m[:unrealized_usdt] || BigDecimal('0')
               [
-                "#{bold('REAL USDT: ')}#{fmt_num(real)}",
                 "#{bold('UNREAL USDT: ')}#{colored_num(unreal)}",
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
               ].join(muted(' │ '))
             else
               [
-                muted('REAL USDT: —'),
                 muted('UNREAL USDT: —'),
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
@@ -174,7 +170,7 @@ module CoindcxBot
           join_compact(w, [bal, net, rest].compact)
         end
 
-        # Desk-wide daily PnL: live mirror uses **exchange REAL+UNREAL (USDT) × FX** (+DeskViewModel#daily_pnl_inr_for_desk+).
+        # Desk-wide daily PnL: live mirror uses **exchange unrealized USDT × FX** with wallet-backed equity (+DeskViewModel#daily_pnl_inr_for_desk+).
         def net_pnl_inr_for_header(_snap, vm)
           vm.daily_pnl_inr_for_desk
         end
