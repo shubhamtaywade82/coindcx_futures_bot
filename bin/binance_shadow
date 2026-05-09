@@ -1,0 +1,101 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Phase 1 Binance Futures depth shadow runner.
+#
+# Connects to wss://fstream.binance.com for a single Binance futures symbol
+# (default BTCUSDT), reconstructs the L2 book locally via REST snapshot +
+# diff merge, and prints the top-5 levels every 5 seconds.
+#
+# Strictly read-only: no Orderflow::Engine wiring, no event-bus emission,
+# no order placement. Use this to verify the reconstruction stays in sync
+# under live load before enabling Phase 2 (engine ingestion).
+#
+# Usage:
+#   bin/binance_shadow                 # BTCUSDT
+#   bin/binance_shadow ETHUSDT         # any Binance USDⓈ-M futures symbol
+#   PRINT_INTERVAL_SECONDS=2 bin/binance_shadow
+
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+
+require 'bundler/setup'
+require 'logger'
+require 'coindcx_bot'
+
+module BinanceShadowRunner
+  module_function
+
+  DEFAULT_SYMBOL = 'BTCUSDT'
+  DEFAULT_PRINT_INTERVAL_SECONDS = 5
+  DEFAULT_DEPTH_LEVELS = 5
+
+  def run(argv)
+    symbol = (argv.first || DEFAULT_SYMBOL).upcase
+    interval = Integer(ENV.fetch('PRINT_INTERVAL_SECONDS', DEFAULT_PRINT_INTERVAL_SECONDS))
+    depth = Integer(ENV.fetch('TOP_LEVELS', DEFAULT_DEPTH_LEVELS))
+
+    logger = build_logger
+    book = CoindcxBot::Exchanges::Binance::LocalBook.new
+    rest = CoindcxBot::Exchanges::Binance::FuturesRest.new
+    ws = CoindcxBot::Exchanges::Binance::DepthWs.new(symbol: symbol, logger: logger)
+    manager = CoindcxBot::Exchanges::Binance::ResyncManager.new(
+      symbol: symbol,
+      rest: rest,
+      depth_ws: ws,
+      book: book,
+      logger: logger
+    )
+
+    install_signal_traps(manager, logger)
+    log_ws_lifecycle(socket: ws, logger: logger)
+
+    logger.info("[binance.shadow] starting #{symbol} → #{ws.url}")
+    manager.start
+    logger.info("[binance.shadow] aligned at last_update_id=#{book.last_update_id}; entering live print loop")
+
+    print_loop(symbol: symbol, book: book, interval: interval, depth: depth, logger: logger)
+  end
+
+  def build_logger
+    Logger.new($stdout).tap do |l|
+      l.level = ENV['DEBUG'] ? Logger::DEBUG : Logger::INFO
+      l.formatter = ->(_sev, _ts, _prog, msg) { "#{msg}\n" }
+    end
+  end
+
+  def install_signal_traps(manager, logger)
+    %w[INT TERM].each do |sig|
+      Signal.trap(sig) do
+        logger.info("[binance.shadow] received SIG#{sig} — shutting down")
+        manager.stop
+        exit(0)
+      end
+    end
+  end
+
+  def log_ws_lifecycle(socket:, logger:)
+    socket.on_open  { logger.info('[binance.shadow] ws connected') }
+    socket.on_close { |info| logger.warn("[binance.shadow] ws closed: #{info.inspect}") }
+    socket.on_error { |error| logger.error("[binance.shadow] ws error: #{error.message}") }
+  end
+
+  def print_loop(symbol:, book:, interval:, depth:, logger:)
+    loop do
+      sleep(interval)
+      next if book.empty?
+
+      logger.info(format_book(symbol: symbol, book: book, depth: depth))
+    end
+  end
+
+  def format_book(symbol:, book:, depth:)
+    rows = []
+    rows << "[binance.shadow] #{symbol} last_update_id=#{book.last_update_id} ts=#{Time.now.utc.iso8601(3)}"
+    book.top_asks(depth).reverse_each { |(price, qty)| rows << "  ASK #{price.to_s('F').rjust(14)}  #{qty.to_s('F')}" }
+    rows << '  ----'
+    book.top_bids(depth).each { |(price, qty)| rows << "  BID #{price.to_s('F').rjust(14)}  #{qty.to_s('F')}" }
+    rows.join("\n")
+  end
+end
+
+BinanceShadowRunner.run(ARGV) if $PROGRAM_NAME == __FILE__

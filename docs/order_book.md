@@ -2747,3 +2747,121 @@ That gives you:
 * while still trading on CoinDCX.
 
 Completely replacing CoinDCX WS with Binance WS is architecturally wrong for execution consistency.
+
+---
+
+# Implementation Plan — Binance WS Market Data (this repo)
+
+Hybrid model. Binance = market intelligence. CoinDCX = execution + reconciliation. No replacement of CoinDCX WS.
+
+Existing scaffolding to reuse:
+
+- `lib/coindcx_bot/gateways/ws_gateway.rb` — CoinDCX socket, normalizes ticks/trades/book, calls back into Engine.
+- `lib/coindcx_bot/orderflow/engine.rb` — wall/imbalance/spoof/sweep detectors, emits domain events on bus.
+- `lib/coindcx_bot/orderflow/order_book_store.rb` — current snapshot-replacement store (CoinDCX style).
+- `lib/coindcx_bot/orderflow/recorder.rb` / `replayer.rb` — already capture book updates for replay.
+- `lib/coindcx_bot/market_data/market_catalog.rb` — extend with Binance ↔ CoinDCX symbol map.
+
+## Goals
+
+1. Subscribe Binance Futures `@depth@100ms` + `@trade` + `@bookTicker` for each tracked pair.
+2. Maintain true local L2 book via REST snapshot + buffered diff merge with sequence-id validation (Binance reconstruction algo).
+3. Feed normalized events into the **same** `Orderflow::Engine` already consuming CoinDCX. Engine must not know the source.
+4. Keep CoinDCX WS for: fills, position updates, local LTP, divergence checks.
+5. Add divergence guard before any execution decision triggered by Binance signals.
+
+## Components to add
+
+```
+lib/coindcx_bot/
+  exchanges/
+    binance/
+      futures_rest.rb           # GET /fapi/v1/depth?symbol=&limit=1000 (snapshot)
+      depth_ws.rb               # wss://fstream.binance.com/stream?streams=btcusdt@depth@100ms/...
+      trade_ws.rb               # @aggTrade (preferred over @trade for futures)
+      book_ticker_ws.rb         # @bookTicker — best bid/ask + spread
+      local_book.rb             # bids/asks Map<price, qty>, last_update_id, apply_diff!
+      sequence_validator.rb     # enforces U <= lastUpdateId+1 <= u; triggers resync
+      resync_manager.rb         # buffers WS, fetches REST snap, aligns, replays
+      symbol_map.rb             # BTCUSDT <-> B-BTC_USDT
+  market_data/
+    source_router.rb            # picks intelligence source per pair (binance|coindcx fallback)
+  risk/
+    divergence_guard.rb         # mid_binance vs mid_coindcx vs configurable bps; block trade if exceeded
+```
+
+Existing `OrderBookStore` stays for CoinDCX path; Binance side uses `LocalBook` (true delta merge, not replacement). Engine consumes a unified `BookSnapshot` DTO regardless.
+
+## Reconstruction algorithm (Binance-correct)
+
+Per pair:
+
+1. Open WS to `<symbol>@depth@100ms`. Buffer all events.
+2. `GET /fapi/v1/depth?symbol=<S>&limit=1000` → `lastUpdateId = L`.
+3. Drop buffered events where `u < L`.
+4. First event applied must satisfy `U <= L+1 <= u`. If not, refetch snapshot.
+5. For each subsequent event, require `pu == previousEvent.u` (futures uses `pu` = prev final update id). If gap → resync.
+6. For each `[price, qty]`: `qty == 0` → delete; else upsert.
+7. After apply, build engine-shaped snapshot (top-N bids/asks) and call `engine.on_book_update(pair:, bids:, asks:, source: :binance, ts:)`.
+
+## Event bus contract (no source coupling)
+
+Engine already publishes domain events. Add `source` field. Strategies subscribe by topic, not exchange. Example payloads:
+
+- `liquidity.wall.detected` — `{ source, symbol, side, price, size, score }`
+- `liquidity.sweep.detected` — `{ source, symbol, side, levels_swept, notional, ts }`
+- `liquidity.absorption.detected` — `{ source, symbol, side, confidence }`
+- `book.imbalance.spike` — `{ source, symbol, ratio, depth_used }`
+
+## Divergence + latency guards (mandatory before exec)
+
+Before any CoinDCX order triggered by Binance-sourced signal:
+
+```
+mid_b   = binance_book_ticker.mid
+mid_c   = coindcx_ticker.mid
+bps     = (mid_b - mid_c).abs / mid_c * 10_000
+reject if bps > config.max_divergence_bps
+reject if (now - coindcx_ticker.ts) > config.max_lag_ms
+```
+
+Config keys under `orderflow:` in `config/bot.yml`:
+
+```
+binance:
+  enabled: true
+  base_ws: wss://fstream.binance.com
+  base_rest: https://fapi.binance.com
+  symbols: { BTCUSDT: B-BTC_USDT, ETHUSDT: B-ETH_USDT }
+  depth_levels: 1000
+  resync_max_attempts: 5
+divergence:
+  max_bps: 25
+  max_coindcx_lag_ms: 1500
+```
+
+## Gem choice
+
+Use `faye-websocket` + `eventmachine` (already transitive via `coindcx` gem) OR `async-websocket`. Simplest: keep one EM reactor in a dedicated thread, mirror CoinDCX `WsGateway` pattern. No new runtime deps if `faye-websocket` is already present — confirm in `Gemfile.lock` first.
+
+## Phased rollout
+
+1. **Phase 1 — read-only shadow.** Wire Binance depth + local book for 1 pair (BTCUSDT). Log diffs vs CoinDCX snapshot. No event emission. Verify reconstruction stable (no resync storms).
+2. **Phase 2 — engine ingestion.** Route Binance snapshots into `Orderflow::Engine` with `source: :binance`. Tag emitted events. Strategies still ignore.
+3. **Phase 3 — strategy consumption with guard.** Strategies opt-in to `source: :binance` events. `DivergenceGuard` gates execution. Compare paper PnL vs CoinDCX-only baseline.
+4. **Phase 4 — multi-symbol + trade stream.** Add `@aggTrade` for absorption/sweep detectors. Add `@bookTicker` for fast mid.
+5. **Phase 5 — recorder/replayer parity.** Extend `Orderflow::Recorder` to tag source; replayer can drive engine with Binance tapes for backtest fidelity.
+
+## Risks
+
+- Binance futures uses `pu` field (prev update id) — easy to mistake for spot's `U/u` only rule. Get this right or book corrupts silently.
+- Symbol coverage gap: not all CoinDCX pairs have Binance equivalents → `source_router` must fall back to CoinDCX snapshot path.
+- Funding/mark price differ. Never treat Binance price as CoinDCX execution price.
+- WS clock skew. Use server `E` timestamp from Binance, not local time, when stamping events.
+
+## First PR scope
+
+- `exchanges/binance/{futures_rest,depth_ws,local_book,sequence_validator,resync_manager,symbol_map}.rb`
+- One pair, shadow mode, behind `binance.enabled` flag.
+- Specs: sequence validator (gap → resync), local_book delta apply (zero-qty delete, modify, add), reconstruction integration test using recorded fixture.
+- No engine wiring yet. Ship Phase 1 only.

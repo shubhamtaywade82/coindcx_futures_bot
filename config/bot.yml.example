@@ -352,6 +352,18 @@ runtime:
 #   absorption_window: 20              # snapshots retained for mid-price stickiness check
 #   absorption_price_range_pct: 0.05   # mid must stay within X % over the window
 #   absorption_volume_threshold: 5000.0 # cumulative removed-size threshold to flag absorption
+#
+#   # Binance Futures market-intelligence feed (Phase 1: shadow only — read-only,
+#   # no engine wiring, no event-bus emission). See docs/order_book.md.
+#   binance:
+#     enabled: false
+#     base_rest: https://fapi.binance.com
+#     base_ws: wss://fstream.binance.com
+#     depth_levels: 1000               # REST snapshot limit (Binance allows up to 1000)
+#     resync_max_attempts: 5           # alignment retries before giving up
+#     buffer_warmup_seconds: 1.0       # WS pre-buffer before fetching REST snapshot
+#     symbols:                         # Binance symbol -> CoinDCX pair (Phase 1: BTC only)
+#       BTCUSDT: B-BTC_USDT
 
 # Paper broker simulation settings (only active when runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.
