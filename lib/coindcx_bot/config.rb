@@ -323,6 +323,66 @@ module CoindcxBot
       truthy?(regime_ai_section.fetch(:omit_raw_bars_when_feature_packet, false))
     end
 
+    def tui_ai_analysis_enabled?
+      truthy?(runtime.fetch(:tui_ai_analysis_enabled, false))
+    end
+
+    def tui_ai_analysis_interval_seconds
+      v = runtime.fetch(:tui_ai_analysis_interval_seconds, 120).to_f
+      v < 15.0 ? 15.0 : v
+    rescue ArgumentError, TypeError
+      120.0
+    end
+
+    # Hard floor between two TUI AI analysis runs (seconds). Both event-driven
+    # and heartbeat triggers are blocked when (now - last_run) < this gap.
+    def tui_ai_analysis_event_min_gap_seconds
+      v = runtime.fetch(:tui_ai_analysis_event_min_gap_seconds, 60).to_f
+      v < 10.0 ? 10.0 : v
+    rescue ArgumentError, TypeError
+      60.0
+    end
+
+    # Idle heartbeat: forces a run when no events have arrived but enough time
+    # has passed. Defaults to whatever the legacy `interval_seconds` is.
+    def tui_ai_analysis_heartbeat_interval_seconds
+      raw_val = runtime[:tui_ai_analysis_heartbeat_interval_seconds]
+      v = (raw_val.nil? ? tui_ai_analysis_interval_seconds : raw_val.to_f)
+      v < tui_ai_analysis_event_min_gap_seconds ? tui_ai_analysis_event_min_gap_seconds : v
+    rescue ArgumentError, TypeError
+      tui_ai_analysis_interval_seconds
+    end
+
+    def tui_ai_analysis_htf_bars
+      n = runtime.fetch(:tui_ai_analysis_htf_bars, 60).to_i
+      [[n, 12].max, 240].min
+    end
+
+    def tui_ai_analysis_recent_events_limit
+      n = runtime.fetch(:tui_ai_analysis_recent_events_limit, 20).to_i
+      [[n, 1].max, 200].min
+    end
+
+    def tui_ai_analysis_timeout_seconds
+      v = runtime.fetch(:tui_ai_analysis_timeout_seconds, 45).to_i
+      v < 10 ? 10 : v
+    rescue ArgumentError, TypeError
+      45
+    end
+
+    def tui_ai_analysis_bars
+      n = runtime.fetch(:tui_ai_analysis_bars, 40).to_i
+      [[n, 12].max, 120].min
+    end
+
+    def tui_ai_analysis_model
+      first_present(
+        ENV['TUI_AI_ANALYSIS_MODEL'],
+        runtime[:tui_ai_analysis_model],
+        regime_ai_model
+      )
+    end
+
     def smc_setup_section
       raw.fetch(:smc_setup, {})
     end

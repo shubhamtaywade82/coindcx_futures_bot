@@ -152,6 +152,15 @@ runtime:
   tui_exchange_positions: true
   tui_exchange_positions_refresh_seconds: 30
   tui_exchange_positions_margins: [USDT, INR]
+  tui_ai_analysis_enabled: true
+  # Hard floor between two TUI AI analysis runs (event or heartbeat).
+  tui_ai_analysis_event_min_gap_seconds: 60
+  # Idle heartbeat: force a run when no trigger events arrive within this window.
+  tui_ai_analysis_heartbeat_interval_seconds: 120
+  # HTF bars to include in the focus-asset context payload.
+  tui_ai_analysis_htf_bars: 60
+  # Cap on `recent_events` array sent to the LLM per run.
+  tui_ai_analysis_recent_events_limit: 20
 
   ws_shutdown_join_seconds: 45
 

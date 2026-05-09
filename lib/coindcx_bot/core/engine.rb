@@ -18,9 +18,15 @@ module CoindcxBot
         :capital_inr, :recent_events, :working_orders, :ws_last_tick_ms_ago,
         :strategy_last_by_pair, :regime, :smc_setup,
         :exchange_positions, :exchange_positions_error, :exchange_positions_fetched_at,
-        :live_tui_metrics,
+        :live_tui_metrics, :ai_analysis,
         keyword_init: true
       )
+
+      SMC_INVALIDATED_STATES = %w[invalidated expired cancelled].freeze
+      SMC_FILLED_STATES = %w[filled active].freeze
+      SMC_PRE_FILL_STATES = %w[pending_sweep armed].freeze
+      SIGNAL_FLIP_ACTIONS = %w[long short flat hold].freeze
+      SMC_ACTIVE_STATES = %w[active armed pending_sweep].freeze
 
       COIN_DCX_HTTP_ATTRS_TO_MIRROR = %i[
         api_key api_secret logger public_base_url socket_base_url socket_io_connect_options
@@ -117,6 +123,26 @@ module CoindcxBot
           fingerprint: nil
         }
         @regime_ai_brain = nil
+        @tui_ai_analysis_mutex = Mutex.new
+        @tui_ai_analysis_state = {
+          enabled: @config.tui_ai_analysis_enabled?,
+          pair: nil,
+          updated_at: nil,
+          payload: nil,
+          error: nil,
+          fingerprint: nil
+        }
+        @tui_ai_analysis_brain = nil
+        @tui_ai_analysis_running = false
+        @tui_ai_analysis_thread_mutex = Mutex.new
+        @tui_ai_analysis_events = TradingAi::TuiAnalysisEventBus.new
+        # Per-pair snapshots used to synthesize trigger events on each tick.
+        @tui_ai_analysis_event_state = {
+          smc_setups: {},      # pair => { setup_id => state }
+          regime_state: {},    # pair => state_id
+          position: {},        # pair => fingerprint string
+          signal_side: {}      # pair => last action symbol/string
+        }
         @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
         @ml_runtime = Regime::MlRuntime.new(config: @config, logger: @logger) if @config.regime_ml_enabled?
         @regime_sizer = Risk::RegimeSizer.new(@config) if @config.regime_risk_enabled?
@@ -236,7 +262,8 @@ module CoindcxBot
           exchange_positions: ex[:rows],
           exchange_positions_error: ex[:error],
           exchange_positions_fetched_at: ex[:fetched_at],
-          live_tui_metrics: live_metrics
+          live_tui_metrics: live_metrics,
+          ai_analysis: tui_ai_analysis_snapshot_for_tui
         )
       end
 
@@ -328,6 +355,383 @@ module CoindcxBot
 
         snap = @regime_ai_mutex.synchronize { @regime_ai_state.dup }
         merged.merge(Regime::AiBrain.overlay_from_state(snap))
+      end
+
+      def tui_ai_analysis_snapshot_for_tui
+        snap = @tui_ai_analysis_mutex.synchronize { @tui_ai_analysis_state.dup }
+        TradingAi::TuiAnalysisBrain.overlay_from_state(snap)
+      end
+
+      def refresh_tui_ai_analysis_if_due
+        return unless @config.tui_ai_analysis_enabled?
+
+        detect_tui_ai_analysis_events!
+
+        now = Time.now
+        last_updated = tui_ai_analysis_last_updated
+        if last_updated && (now - last_updated) < @config.tui_ai_analysis_event_min_gap_seconds
+          return
+        end
+
+        events_pending = @tui_ai_analysis_events.pending?
+        heartbeat_due  =
+          last_updated.nil? || (now - last_updated) >= @config.tui_ai_analysis_heartbeat_interval_seconds
+        return unless events_pending || heartbeat_due
+
+        already_running = @tui_ai_analysis_thread_mutex.synchronize do
+          return if @tui_ai_analysis_running
+          @tui_ai_analysis_running = true
+          false
+        end
+        return if already_running
+
+        events = @tui_ai_analysis_events.drain
+        ctx = build_tui_ai_analysis_context(events)
+        if ctx.nil?
+          @tui_ai_analysis_thread_mutex.synchronize { @tui_ai_analysis_running = false }
+          return
+        end
+
+        fp = tui_ai_analysis_fingerprint(ctx)
+        if events.empty? && tui_ai_analysis_skip_unchanged?(fp, now)
+          @tui_ai_analysis_thread_mutex.synchronize { @tui_ai_analysis_running = false }
+          return
+        end
+
+        log_tui_ai_analysis_trigger(ctx, events)
+
+        Thread.new do
+          Thread.current.name = 'tui_ai_analysis'
+          run_tui_ai_analysis_sync(ctx, now, fp)
+        ensure
+          @tui_ai_analysis_thread_mutex.synchronize { @tui_ai_analysis_running = false }
+        end
+      end
+
+      def tui_ai_analysis_last_updated
+        @tui_ai_analysis_mutex.synchronize { @tui_ai_analysis_state[:updated_at] }
+      end
+
+      def tui_ai_analysis_skip_unchanged?(fingerprint, now)
+        @tui_ai_analysis_mutex.synchronize do
+          return false if @tui_ai_analysis_state[:fingerprint].nil?
+          return false if @tui_ai_analysis_state[:fingerprint] != fingerprint
+
+          @tui_ai_analysis_state[:updated_at] = now
+          true
+        end
+      end
+
+      def log_tui_ai_analysis_trigger(ctx, events)
+        return unless @logger
+
+        size = ctx[:_payload_bytes].to_i
+        types = events.map { |e| e[:type] }.tally
+        reason = events.empty? ? 'heartbeat' : "events=#{types.inspect}"
+        @logger.info("[tui_ai_analysis] trigger pair=#{ctx[:pair]} #{reason} payload_bytes=#{size}")
+      end
+
+      def run_tui_ai_analysis_sync(ctx, started_at, fingerprint)
+        brain = (@tui_ai_analysis_brain ||= TradingAi::TuiAnalysisBrain.new(config: @config, logger: @logger))
+        res = brain.analyze!(ctx)
+        @tui_ai_analysis_mutex.synchronize do
+          @tui_ai_analysis_state[:enabled] = true
+          @tui_ai_analysis_state[:pair] = ctx[:pair]
+          @tui_ai_analysis_state[:updated_at] = started_at
+          if res.ok && res.payload.is_a?(Hash)
+            @tui_ai_analysis_state[:payload] = res.payload
+            @tui_ai_analysis_state[:error] = nil
+            @tui_ai_analysis_state[:fingerprint] = fingerprint
+          else
+            @tui_ai_analysis_state[:payload] = nil
+            @tui_ai_analysis_state[:error] = res.error_message
+          end
+        end
+      rescue StandardError => e
+        @logger&.warn("[tui_ai_analysis] #{e.class}: #{e.message}")
+        @tui_ai_analysis_mutex.synchronize { @tui_ai_analysis_state[:error] = e.message }
+      end
+
+      def build_tui_ai_analysis_context(events = [])
+        pair = tui_analysis_pair
+        return nil if pair.nil? || pair.empty?
+
+        ctx = {
+          pair: pair,
+          current_price: @tracker.ltp(pair),
+          candles: build_tui_ai_analysis_candles(pair),
+          htf_candles: build_tui_ai_analysis_htf_candles(pair),
+          strategy_signal: @last_strategy_by_pair[pair] || {},
+          regime_context: build_tui_ai_regime_context,
+          smc_setups: build_tui_ai_smc_setups(pair),
+          smc_state: build_tui_ai_smc_state(pair),
+          orderflow: build_tui_ai_orderflow(pair),
+          open_position: build_tui_ai_open_position(pair),
+          recent_fills: build_tui_ai_recent_fills(pair),
+          recent_events: events.last(@config.tui_ai_analysis_recent_events_limit).map do |e|
+            { type: e[:type], at: e[:at].to_i, payload: e[:payload] }
+          end,
+          exec_resolution: @exec_res,
+          htf_resolution: @htf_res
+        }
+        ctx[:_payload_bytes] = JSON.generate(ctx).bytesize
+        ctx
+      rescue StandardError => e
+        @logger&.warn("[tui_ai_analysis] context_build_error: #{e.class}: #{e.message}")
+        nil
+      end
+
+      def build_tui_ai_analysis_htf_candles(pair)
+        Array(@candles_htf[pair]).last(@config.tui_ai_analysis_htf_bars).map do |c|
+          { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
+        end
+      rescue StandardError
+        []
+      end
+
+      def build_tui_ai_smc_state(pair)
+        return {} unless @smc_setup_store
+
+        records = @smc_setup_store.records_for_pair(pair)
+        {
+          active_setup_count: records.count { |r| SMC_ACTIVE_STATES.include?(r.state.to_s) },
+          all_setups: records.map do |r|
+            ts = r.trade_setup
+            {
+              setup_id: r.setup_id,
+              state: r.state,
+              direction: ts.direction.to_s,
+              entry_min: ts.entry_min.to_f,
+              entry_max: ts.entry_max.to_f,
+              sl: ts.sl.to_f,
+              targets: ts.targets.map(&:to_f),
+              invalidation_level: ts.invalidation_level&.to_f
+            }
+          end
+        }
+      rescue StandardError
+        {}
+      end
+
+      def build_tui_ai_orderflow(pair)
+        return {} unless @orderflow_engine
+
+        store = @orderflow_engine.instance_variable_get(:@store)
+        snap = store&.snapshot_for(pair)
+        return {} unless snap
+
+        # Keep payload compact — avoid raw L2 ladders.
+        {
+          best_bid: snap.respond_to?(:best_bid) ? snap.best_bid : nil,
+          best_ask: snap.respond_to?(:best_ask) ? snap.best_ask : nil,
+          mid: snap.respond_to?(:mid) ? snap.mid : nil,
+          imbalance: snap.respond_to?(:imbalance) ? snap.imbalance : nil
+        }.compact
+      rescue StandardError
+        {}
+      end
+
+      def build_tui_ai_open_position(pair)
+        pos = @tracker.open_position_for(pair)
+        return {} unless pos
+
+        ltp = @tracker.ltp(pair)
+        opened_at = pos[:opened_at] || pos['opened_at']
+        age = opened_at ? (Time.now.to_i - opened_at.to_i) : nil
+        unrealized = ltp ? CoindcxBot::Strategy::UnrealizedPnl.position_usdt(pos, ltp) : nil
+        {
+          side: (pos[:side] || pos['side']).to_s,
+          qty: (pos[:qty] || pos['qty']).to_s,
+          entry: (pos[:entry] || pos['entry']).to_s,
+          stop_loss: (pos[:stop_loss] || pos['stop_loss']).to_s,
+          take_profit: (pos[:take_profit] || pos['take_profit']).to_s,
+          unrealized_usdt: unrealized&.to_s,
+          age_seconds: age,
+          peak_unrealized_usdt: (pos[:peak_unrealized_usdt] || pos['peak_unrealized_usdt']).to_s
+        }
+      rescue StandardError
+        {}
+      end
+
+      def build_tui_ai_recent_fills(pair, limit: 5)
+        return [] unless @journal.respond_to?(:recent_events)
+
+        @journal.recent_events(40).to_a.filter_map do |r|
+          type = (r['type'] || r[:type]).to_s
+          next unless type == 'fill'
+
+          payload = r['payload'] || r[:payload]
+          parsed =
+            begin
+              JSON.parse(payload.to_s, symbolize_names: true)
+            rescue StandardError
+              {}
+            end
+          next unless parsed[:pair].to_s == pair.to_s
+
+          { ts: (r['ts'] || r[:ts]).to_i, side: parsed[:side], price: parsed[:price], qty: parsed[:qty] }
+        end.last(limit)
+      rescue StandardError
+        []
+      end
+
+      # Diff-based event detection. Compares current snapshots vs last seen and
+      # records synthesized events on the bus. Detector-emit (sweep/OB/BOS/CHoCH)
+      # also routes through here by inspecting the latest BarResult flags from
+      # SmcSetup state if available; falls back to no-op when not present.
+      def detect_tui_ai_analysis_events!
+        pair = tui_analysis_pair
+        return if pair.nil? || pair.empty?
+
+        detect_smc_setup_events!(pair)
+        detect_regime_events!(pair)
+        detect_position_events!(pair)
+        detect_signal_events!(pair)
+      rescue StandardError => e
+        @logger&.debug("[tui_ai_analysis] event_detect_error: #{e.class}: #{e.message}")
+      end
+
+      def detect_smc_setup_events!(pair)
+        return unless @smc_setup_store
+
+        prev = @tui_ai_analysis_event_state[:smc_setups][pair] || {}
+        records = @smc_setup_store.records_for_pair(pair)
+        current = records.to_h { |r| [r.setup_id, r.state.to_s] }
+
+        (current.keys - prev.keys).each do |sid|
+          @tui_ai_analysis_events.record(:smc_setup_new,
+                                         { pair: pair, setup_id: sid, state: current[sid] })
+        end
+        (prev.keys - current.keys).each do |sid|
+          @tui_ai_analysis_events.record(:smc_setup_invalidated,
+                                         { pair: pair, setup_id: sid, last_state: prev[sid] })
+        end
+        (current.keys & prev.keys).each do |sid|
+          next if current[sid] == prev[sid]
+
+          if SMC_INVALIDATED_STATES.include?(current[sid])
+            @tui_ai_analysis_events.record(:smc_setup_invalidated,
+                                           { pair: pair, setup_id: sid, from: prev[sid], to: current[sid] })
+          elsif SMC_FILLED_STATES.include?(current[sid]) && SMC_PRE_FILL_STATES.include?(prev[sid])
+            @tui_ai_analysis_events.record(:smc_setup_filled,
+                                           { pair: pair, setup_id: sid, from: prev[sid], to: current[sid] })
+          end
+        end
+
+        @tui_ai_analysis_event_state[:smc_setups][pair] = current
+      end
+
+      def detect_regime_events!(pair)
+        return unless @hmm_runtime
+
+        st = @hmm_runtime.state_for(pair)
+        return unless st
+
+        current_id = st.respond_to?(:state_id) ? st.state_id : nil
+        prev = @tui_ai_analysis_event_state[:regime_state][pair]
+        if prev && current_id && prev != current_id
+          @tui_ai_analysis_events.record(:regime_flip,
+                                         { pair: pair, from: prev, to: current_id })
+        end
+        @tui_ai_analysis_event_state[:regime_state][pair] = current_id
+      end
+
+      def detect_position_events!(pair)
+        pos = @tracker.open_position_for(pair)
+        prev_fp = @tui_ai_analysis_event_state[:position][pair]
+        current_fp =
+          if pos
+            "#{pos[:id] || pos['id']}|#{pos[:side] || pos['side']}|#{pos[:qty] || pos['qty']}"
+          end
+
+        if prev_fp.nil? && current_fp
+          @tui_ai_analysis_events.record(:position_open,
+                                         { pair: pair,
+                                           side: (pos[:side] || pos['side']).to_s,
+                                           qty: (pos[:qty] || pos['qty']).to_s })
+        elsif prev_fp && current_fp.nil?
+          @tui_ai_analysis_events.record(:position_close, { pair: pair, prior: prev_fp })
+        elsif prev_fp && current_fp && prev_fp != current_fp
+          @tui_ai_analysis_events.record(:partial_fill,
+                                         { pair: pair, from: prev_fp, to: current_fp })
+        end
+
+        @tui_ai_analysis_event_state[:position][pair] = current_fp
+      end
+
+      def detect_signal_events!(pair)
+        sig = @last_strategy_by_pair[pair]
+        return unless sig.is_a?(Hash)
+
+        action = sig[:action].to_s
+        return if action.empty?
+
+        prev = @tui_ai_analysis_event_state[:signal_side][pair]
+        if prev && prev != action && SIGNAL_FLIP_ACTIONS.include?(action)
+          @tui_ai_analysis_events.record(:signal_flip,
+                                         { pair: pair, from: prev, to: action,
+                                           reason: sig[:reason].to_s })
+        end
+        @tui_ai_analysis_event_state[:signal_side][pair] = action
+      end
+
+      def tui_analysis_pair
+        ordered = @config.pairs.map(&:to_s)
+        fp = @tui_focus_pair.to_s.strip
+        return fp unless fp.empty? || !ordered.include?(fp)
+
+        ordered.first.to_s
+      end
+
+      def build_tui_ai_analysis_candles(pair)
+        Array(@candles_exec[pair]).last(@config.tui_ai_analysis_bars).map do |c|
+          { o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }
+        end
+      end
+
+      def build_tui_ai_regime_context
+        h = {}
+        if @hmm_runtime && (state = @hmm_runtime.state_for(tui_analysis_pair))
+          h[:hmm] = {
+            state_id: state.state_id,
+            probability: state.probability,
+            vol_rank: state.vol_rank,
+            vol_rank_total: state.vol_rank_total
+          }
+        end
+        ai_payload = @regime_ai_mutex.synchronize { @regime_ai_state[:payload] }
+        h[:regime_ai] = ai_payload if ai_payload.is_a?(Hash)
+        h
+      end
+
+      def build_tui_ai_smc_setups(pair)
+        return [] unless @smc_setup_store
+
+        @smc_setup_store.records_for_pair(pair).map do |record|
+          setup = record.trade_setup
+          {
+            setup_id: record.setup_id,
+            state: record.state,
+            direction: setup.direction.to_s,
+            entry_min: setup.entry_min.to_f,
+            entry_max: setup.entry_max.to_f,
+            sl: setup.sl.to_f,
+            targets: setup.targets.map(&:to_f),
+            invalidation_level: setup.invalidation_level&.to_f
+          }
+        end
+      end
+
+      def tui_ai_analysis_fingerprint(ctx)
+        [
+          ctx[:pair],
+          ctx[:current_price]&.to_s,
+          @candles_exec[ctx[:pair]]&.last&.time,
+          ctx[:strategy_signal],
+          Array(ctx[:smc_setups]).map { |s| [s[:setup_id], s[:state]] },
+          ctx[:open_position].to_s,
+          ctx.dig(:regime_context, :hmm, :state_id),
+        ]
       end
 
       # Launches the regime AI analysis in a background thread to avoid blocking tick_cycle.
@@ -1237,6 +1641,7 @@ module CoindcxBot
         refresh_smc_setup_planner_if_due
         refresh_exchange_positions_for_tui_if_due
         refresh_regime_ai_if_due
+        refresh_tui_ai_analysis_if_due
         refresh_futures_wallet_for_tui_if_due
         refresh_runtime_reconcile_if_due
         apply_funding_for_live_positions!

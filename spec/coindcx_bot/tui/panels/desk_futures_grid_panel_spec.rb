@@ -33,7 +33,20 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
       exchange_positions: [],
       exchange_positions_error: nil,
       exchange_positions_fetched_at: nil,
-      live_tui_metrics: {}
+      live_tui_metrics: {},
+      ai_analysis: {
+        enabled: true,
+        status: 'OK',
+        pair: 'B-SOL_USDT',
+        side: 'LONG',
+        confidence_pct: 71.5,
+        entry_zone: { min: 92.9, max: 93.2 },
+        stop_loss: 92.4,
+        targets: [93.8, 94.2],
+        levels_to_watch: [92.7, 93.5],
+        rationale: 'Confluence supports continuation.',
+        updated_at: Time.now
+      }
     )
   end
   let(:config) do
@@ -80,6 +93,7 @@ RSpec.describe CoindcxBot::Tui::Panels::DeskFuturesGridPanel do
       s = output.string
       expect(s).to include('BOOK')
       expect(s).to include('POSITIONS')
+      expect(s).to include('RISK')
     end
 
     it 'shows full book quantities when the column is wide enough (no 5-char cap)' do

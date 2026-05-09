@@ -17,8 +17,9 @@ module CoindcxBot
 
         MAX_LOG_SIZE = 5
 
-        def initialize(bus:, origin_row:, origin_col: 0, focus_pair_proc: nil, output: $stdout)
+        def initialize(bus:, engine:, origin_row:, origin_col: 0, focus_pair_proc: nil, output: $stdout)
           @bus = bus
+          @engine = engine
           @row = origin_row
           @col = origin_col
           @focus_pair_proc = focus_pair_proc
@@ -34,8 +35,8 @@ module CoindcxBot
         end
 
         def render
-          pair = @focus_pair_proc&.call&.to_s
-          return unless pair
+          pair = resolved_focus_pair
+          return if pair.empty?
 
           @mutex.synchronize do
             imb   = @imbalance[pair] || { value: 0.0, bias: :neutral }
@@ -55,22 +56,26 @@ module CoindcxBot
             l2 = (rem - l1).clamp(1, w)
             buf << move(@row) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
 
+            left_w, right_w = split_widths(w)
+            ai_lines = build_ai_lines(pair)
+
             # ── Imbalance row ───────────────────────────────────────────
             imb_content = "Imbalance: #{format_imbalance(imb)}"
-            buf << move(@row + 1) << ui_border('│ ') << pad_visible(imb_content, w - 4) << ui_border(' │')
+            buf << move(@row + 1) << ui_border('│ ') << compose_row(imb_content, ai_lines[0], left_w, right_w) << ui_border(' │')
 
             # ── Walls row ───────────────────────────────────────────────
             walls_content = "Walls:     #{format_walls(walls)}"
-            buf << move(@row + 2) << ui_border('│ ') << pad_visible(walls_content, w - 4) << ui_border(' │')
+            buf << move(@row + 2) << ui_border('│ ') << compose_row(walls_content, ai_lines[1], left_w, right_w) << ui_border(' │')
 
             # ── Event log label row ─────────────────────────────────────
-            buf << move(@row + 3) << ui_border('│ ') << pad_visible(muted('Recent Events:'), w - 4) << ui_border(' │')
+            buf << move(@row + 3) << ui_border('│ ') << compose_row(muted('Recent Events:'), muted('AI Analysis:'), left_w, right_w) << ui_border(' │')
 
             # ── Event log rows (pre-filtered, no gaps) ──────────────────
             MAX_LOG_SIZE.times do |i|
               ev = pair_log[i]
-              content = ev ? "  #{format_event(ev)}" : muted('·')
-              buf << move(@row + 4 + i) << ui_border('│ ') << pad_visible(content, w - 4) << ui_border(' │')
+              left = ev ? "  #{format_event(ev)}" : muted('·')
+              right = ai_lines[2 + i] || muted('·')
+              buf << move(@row + 4 + i) << ui_border('│ ') << compose_row(left, right, left_w, right_w) << ui_border(' │')
             end
 
             # ── Bottom border ───────────────────────────────────────────
@@ -88,6 +93,99 @@ module CoindcxBot
         end
 
         private
+
+        def resolved_focus_pair
+          preferred = @focus_pair_proc&.call
+          return preferred.to_s unless preferred.nil? || preferred.to_s.strip.empty?
+
+          pairs = @engine&.snapshot&.pairs
+          Array(pairs).first.to_s
+        rescue StandardError
+          ''
+        end
+
+        def split_widths(total_width)
+          inner = total_width - 4
+          right = (inner * 0.78).to_i.clamp(70, 120)
+          left = inner - right - 1
+          left = 16 if left < 16
+          right = [inner - left - 1, 28].max if left + right + 1 > inner
+          [left, right]
+        end
+
+        def compose_row(left_text, right_text, left_w, right_w)
+          left = left_text.nil? ? muted('·') : left_text
+          right = right_text.nil? ? muted('·') : right_text
+          "#{pad_visible(left, left_w)}#{muted('│')}#{pad_visible(right, right_w)}"
+        end
+
+        def build_ai_lines(pair)
+          ai = safe_ai_analysis_snapshot
+          return [muted('AI: OFF')] unless ai.is_a?(Hash) && ai[:enabled]
+          return [loss("AI ERR: #{truncate(ai[:rationale].to_s, 38)}")] if ai[:status].to_s == 'ERR'
+          return [muted('AI: WAIT')] if ai[:status].to_s == 'WAIT'
+
+          symbol = compact_pair_symbol((ai[:pair] || pair).to_s)
+          side = ai[:side].to_s
+          conf = format('%.1f%%', ai[:confidence_pct].to_f)
+          zone = ai[:entry_zone].is_a?(Hash) ? ai[:entry_zone] : {}
+          entry = format_range(zone[:min], zone[:max])
+          sl = format_level(ai[:stop_loss])
+          tp = Array(ai[:targets]).first(3).map { |v| format_level(v) }.reject(&:empty?).join(', ')
+          levels = Array(ai[:levels_to_watch]).first(4).map { |v| format_level(v) }.reject(&:empty?).join(', ')
+          updated = ai[:updated_at].is_a?(Time) ? ai[:updated_at].strftime('%H:%M:%S') : '—'
+          side_disp = side == 'LONG' ? profit(side) : side == 'SHORT' ? loss(side) : muted(side)
+
+          lines = [
+            "#{bold('PAIR: ')}#{symbol} #{muted("· #{conf}")}",
+            "#{bold('BIAS: ')}#{side_disp}",
+            "#{bold('ENTRY: ')}#{entry}",
+            "#{bold('SL: ')}#{sl.empty? ? '—' : sl}",
+            "#{bold('TP: ')}#{tp.empty? ? '—' : tp}",
+            "#{bold('WATCH: ')}#{levels.empty? ? '—' : levels}",
+            "#{bold('WHY: ')}#{truncate(ai[:rationale].to_s, 40)}",
+            "#{muted('UPD:')} #{updated}"
+          ]
+          while lines.length < (MAX_LOG_SIZE + 2)
+            lines << muted('·')
+          end
+          lines
+        rescue StandardError
+          Array.new(MAX_LOG_SIZE + 2, muted('AI: —'))
+        end
+
+        def safe_ai_analysis_snapshot
+          return {} unless @engine&.respond_to?(:snapshot)
+
+          snap = @engine.snapshot
+          return {} unless snap.respond_to?(:ai_analysis)
+
+          snap.ai_analysis
+        rescue StandardError
+          {}
+        end
+
+        def compact_pair_symbol(pair)
+          pair.to_s.sub(/^B-/, '').sub(/_USDT\z/i, '')
+        end
+
+        def format_range(min, max)
+          lo = format_level(min)
+          hi = format_level(max)
+          return '—' if lo.empty? && hi.empty?
+          return lo if hi.empty?
+          return hi if lo.empty?
+
+          "#{lo} - #{hi}"
+        end
+
+        def format_level(raw)
+          return '' if raw.nil?
+
+          format('%.2f', Float(raw))
+        rescue ArgumentError, TypeError
+          ''
+        end
 
         def subscribe_events
           @bus.subscribe(:orderflow_imbalance) do |ev|

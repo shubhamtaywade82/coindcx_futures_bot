@@ -197,6 +197,7 @@ module CoindcxBot
 
         orderflow = Panels::OrderflowPanel.new(
           bus: engine.instance_variable_get(:@bus),
+          engine: engine,
           origin_row: origin,
           focus_pair_proc: -> { @focus&.current }
         )
