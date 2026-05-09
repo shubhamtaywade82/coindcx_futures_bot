@@ -20,7 +20,7 @@ RSpec.describe CoindcxBot::SmcSetup::TradeSetupStore do
         entry_zone: { min: 50, max: 60 },
         confirmation_required: []
       },
-      execution: { sl: 0.5 }
+      execution: { sl: 0.5, targets: [70.0] }
     }
   end
 

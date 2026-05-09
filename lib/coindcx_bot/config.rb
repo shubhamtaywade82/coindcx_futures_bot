@@ -7,6 +7,8 @@ require_relative 'scalper_profile'
 module CoindcxBot
   class Config
     DEFAULT_PATH = File.expand_path('../../config/bot.yml', __dir__)
+    DEFAULT_OLLAMA_FALLBACK_BASE_URL = 'http://127.0.0.1:11434'
+    DEFAULT_OLLAMA_FALLBACK_MODEL = 'llama3.2:3b'
 
     # Upper bound for `pairs:` (WS subs, REST poll, and TUI rows scale with count).
     MAX_PAIRS = 32
@@ -38,6 +40,7 @@ module CoindcxBot
       validate_risk_band!
       validate_risk_capital_pct!
       validate_runtime_no_legacy_paper_flag!
+      validate_smc_setup_no_legacy_poll_interval!
       validate_meta_first_win!
       apply_coindcx_env_runtime_overrides!
     end
@@ -206,7 +209,12 @@ module CoindcxBot
     end
 
     def regime_ai_model
-      ENV['OLLAMA_AGENT_MODEL'] || ENV['OLLAMA_MODEL'] || regime_ai_section[:model].to_s.strip
+      first_present(
+        ENV['REGIME_AI_MODEL'],
+        regime_ai_section[:model],
+        ENV['OLLAMA_AGENT_MODEL'],
+        ENV['OLLAMA_MODEL']
+      )
     end
 
     def regime_ai_min_interval_seconds
@@ -228,11 +236,45 @@ module CoindcxBot
     end
 
     def regime_ai_ollama_base_url
-      ENV['OLLAMA_BASE_URL'] || regime_ai_section[:ollama_base_url].to_s.strip
+      first_present(
+        ENV['REGIME_AI_OLLAMA_BASE_URL'],
+        regime_ai_section[:ollama_base_url],
+        ENV['OLLAMA_BASE_URL']
+      )
     end
 
     def regime_ai_ollama_api_key
-      ENV['OLLAMA_API_KEY'] || ''
+      first_present(
+        ENV['REGIME_AI_OLLAMA_API_KEY'],
+        ENV['OLLAMA_API_KEY']
+      )
+    end
+
+    def regime_ai_fallback_ollama_base_url
+      first_present(
+        ENV['REGIME_AI_FALLBACK_OLLAMA_BASE_URL'],
+        regime_ai_section[:ollama_fallback_base_url],
+        ENV['OLLAMA_FALLBACK_BASE_URL'],
+        DEFAULT_OLLAMA_FALLBACK_BASE_URL
+      )
+    end
+
+    def regime_ai_fallback_model
+      first_present(
+        ENV['REGIME_AI_FALLBACK_MODEL'],
+        regime_ai_section[:ollama_fallback_model],
+        ENV['OLLAMA_FALLBACK_MODEL'],
+        regime_ai_section[:model].to_s.strip,
+        DEFAULT_OLLAMA_FALLBACK_MODEL
+      )
+    end
+
+    def regime_ai_fallback_ollama_api_key
+      first_present(
+        ENV['REGIME_AI_FALLBACK_OLLAMA_API_KEY'],
+        regime_ai_section[:ollama_fallback_api_key],
+        ''
+      )
     end
 
     def regime_ai_temperature
@@ -279,6 +321,66 @@ module CoindcxBot
       return false unless regime_ai_include_feature_packet?
 
       truthy?(regime_ai_section.fetch(:omit_raw_bars_when_feature_packet, false))
+    end
+
+    def tui_ai_analysis_enabled?
+      truthy?(runtime.fetch(:tui_ai_analysis_enabled, false))
+    end
+
+    def tui_ai_analysis_interval_seconds
+      v = runtime.fetch(:tui_ai_analysis_interval_seconds, 120).to_f
+      v < 15.0 ? 15.0 : v
+    rescue ArgumentError, TypeError
+      120.0
+    end
+
+    # Hard floor between two TUI AI analysis runs (seconds). Both event-driven
+    # and heartbeat triggers are blocked when (now - last_run) < this gap.
+    def tui_ai_analysis_event_min_gap_seconds
+      v = runtime.fetch(:tui_ai_analysis_event_min_gap_seconds, 60).to_f
+      v < 10.0 ? 10.0 : v
+    rescue ArgumentError, TypeError
+      60.0
+    end
+
+    # Idle heartbeat: forces a run when no events have arrived but enough time
+    # has passed. Defaults to whatever the legacy `interval_seconds` is.
+    def tui_ai_analysis_heartbeat_interval_seconds
+      raw_val = runtime[:tui_ai_analysis_heartbeat_interval_seconds]
+      v = (raw_val.nil? ? tui_ai_analysis_interval_seconds : raw_val.to_f)
+      v < tui_ai_analysis_event_min_gap_seconds ? tui_ai_analysis_event_min_gap_seconds : v
+    rescue ArgumentError, TypeError
+      tui_ai_analysis_interval_seconds
+    end
+
+    def tui_ai_analysis_htf_bars
+      n = runtime.fetch(:tui_ai_analysis_htf_bars, 60).to_i
+      [[n, 12].max, 240].min
+    end
+
+    def tui_ai_analysis_recent_events_limit
+      n = runtime.fetch(:tui_ai_analysis_recent_events_limit, 20).to_i
+      [[n, 1].max, 200].min
+    end
+
+    def tui_ai_analysis_timeout_seconds
+      v = runtime.fetch(:tui_ai_analysis_timeout_seconds, 45).to_i
+      v < 10 ? 10 : v
+    rescue ArgumentError, TypeError
+      45
+    end
+
+    def tui_ai_analysis_bars
+      n = runtime.fetch(:tui_ai_analysis_bars, 40).to_i
+      [[n, 12].max, 120].min
+    end
+
+    def tui_ai_analysis_model
+      first_present(
+        ENV['TUI_AI_ANALYSIS_MODEL'],
+        runtime[:tui_ai_analysis_model],
+        regime_ai_model
+      )
     end
 
     def smc_setup_section
@@ -338,7 +440,12 @@ module CoindcxBot
     end
 
     def smc_setup_model
-      ENV['OLLAMA_AGENT_MODEL'] || ENV['OLLAMA_MODEL'] || smc_setup_section[:model].to_s.strip
+      first_present(
+        ENV['SMC_SETUP_MODEL'],
+        smc_setup_section[:model],
+        ENV['OLLAMA_AGENT_MODEL'],
+        ENV['OLLAMA_MODEL']
+      )
     end
 
     def smc_setup_timeout_seconds
@@ -352,11 +459,45 @@ module CoindcxBot
     end
 
     def smc_setup_ollama_base_url
-      ENV['OLLAMA_BASE_URL'] || smc_setup_section[:ollama_base_url].to_s.strip
+      first_present(
+        ENV['SMC_SETUP_OLLAMA_BASE_URL'],
+        smc_setup_section[:ollama_base_url],
+        ENV['OLLAMA_BASE_URL']
+      )
     end
 
     def smc_setup_ollama_api_key
-      ENV['OLLAMA_API_KEY'] || ''
+      first_present(
+        ENV['SMC_SETUP_OLLAMA_API_KEY'],
+        ENV['OLLAMA_API_KEY']
+      )
+    end
+
+    def smc_setup_fallback_ollama_base_url
+      first_present(
+        ENV['SMC_SETUP_FALLBACK_OLLAMA_BASE_URL'],
+        smc_setup_section[:ollama_fallback_base_url],
+        ENV['OLLAMA_FALLBACK_BASE_URL'],
+        DEFAULT_OLLAMA_FALLBACK_BASE_URL
+      )
+    end
+
+    def smc_setup_fallback_model
+      first_present(
+        ENV['SMC_SETUP_FALLBACK_MODEL'],
+        smc_setup_section[:ollama_fallback_model],
+        ENV['OLLAMA_FALLBACK_MODEL'],
+        smc_setup_section[:model].to_s.strip,
+        DEFAULT_OLLAMA_FALLBACK_MODEL
+      )
+    end
+
+    def smc_setup_fallback_ollama_api_key
+      first_present(
+        ENV['SMC_SETUP_FALLBACK_OLLAMA_API_KEY'],
+        smc_setup_section[:ollama_fallback_api_key],
+        ''
+      )
     end
 
     def smc_setup_use_retry_middleware?
@@ -940,6 +1081,14 @@ module CoindcxBot
       v == true || v.to_s.downcase == 'true' || v.to_s == '1'
     end
 
+    def first_present(*candidates)
+      candidates.each do |c|
+        s = c.to_s.strip
+        return s unless s.empty?
+      end
+      ''
+    end
+
     def risk_value_present?(rk, key)
       rk.key?(key) && !(rk[key].nil? || rk[key].to_s.strip.empty?)
     end
@@ -998,6 +1147,15 @@ module CoindcxBot
 
       raise ConfigurationError,
             'Remove runtime.paper from bot.yml; use runtime.dry_run only (true = paper trading, false = live).'
+    end
+
+    def validate_smc_setup_no_legacy_poll_interval!
+      s = raw[:smc_setup]
+      return unless s.is_a?(Hash)
+      return unless s.key?(:poll_interval_seconds)
+
+      raise ConfigurationError,
+            'smc_setup.poll_interval_seconds is unused; rename to smc_setup.planner_interval_seconds in bot.yml.'
     end
 
     ALLOWED_META_FIRST_WIN_CHILDREN = %w[trend_continuation supertrend_profit smc_confluence].freeze

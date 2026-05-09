@@ -39,7 +39,10 @@ module CoindcxBot
         private
 
         def header_emoji(type)
-          case type.to_s
+          t = type.to_s
+          return '🧠' if t == 'analysis_regime_ai_update'
+
+          case t
           when /failed|invalidated/ then '🚫'
           when /fired|open|paper_realized|live_realized/ then '✅'
           when /armed|trail|transition|change/ then '🔄'
@@ -272,21 +275,75 @@ module CoindcxBot
           cur = fetch_s(h, :regime_label)
           old = fetch_s(h, :prev_label)
           prob = fetch_s(h, :probability_pct)
+          prev_prob = fetch_s(h, :prev_probability_pct)
 
-          title = if cur != old && old != ''
-                    '🌍 Regime AI Transition'
-                  else
-                    '🧠 Regime AI Update'
-                  end
+          label_changed = cur != old && old != '' && cur != ''
+          title =
+            if label_changed
+              '🌍 Regime label changed (LLM)'
+            else
+              '🧠 Regime check-in (same label)'
+            end
 
           lines = [title]
-          lines << "Current: #{cur} (Prob: #{prob}%)" if cur != '' && prob != ''
+          lines << if label_changed
+                     'What this means: the AI renamed the market regime vs the last alert. Advisory only — not an entry/exit order.'
+                   else
+                     'What this means: the AI kept the same regime name; conviction or its short story moved enough to notify you.'
+                   end
+
+          caveat = regime_ai_s_state_caveat_line(cur)
+          lines << caveat if caveat
+
+          if cur != '' && prob != ''
+            pretty = regime_ai_pretty_label(cur)
+            lines << "Regime call: #{pretty}"
+            lines << "Model confidence in this label: #{prob}% (not win probability — how sure the LLM is of its wording)."
+          end
+
+          if old != '' && prev_prob != ''
+            pretty_old = regime_ai_pretty_label(old)
+            lines << "Previous alert: #{pretty_old} @ #{prev_prob}%"
+          elsif old != ''
+            lines << "Previous alert: #{regime_ai_pretty_label(old)}"
+          end
 
           summary = fetch_s(h, :transition_summary)
           if summary != '' && summary != 'nil'
-            lines << "Status: #{summary.capitalize}"
+            lines << "Story: #{summary}"
+          end
+
+          notes = fetch_s(h, :notes)
+          lines << "Why: #{notes}" if notes != '' && notes != 'nil'
+
+          flick = fetch_s(h, :flicker_hint)
+          lines << "Churn (flicker): #{flick}" if flick != '' && flick != 'nil'
+
+          vr = fetch_s(h, :vol_rank)
+          vrt = fetch_s(h, :vol_rank_total)
+          if vr != '' && vrt != ''
+            lines << "Vol rank in AI view: #{vr}/#{vrt} (1 = calm vs its own scale)"
+          end
+
+          conf = fetch_s(h, :confirmed)
+          if conf != ''
+            lines << "AI would act on this read: #{truthy_phrase(h[:confirmed]).capitalize}"
           end
           lines.join("\n")
+        end
+
+        # LLMs sometimes echo HMM state ids (S0, S1) as regime_label; traders expect words like LOW_VOL.
+        def regime_ai_s_state_caveat_line(label)
+          return nil unless label.to_s.match?(/\A\s*S\d+\s*\z/i)
+
+          'Note: S0/S1/… look like quant model state ids, not trader-style names (e.g. LOW_VOL, TREND_UP). Treat as a machine state tag unless your runbook maps S* to a story.'
+        end
+
+        def regime_ai_pretty_label(raw)
+          s = raw.to_s.strip
+          return '—' if s.empty?
+
+          s.tr('_', ' ')
         end
 
         def format_analysis_price_cross(h)

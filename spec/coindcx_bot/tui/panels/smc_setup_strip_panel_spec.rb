@@ -59,7 +59,7 @@ RSpec.describe CoindcxBot::Tui::Panels::SmcSetupStripPanel do
     }
     engine = double('engine', snapshot: snap(smc), config: config, broker: broker_double)
     p = described_class.new(engine: engine, origin_row: 0, output: output)
-    expect(p.row_count).to eq(2)
+    expect(p.row_count).to eq(4)
     p.render
     s = output.string
     expect(s).to include('PLANNER')

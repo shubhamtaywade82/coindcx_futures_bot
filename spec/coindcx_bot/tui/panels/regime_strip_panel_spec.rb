@@ -38,9 +38,9 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
 
   before { allow(CoindcxBot::Tui::TermWidth).to receive(:columns).and_return(100) }
 
-  it 'maps bare AI: hmm_display to AI:— so the strip never looks empty' do
-    expect(panel.send(:ai_column_fragment, 'AI:')).to eq('AI:—')
-    expect(panel.send(:ai_column_fragment, 'AI: ')).to eq('AI:—')
+  it 'maps empty ai_transition_full/ai_notes_full to AI:— so the strip never looks empty' do
+    expect(panel.send(:secondary_ai_cell, { ai_transition_full: '', ai_notes_full: '' })).to eq('AI:—')
+    expect(panel.send(:secondary_ai_cell, { ai_transition_full: ' ', ai_notes_full: ' ' })).to eq('AI:—')
   end
 
   describe '#render' do
@@ -59,12 +59,13 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
       snap = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(regime: CoindcxBot::Regime::TuiState.build(config)))
       eng = double('engine', snapshot: snap, broker: broker_double, config: config)
       described_class.new(engine: eng, origin_row: 0, output: output).render
-      expect(output.string).to include('STANDBY')
-      expect(output.string).to include('Pn/a')
-      expect(output.string).to include('PIPE:IDLE')
-      expect(output.string).to include('awaiting HmmEngine')
-      expect(output.string).to include('┌ REGIME ')
-      expect(output.string).not_to include('┌ REGIME ·')
+      plain = output.string.gsub(/\e\[[0-9;]*m/, '')
+      expect(plain).to include('STANDBY')
+      expect(plain).to include('P:n/a')
+      expect(plain).to include('PIPE:IDLE')
+      expect(plain).to include('awaiting HmmEngine')
+      expect(plain).to include('REGIME')
+      expect(plain).not_to include('REGIME · ')
     end
 
     it 'shows the focused instrument in the regime box title when regime_pair is present' do
@@ -87,7 +88,7 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
       snap = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(regime: regime))
       eng = double('engine', snapshot: snap, broker: broker_double, config: config)
       described_class.new(engine: eng, origin_row: 0, output: output).render
-      expect(output.string).to include('┌ REGIME · SOL ')
+      expect(output.string).to include('REGIME · SOL')
     end
 
     it 'adds wrapped detail lines for full AI transition and notes' do
@@ -115,12 +116,13 @@ RSpec.describe CoindcxBot::Tui::Panels::RegimeStripPanel do
       panel = described_class.new(engine: eng, origin_row: 0, output: output)
       expect(panel.row_count).to be > 4
       panel.render
-      expect(output.string).to include('A:↓')
-      expect(output.string).to include('AI:↓')
-      expect(output.string).to include('A· ')
-      expect(output.string).to include('n· ')
-      expect(output.string).to include(long_trans[0, 40])
-      expect(output.string).to include(long_notes[0, 40])
+      plain = output.string.gsub(/\e\[[0-9;]*m/, '')
+      expect(plain).to include('A:↓')
+      expect(plain).to match(/AI:\s*↓/)
+      expect(plain).to include('A· ')
+      expect(plain).to include('n· ')
+      expect(plain).to include(long_trans[0, 40])
+      expect(plain).to include(long_notes[0, 40])
     end
   end
 

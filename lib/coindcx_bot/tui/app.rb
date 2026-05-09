@@ -197,14 +197,16 @@ module CoindcxBot
 
         orderflow = Panels::OrderflowPanel.new(
           bus: engine.instance_variable_get(:@bus),
+          engine: engine,
           origin_row: origin,
           focus_pair_proc: -> { @focus&.current }
         )
         origin += orderflow.row_count
 
         # Flexible height calculation
-        # Other panels: Header, Regime, SMC, Orderflow, Keybar (1 row), plus borders/padding if any.
-        fixed_height = origin + 1 + 1 # +1 for Keybar, +1 for buffer
+        # Keybar is 5 rows (rule + 2 control lines + footer hint + command palette).
+        keybar_rows = 5
+        fixed_height = origin + keybar_rows + 1 # +1 buffer
         total_h = TermHeight.rows
         avail_h = total_h - fixed_height
         # Grid inner height = avail_h - 4 (top border, header row, mid rule, bot border)

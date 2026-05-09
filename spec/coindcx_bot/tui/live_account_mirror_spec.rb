@@ -98,11 +98,15 @@ RSpec.describe CoindcxBot::Tui::LiveAccountMirror do
       expect(snap[:cross_user_margin]).to eq(BigDecimal('20'))
     end
 
-    it 'does not treat available_balance as wallet balance when balance keys are absent' do
+    it 'synthesizes balance from available + locked when explicit balance keys are absent' do
       rows = [
-        { 'currency_short_name' => 'INR', 'available_balance' => '22', 'locked_balance' => '226482' }
+        { 'currency_short_name' => 'INR', 'available_balance' => '22', 'locked_balance' => '226482' },
       ]
-      expect(described_class.extract_wallet_snapshot_for_display(rows, 'INR')).to be_nil
+      snap = described_class.extract_wallet_snapshot_for_display(rows, 'INR')
+      expect(snap[:currency]).to eq('INR')
+      expect(snap[:balance]).to eq(BigDecimal('22') + BigDecimal('226482'))
+      expect(snap[:available_balance]).to eq(BigDecimal('22'))
+      expect(snap[:locked_balance]).to eq(BigDecimal('226482'))
     end
 
     it 'fills INR wallet balance from the USDT row when INR row omits balance and FX is given' do

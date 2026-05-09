@@ -53,24 +53,34 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
     allow(engine).to receive(:ws_feed_stale?).and_return(false)
     allow(engine).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
     allow(engine).to receive(:engine_loop_crashed?).and_return(false)
+    allow(engine).to receive(:tui_focus_pair=)
+  end
+
+  def plain(str)
+    str.gsub(/\e\[[0-9;]*[A-Za-z]/, '')
   end
 
   describe '#render' do
-    it 'renders ENGINE: CRASHED when the engine loop has failed' do
+    it 'renders CRASHED when the engine loop has failed' do
       allow(engine).to receive(:engine_loop_crashed?).and_return(true)
-      panel.render
-      expect(output.string).to include('ENGINE: CRASHED')
+      crashed_snap = CoindcxBot::Core::Engine::Snapshot.new(**snapshot.to_h.merge(running: false))
+      eng = double('engine', snapshot: crashed_snap, broker: broker_double, config: config)
+      allow(eng).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+      allow(eng).to receive(:ws_feed_stale?).and_return(false)
+      allow(eng).to receive(:engine_loop_crashed?).and_return(true)
+      allow(eng).to receive(:tui_focus_pair=)
+      described_class.new(engine: eng, origin_row: 0, output: output).render
+      expect(plain(output.string)).to include('CRASHED')
     end
 
     it 'renders mode, ws, engine, net pnl, balance, and desk counts' do
       panel.render
-      rendered = output.string
+      rendered = plain(output.string)
 
       expect(rendered).to include('PAPER')
       expect(rendered).not_to include('REGIME·')
-      expect(rendered).to include('MODE:')
       expect(rendered).to include('WS:')
-      expect(rendered).to include('ENGINE: RUN')
+      expect(rendered).to include('RUNNING')
       expect(rendered).to include('NET:')
       expect(rendered).to include('123.45')
       expect(rendered).to include('BAL:')
@@ -80,16 +90,17 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       expect(rendered).to include('LAST EVT:')
     end
 
-    it 'shows LAT after FEED on the first status line' do
+    it 'shows WS pill after FEED on the first status line' do
       panel.render
-      rendered = output.string
-      expect(rendered.index('FEED:')).to be < rendered.index('LAT:')
+      rendered = plain(output.string)
+      expect(rendered.index('FEED:')).to be < rendered.index('LEV:')
+      expect(rendered).to include('WS:')
     end
 
     it 'renders SCALP when config is in scalper mode' do
       allow(config).to receive(:scalper_mode?).and_return(true)
       panel.render
-      expect(output.string).to include('SCALP')
+      expect(plain(output.string)).to include('SCALP')
     end
 
     it 'shows EXE·OFF when live and place_orders is false' do
@@ -99,8 +110,9 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       allow(eng).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
       allow(eng).to receive(:ws_feed_stale?).and_return(false)
       allow(eng).to receive(:engine_loop_crashed?).and_return(false)
+      allow(eng).to receive(:tui_focus_pair=)
       described_class.new(engine: eng, origin_row: 0, output: output).render
-      rendered = output.string
+      rendered = plain(output.string)
       expect(rendered).to include('LIVE')
       expect(rendered).to include('EXE·OFF')
     end
@@ -113,15 +125,22 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       allow(eng_on).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
       allow(eng_on).to receive(:ws_feed_stale?).and_return(false)
       allow(eng_on).to receive(:engine_loop_crashed?).and_return(false)
+      allow(eng_on).to receive(:tui_focus_pair=)
       described_class.new(engine: eng_on, origin_row: 0, output: output).render
-      expect(output.string).to include('REGIME·ON')
+      expect(plain(output.string)).to include('REGIME·ON')
     end
 
-    it 'shows LEV from max_leverage when order_defaults omit leverage (nil.to_i is not 0)' do
-      allow(config).to receive(:execution).and_return({ order_defaults: { margin_currency_short_name: 'USDT' } })
-      allow(config).to receive(:risk).and_return({ max_daily_loss_inr: 1500, max_leverage: 10 })
-      panel.render
-      expect(output.string).to match(/LEV:.*10x/m)
+    it 'shows LEV from snapshot.live_tui_metrics[:leverage_label]' do
+      snap_lev = CoindcxBot::Core::Engine::Snapshot.new(
+        **snapshot.to_h.merge(live_tui_metrics: { leverage_label: '10x' })
+      )
+      eng_lev = double('engine', snapshot: snap_lev, broker: broker_double, config: config)
+      allow(eng_lev).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
+      allow(eng_lev).to receive(:ws_feed_stale?).and_return(false)
+      allow(eng_lev).to receive(:engine_loop_crashed?).and_return(false)
+      allow(eng_lev).to receive(:tui_focus_pair=)
+      described_class.new(engine: eng_lev, origin_row: 0, output: output).render
+      expect(plain(output.string)).to match(/LEV:.*10x/m)
     end
 
     context 'when engine is paused with kill switch' do
@@ -155,9 +174,8 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
 
       it 'renders warning indicators' do
         panel.render
-        rendered = output.string
+        rendered = plain(output.string)
 
-        expect(rendered).to include('LIVE')
         expect(rendered).to include('PAUSED')
         expect(rendered).to include('KILL')
         expect(rendered).to include('STALE')
@@ -219,12 +237,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         expect(rendered).not_to include('BAL:')
       end
 
-      it 'shows NET as exchange REAL+UNREAL USDT at inr_per_usdt (not journal)' do
+      it 'shows NET as exchange unrealized USDT at inr_per_usdt (not journal)' do
         panel.render
-        # (0 + (-41.82)) * 83 = -3471.06
+        # (-41.82) * 83 = -3471.06
         expect(output.string).to include('3471.06')
-        expect(output.string).to include('REAL USDT:')
-        expect(output.string).to include('0.00')
+        expect(output.string).to include('UNREAL USDT:')
+        expect(output.string).to include('41.82')
       end
     end
 
@@ -268,6 +286,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         allow(eng).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
         allow(eng).to receive(:ws_feed_stale?).and_return(false)
         allow(eng).to receive(:engine_loop_crashed?).and_return(false)
+        allow(eng).to receive(:tui_focus_pair=)
         described_class.new(engine: eng, origin_row: 0, output: output).render
         rendered = output.string
         expect(rendered).to include('EQ:')
@@ -315,13 +334,12 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
         )
       end
 
-      it 'renders USDT realized/unrealized, BAL from capital plus (realized+unrealized) at inr_per_usdt, DD and risk' do
+      it 'renders USDT unrealized, BAL from capital plus (realized+unrealized) at inr_per_usdt, DD and risk' do
         panel.render
         rendered = output.string
 
-        expect(rendered).to include('REAL USDT:')
-        expect(rendered).to include('15.50')
         expect(rendered).to include('UNREAL USDT:')
+        expect(rendered).to include('3.20')
         # 100_000 + (15.5 + 3.2) * 83 = 101_552.10
         expect(rendered).to include('101552.10')
         expect(rendered).to include('DD:')
@@ -331,11 +349,11 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
   end
 
   describe '#row_count' do
-    it 'returns 4 without live futures account strip' do
-      expect(panel.row_count).to eq(4)
+    it 'returns 5 without live futures account strip' do
+      expect(panel.row_count).to eq(5)
     end
 
-    it 'returns 5 when live futures EQ/WAL/UR strip is active' do
+    it 'returns 6 when live futures EQ/WAL/UR strip is active' do
       snap = CoindcxBot::Core::Engine::Snapshot.new(
         pairs: %w[B-ETH_USDT],
         ticks: {},
@@ -370,7 +388,7 @@ RSpec.describe CoindcxBot::Tui::Panels::HeaderPanel do
       allow(eng).to receive(:inr_per_usdt).and_return(BigDecimal('83'))
       allow(eng).to receive(:ws_feed_stale?).and_return(false)
       allow(eng).to receive(:engine_loop_crashed?).and_return(false)
-      expect(described_class.new(engine: eng, origin_row: 0, output: output).row_count).to eq(5)
+      expect(described_class.new(engine: eng, origin_row: 0, output: output).row_count).to eq(6)
     end
   end
 end

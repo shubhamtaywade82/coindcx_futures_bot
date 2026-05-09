@@ -88,6 +88,8 @@ module CoindcxBot
         @last_frames[key] = frame
         real_out.print(frame)
         real_out.flush
+      rescue StandardError => e
+        warn "[RenderLoop:panel] #{panel.class}: #{e.class}: #{e.message}"
       end
 
       def wait_for_tick_or_interval

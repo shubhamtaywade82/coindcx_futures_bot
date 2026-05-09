@@ -25,58 +25,59 @@ module CoindcxBot
           @cursor = TTY::Cursor
         end
 
-      def render
-        snap = @engine.snapshot
-        vm = desk_vm(snap)
-        w = term_width
-        strip = show_live_futures_account_strip?(snap)
+        def render
+          snap = @engine.snapshot
+          vm = desk_vm(snap)
+          w = term_width
+          strip = show_live_futures_account_strip?(snap)
 
-        buf = StringIO.new
-        buf << @cursor.save
-        r = @row
+          buf = StringIO.new
+          buf << @cursor.save
+          r = @row
 
-        # Top border with title
-        title = ui_header(" SYSTEM STATUS ")
-        rem = w - 2 - visible_len(title)
-        l1 = (rem / 2).clamp(1, w)
-        l2 = (rem - l1).clamp(1, w)
-        buf << move(r) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
-        r += 1
+          # Top border with title
+          title = ui_header(" SYSTEM STATUS ")
+          rem = w - 2 - visible_len(title)
+          l1 = (rem / 2).clamp(1, w)
+          l2 = (rem - l1).clamp(1, w)
+          buf << move(r) << ui_border("┌#{'─' * l1}#{title}#{'─' * l2}┐")
+          r += 1
 
-        # System row
-        buf << move(r) << ui_border("│ ") << pad_visible(line_mode_engine_kill_ws_lat_feed(snap, w - 4), w - 4) << ui_border(" │")
-        r += 1
+          # System row
+          buf << move(r) << ui_border('│ ') << pad_visible(line_mode_engine_kill_ws_lat_feed(snap, w - 4), w - 4) << ui_border(' │')
+          r += 1
 
-        # Set engine focus for regime AI strip overlay context
-        @engine.tui_focus_pair = @focus_pair_proc&.call
+          # Set engine focus for regime AI strip overlay context
+          @engine.tui_focus_pair = @focus_pair_proc&.call
 
-        # Account row (Reserving space for stability)
-        if strip
-          buf << move(r) << ui_border("│ ") << pad_visible(line_live_equity_wallet_unreal(snap, w - 4), w - 4) << ui_border(" │")
-        else
-          buf << move(r) << ui_border("│ ") << pad_visible(muted(" (AWAITING ACCOUNT METRICS) "), w - 4) << ui_border(" │")
+          # Account row — only when live futures strip is active. No placeholder
+          # row when absent so the panel can reflow cleanly.
+          if strip
+            buf << move(r) << ui_border('│ ') << pad_visible(line_live_equity_wallet_unreal(snap, w - 4), w - 4) << ui_border(' │')
+            r += 1
+          end
+
+          # Balance & Risk row
+          buf << move(r) << ui_border('│ ') << pad_visible(line_balance_net_real_unreal_dd_risk(snap, vm, w - 4), w - 4) << ui_border(' │')
+          r += 1
+
+          # Stats row
+          buf << move(r) << ui_border('│ ') << pad_visible(line_pos_ord_err_last(snap, vm, w - 4), w - 4) << ui_border(' │')
+          r += 1
+
+          # Bottom border
+          buf << move(r) << ui_border("└#{'─' * (w - 2)}┘")
+          buf << @cursor.restore
+
+          @output.print buf.string
+          @output.flush
         end
-        r += 1
 
-        # Balance & Risk row
-        buf << move(r) << ui_border("│ ") << pad_visible(line_balance_net_real_unreal_dd_risk(snap, vm, w - 4), w - 4) << ui_border(" │")
-        r += 1
-
-        # Stats row
-        buf << move(r) << ui_border("│ ") << pad_visible(line_pos_ord_err_last(snap, vm, w - 4), w - 4) << ui_border(" │")
-        r += 1
-
-        # Bottom border
-        buf << move(r) << ui_border("└#{'─' * (w - 2)}┘")
-        buf << @cursor.restore
-
-        @output.print buf.string
-        @output.flush
-      end
-
-      def row_count
-        6
-      end
+        def row_count
+          snap = @engine.snapshot
+          # top border + system row + (optional EQ row) + balance row + stats row + bottom border
+          show_live_futures_account_strip?(snap) ? 6 : 5
+        end
 
         private
 
@@ -100,18 +101,21 @@ module CoindcxBot
         end
 
         def line_mode_engine_kill_ws_lat_feed(snap, w)
-          m = snap.dry_run ? 'PAPER' : 'LIVE'
-          m_clr =
-            if m == 'LIVE'
-              tag_live(m)
-            elsif m == 'PAUSED'
-              tag_warning(m)
+          m =
+            if snap.paused
+              'PAUSED'
             else
-              tag_neutral(m)
+              snap.dry_run ? 'PAPER' : 'LIVE'
+            end
+          m_clr =
+            case m
+            when 'LIVE'   then tag_live(m)
+            when 'PAUSED' then tag_warning(m)
+            else tag_neutral(m)
             end
 
           exe_clr = truthy?(snap.live_tui_metrics[:order_placement_enabled]) ? tag_accent('EXE·ON') : tag_neutral('EXE·OFF')
-          reg_clr = regime_color_label(snap.regime)
+          reg_clr = regime_header_fragment(snap) || regime_color_label(snap.regime)
           eng_clr = snap.running ? tag_live('RUNNING') : tag_critical('CRASHED')
           kill_clr = snap.kill_switch ? tag_critical('KILL: ON') : muted('KILL: OFF')
           ws_clr = ws_status_pill(snap.ws_last_tick_ms_ago)
@@ -120,9 +124,10 @@ module CoindcxBot
 
           parts = [
             m_clr, exe_clr, reg_clr, eng_clr, kill_clr, ws_clr, feed_clr,
+            trading_profile_fragment,
             "#{muted('FOCUS:')} #{focus_clr}",
-            "#{muted('LEV:')} #{gold(snap.live_tui_metrics[:leverage_label] || '—')}"
-          ]
+            "#{muted('LEV:')} #{gold(snap.live_tui_metrics[:leverage_label] || '—')}",
+          ].compact
           parts.join('  ')
         end
 
@@ -142,7 +147,6 @@ module CoindcxBot
               pm = snap.paper_metrics
               funding_s = pm[:total_funding_fees] ? "#{bold('FUND: ')}#{fmt_num(pm[:total_funding_fees])}" : nil
               parts = [
-                "#{bold('REAL USDT: ')}#{fmt_num(pm[:total_realized_pnl])}",
                 "#{bold('UNREAL USDT: ')}#{colored_num(pm[:unrealized_pnl])}",
                 funding_s,
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
@@ -150,17 +154,14 @@ module CoindcxBot
               ].compact.join(muted(' │ '))
             elsif live_tui_metrics?(snap)
               m = snap.live_tui_metrics
-              real = m[:realized_usdt] || BigDecimal('0')
               unreal = m[:unrealized_usdt] || BigDecimal('0')
               [
-                "#{bold('REAL USDT: ')}#{fmt_num(real)}",
                 "#{bold('UNREAL USDT: ')}#{colored_num(unreal)}",
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
               ].join(muted(' │ '))
             else
               [
-                muted('REAL USDT: —'),
                 muted('UNREAL USDT: —'),
                 "#{bold('DD: ')}#{fmt_dd(vm.drawdown_pct)}",
                 "#{bold('RISK: ')}#{color_risk_band(vm.risk_band)}"
@@ -169,7 +170,7 @@ module CoindcxBot
           join_compact(w, [bal, net, rest].compact)
         end
 
-        # Desk-wide daily PnL: live mirror uses **exchange REAL+UNREAL (USDT) × FX** (+DeskViewModel#daily_pnl_inr_for_desk+).
+        # Desk-wide daily PnL: live mirror uses **exchange unrealized USDT × FX** with wallet-backed equity (+DeskViewModel#daily_pnl_inr_for_desk+).
         def net_pnl_inr_for_header(_snap, vm)
           vm.daily_pnl_inr_for_desk
         end
