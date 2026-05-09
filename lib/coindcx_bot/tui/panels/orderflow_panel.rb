@@ -68,7 +68,8 @@ module CoindcxBot
             buf << move(@row + 2) << ui_border('│ ') << compose_row(walls_content, ai_lines[1], left_w, right_w) << ui_border(' │')
 
             # ── Event log label row ─────────────────────────────────────
-            buf << move(@row + 3) << ui_border('│ ') << compose_row(muted('Recent Events:'), muted('AI Analysis:'), left_w, right_w) << ui_border(' │')
+            legend = 'Recent Events: THRU=executed, CANCEL=pulled/requoted'
+            buf << move(@row + 3) << ui_border('│ ') << compose_row(muted(legend), muted('AI Analysis:'), left_w, right_w) << ui_border(' │')
 
             # ── Event log rows (pre-filtered, no gaps) ──────────────────
             MAX_LOG_SIZE.times do |i|
@@ -212,8 +213,8 @@ module CoindcxBot
               when :orderflow_spoof_activity
                 "SPOOF #{ev[:events].first[:side]} at #{ev[:events].first[:price]}"
               when :orderflow_liquidity_shift
-                pull = ev[:events].find { |e| e[:type].to_s.end_with?('pull') }
-                pull ? "PULL #{pull[:type].to_s.upcase} at #{pull[:price]}" : nil
+                shift = ev[:events].find { |event| event[:type].to_s.match?(/(pull|reduce)\z/) }
+                format_liquidity_shift_event(shift)
               end
 
             next unless text
@@ -261,6 +262,20 @@ module CoindcxBot
             else method(:muted)
             end
           "#{muted(time)} #{col.call(ev[:text])}"
+        end
+
+        def format_liquidity_shift_event(event)
+          return nil unless event
+
+          action = event[:type].to_s.upcase
+          price = event[:price]
+          classification = event[:classification].to_s.upcase
+          size = event[:size]
+          base = "#{action} at #{price}"
+          base = "#{base} (Vol: #{format('%.2f', size.to_f)})" if size
+          return base if classification.empty?
+
+          "#{base} · #{classification}"
         end
 
         def move(row)

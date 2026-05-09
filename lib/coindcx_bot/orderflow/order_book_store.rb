@@ -9,14 +9,18 @@ module CoindcxBot
       Diff = Struct.new(
         :bid_added,   # Hash{ price_str => Float } — new levels on bid side
         :bid_removed, # Hash{ price_str => Float } — gone levels on bid side
+        :bid_reduced, # Hash{ price_str => Float } — existing levels whose size decreased
         :ask_added,
         :ask_removed,
+        :ask_reduced,
         :timestamp,   # Float — Time.now.to_f at update
         keyword_init: true
       )
 
       EMPTY_DIFF = Diff.new(
-        bid_added: {}, bid_removed: {}, ask_added: {}, ask_removed: {}, timestamp: nil
+        bid_added: {}, bid_removed: {}, bid_reduced: {},
+        ask_added: {}, ask_removed: {}, ask_reduced: {},
+        timestamp: nil
       ).freeze
 
       def initialize
@@ -42,8 +46,10 @@ module CoindcxBot
           diff = Diff.new(
             bid_added:   added(prev_bids, new_bids),
             bid_removed: removed(prev_bids, new_bids),
+            bid_reduced: reduced(prev_bids, new_bids),
             ask_added:   added(prev_asks, new_asks),
             ask_removed: removed(prev_asks, new_asks),
+            ask_reduced: reduced(prev_asks, new_asks),
             timestamp:   now
           )
 
@@ -94,6 +100,18 @@ module CoindcxBot
 
       def removed(prev, curr)
         prev.reject { |k, _| curr.key?(k) }
+      end
+
+      def reduced(prev, curr)
+        prev.each_with_object({}) do |(price, previous_size), reduced_levels|
+          next unless curr.key?(price)
+
+          current_size = curr.fetch(price)
+          decrease = previous_size - current_size
+          next unless decrease.positive?
+
+          reduced_levels[price] = decrease
+        end
       end
     end
   end

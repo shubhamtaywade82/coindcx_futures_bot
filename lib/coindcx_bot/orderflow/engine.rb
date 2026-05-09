@@ -23,6 +23,8 @@ module CoindcxBot
       DEFAULT_SPOOF_THRESHOLD          = 10_000.0
       DEFAULT_SPOOF_MAX_DWELL_SECONDS  = 60.0
       DEFAULT_IMBALANCE_SPIKE_THRESHOLD = 0.25
+      DEFAULT_LIQUIDITY_CLASSIFICATION_WINDOW_MS = 750.0
+      DEFAULT_TRADE_THROUGH_VOLUME_RATIO = 0.6
 
       def initialize(bus:, config:, logger: nil)
         @bus                = bus
@@ -33,11 +35,14 @@ module CoindcxBot
         @recorder           = Recorder.new(config: config, logger: logger)
         @spoof_candidates   = Hash.new { |h, k| h[k] = {} }
         @spoof_mutex        = Mutex.new
+        @recent_trades      = Hash.new { |h, k| h[k] = [] }
+        @trades_mutex       = Mutex.new
       end
 
       # Called from the WS trade callback.
       def on_trade(trade)
         @recorder.record_trade(trade)
+        store_trade_for_liquidity_classification(trade)
         @absorption.on_trade(trade)
       rescue StandardError => e
         @logger&.warn("[orderflow:engine] trade error: #{e.message}")
@@ -105,8 +110,42 @@ module CoindcxBot
 
       def detect_liquidity_shift(pair, diff)
         events = []
-        diff.ask_removed.each { |p, s| events << { type: :ask_pull, price: p, size: s } }
-        diff.bid_removed.each { |p, s| events << { type: :bid_pull, price: p, size: s } }
+        diff.ask_removed.each do |price, size|
+          events << passive_liquidity_event(
+            event_type: :ask_pull,
+            pair: pair,
+            price: price,
+            size: size,
+            timestamp: diff.timestamp
+          )
+        end
+        diff.bid_removed.each do |price, size|
+          events << passive_liquidity_event(
+            event_type: :bid_pull,
+            pair: pair,
+            price: price,
+            size: size,
+            timestamp: diff.timestamp
+          )
+        end
+        diff.ask_reduced.each do |price, size|
+          events << passive_liquidity_event(
+            event_type: :ask_reduce,
+            pair: pair,
+            price: price,
+            size: size,
+            timestamp: diff.timestamp
+          )
+        end
+        diff.bid_reduced.each do |price, size|
+          events << passive_liquidity_event(
+            event_type: :bid_reduce,
+            pair: pair,
+            price: price,
+            size: size,
+            timestamp: diff.timestamp
+          )
+        end
         diff.ask_added.each   { |p, s| events << { type: :ask_add,  price: p, size: s } }
         diff.bid_added.each   { |p, s| events << { type: :bid_add,  price: p, size: s } }
         return nil if events.empty?
@@ -154,6 +193,97 @@ module CoindcxBot
         end
       end
 
+      def passive_liquidity_event(event_type:, pair:, price:, size:, timestamp:)
+        classification = classify_passive_liquidity_change(
+          pair: pair,
+          event_type: event_type,
+          price: price,
+          size: size,
+          timestamp: timestamp
+        )
+
+        { type: event_type, price: price, size: size, classification: classification }
+      end
+
+      def classify_passive_liquidity_change(pair:, event_type:, price:, size:, timestamp:)
+        side = aggressive_trade_side_for(event_type)
+        return :unknown unless side
+
+        matched_volume = matching_aggressive_volume(
+          pair: pair,
+          side: side,
+          price: price,
+          timestamp: timestamp
+        )
+
+        return :trade_through if matched_volume >= (size.to_f * trade_through_volume_ratio)
+
+        :cancel_or_requote
+      end
+
+      def aggressive_trade_side_for(event_type)
+        event_name = event_type.to_s
+        return :buy if event_name.start_with?('ask_')
+        return :sell if event_name.start_with?('bid_')
+
+        nil
+      end
+
+      def matching_aggressive_volume(pair:, side:, price:, timestamp:)
+        target_price = Float(price)
+        now_ms = timestamp.to_f * 1000.0
+        cutoff_ms = now_ms - liquidity_classification_window_ms
+
+        @trades_mutex.synchronize do
+          trades = @recent_trades[pair]
+          trades.sum do |trade|
+            next 0.0 if trade[:side] != side
+            next 0.0 if trade[:ts_ms] < cutoff_ms
+            next 0.0 unless prices_match?(trade[:price], target_price)
+
+            trade[:size]
+          end
+        end
+      rescue ArgumentError, TypeError
+        0.0
+      end
+
+      def prices_match?(left, right)
+        (left.to_f - right.to_f).abs <= 1e-8
+      end
+
+      def store_trade_for_liquidity_classification(trade)
+        pair = trade[:pair].to_s
+        trade_entry = {
+          price: Float(trade[:price]),
+          size: Float(trade[:size]),
+          side: normalize_trade_side(trade[:side]),
+          ts_ms: normalize_trade_timestamp_ms(trade[:ts])
+        }
+
+        @trades_mutex.synchronize do
+          entries = @recent_trades[pair]
+          entries << trade_entry
+          cutoff_ms = trade_entry[:ts_ms] - (liquidity_classification_window_ms * 4)
+          entries.reject! { |row| row[:ts_ms] < cutoff_ms }
+        end
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def normalize_trade_side(raw_side)
+        side = raw_side.to_s.downcase
+        return :buy if side == 'buy'
+        return :sell if side == 'sell'
+
+        :unknown
+      end
+
+      def normalize_trade_timestamp_ms(raw_ts)
+        ts = Float(raw_ts || 0.0)
+        ts > 1_000_000_000_000 ? ts : ts * 1000.0
+      end
+
       def section
         @config.respond_to?(:orderflow_section) ? @config.orderflow_section : {}
       end
@@ -184,6 +314,18 @@ module CoindcxBot
         Float(section.fetch(:spoof_max_dwell_seconds, DEFAULT_SPOOF_MAX_DWELL_SECONDS))
       rescue ArgumentError, TypeError
         DEFAULT_SPOOF_MAX_DWELL_SECONDS
+      end
+
+      def liquidity_classification_window_ms
+        Float(section.fetch(:liquidity_classification_window_ms, DEFAULT_LIQUIDITY_CLASSIFICATION_WINDOW_MS))
+      rescue ArgumentError, TypeError
+        DEFAULT_LIQUIDITY_CLASSIFICATION_WINDOW_MS
+      end
+
+      def trade_through_volume_ratio
+        Float(section.fetch(:trade_through_volume_ratio, DEFAULT_TRADE_THROUGH_VOLUME_RATIO))
+      rescue ArgumentError, TypeError
+        DEFAULT_TRADE_THROUGH_VOLUME_RATIO
       end
     end
   end
