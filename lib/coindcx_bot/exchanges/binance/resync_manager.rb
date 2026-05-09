@@ -49,6 +49,7 @@ module CoindcxBot
           @mutex = Mutex.new
           @state = :idle
           @buffer = []
+          @snapshot_last_update_id = nil
         end
 
         attr_reader :state
@@ -73,27 +74,34 @@ module CoindcxBot
         # Pure: replays buffered events onto a fresh REST snapshot. Mutates @book.
         # @raise [SequenceValidator::Desync] when the first relevant event does not span the snapshot id.
         def replay_buffer!(buffered_events:, snapshot:)
+          snap_u = Integer(snapshot.last_update_id)
+          @snapshot_last_update_id = snap_u
           @book.replace!(
-            last_update_id: snapshot.last_update_id,
+            last_update_id: snap_u,
             bids: snapshot.bids,
             asks: snapshot.asks
           )
-          relevant = drop_pre_snapshot(buffered_events, snapshot.last_update_id)
-          return self if relevant.empty?
+          tail = aligned_tail_after_snapshot(buffered_events, snap_u)
+          return self if tail.nil?
 
-          apply_first_event(relevant.first, snapshot.last_update_id)
-          relevant.drop(1).each { |event| step!(event) }
+          apply_first_event(tail.first, snap_u)
+          tail.drop(1).each { |event| step!(event) }
           self
         end
 
-        # Pure: validates continuity then applies a single live event.
-        # @raise [SequenceValidator::Desync] when pu != book.last_update_id.
+        # Pure: applies one diff — either the first after a REST snapshot (U<=L+1<=u)
+        # while the book is still at L, or a normal continuation (pu == last u).
+        # @raise [SequenceValidator::Desync] on misalignment or continuity gap.
         def step!(event)
-          @validator.validate_continuity!(
-            prev_u: event.prev_u,
-            last_applied_u: @book.last_update_id
-          )
-          @book.apply_diff!(final_u: event.final_u, bids: event.bids, asks: event.asks)
+          if awaiting_first_diff_after_snapshot?
+            apply_first_event(event, @snapshot_last_update_id)
+          else
+            @validator.validate_continuity!(
+              prev_u: event.prev_u,
+              last_applied_u: @book.last_update_id
+            )
+            @book.apply_diff!(final_u: event.final_u, bids: event.bids, asks: event.asks)
+          end
           self
         end
 
@@ -110,6 +118,8 @@ module CoindcxBot
         end
 
         def safe_step(event)
+          return if stale_live_depth_event?(event)
+
           step!(event)
         rescue SequenceValidator::Desync => e
           log(:warn, "live continuity gap: #{e.message}")
@@ -150,8 +160,40 @@ module CoindcxBot
           end
         end
 
-        def drop_pre_snapshot(events, snapshot_id)
-          Array(events).reject { |event| event.final_u <= snapshot_id }
+        # Per Binance USDⓈ-M diff depth: drop buffered events with u < L (strict).
+        # Then take the first event with U <= L+1 <= u; if buffered events exist but
+        # none qualify, raise Desync so #start retries alignment.
+        def aligned_tail_after_snapshot(events, snapshot_id)
+          snap_u = Integer(snapshot_id)
+          candidates = Array(events).reject { |event| event.final_u < snap_u }
+          idx = candidates.index { |event| event_spans_snapshot_boundary?(event, snap_u) }
+          if idx.nil?
+            if candidates.any?
+              raise SequenceValidator::Desync,
+                    "no buffered event spans snapshot boundary for lastUpdateId=#{snap_u}"
+            end
+
+            return nil
+          end
+
+          candidates[idx..]
+        end
+
+        def event_spans_snapshot_boundary?(event, snapshot_id)
+          boundary = Integer(snapshot_id) + 1
+          event.first_u <= boundary && event.final_u >= boundary
+        end
+
+        def awaiting_first_diff_after_snapshot?
+          @snapshot_last_update_id && @book.last_update_id == @snapshot_last_update_id
+        end
+
+        def stale_live_depth_event?(event)
+          return false if event.prev_u.nil?
+          return false unless @book.last_update_id
+          return false if awaiting_first_diff_after_snapshot?
+
+          event.prev_u < @book.last_update_id
         end
 
         def apply_first_event(event, snapshot_id)

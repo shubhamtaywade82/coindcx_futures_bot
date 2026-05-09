@@ -4,7 +4,7 @@
 # Phase 1 Binance Futures depth shadow runner.
 #
 # Connects to wss://fstream.binance.com for a single Binance futures symbol
-# (default BTCUSDT), reconstructs the L2 book locally via REST snapshot +
+# (default SOLUSDT), reconstructs the L2 book locally via REST snapshot +
 # diff merge, and prints the top-5 levels every 5 seconds.
 #
 # Strictly read-only: no Orderflow::Engine wiring, no event-bus emission,
@@ -12,8 +12,8 @@
 # under live load before enabling Phase 2 (engine ingestion).
 #
 # Usage:
-#   bin/binance_shadow                 # BTCUSDT
-#   bin/binance_shadow ETHUSDT         # any Binance USDⓈ-M futures symbol
+#   bin/binance_shadow                 # SOLUSDT
+#   bin/binance_shadow BTCUSDT         # any Binance USDⓈ-M futures symbol
 #   PRINT_INTERVAL_SECONDS=2 bin/binance_shadow
 
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
@@ -25,14 +25,15 @@ require 'coindcx_bot'
 module BinanceShadowRunner
   module_function
 
-  DEFAULT_SYMBOL = 'BTCUSDT'
+  DEFAULT_SYMBOL = 'SOLUSDT'
   DEFAULT_PRINT_INTERVAL_SECONDS = 5
-  DEFAULT_DEPTH_LEVELS = 5
+  DEFAULT_DEPTH_LEVELS = 20
 
   def run(argv)
     symbol = (argv.first || DEFAULT_SYMBOL).upcase
     interval = Integer(ENV.fetch('PRINT_INTERVAL_SECONDS', DEFAULT_PRINT_INTERVAL_SECONDS))
-    depth = Integer(ENV.fetch('TOP_LEVELS', DEFAULT_DEPTH_LEVELS))
+    raw_depth = ENV.fetch('TOP_LEVELS', DEFAULT_DEPTH_LEVELS.to_s).to_s
+    depth = raw_depth.casecmp('all').zero? ? :all : Integer(raw_depth)
 
     logger = build_logger
     book = CoindcxBot::Exchanges::Binance::LocalBook.new
@@ -89,11 +90,12 @@ module BinanceShadowRunner
   end
 
   def format_book(symbol:, book:, depth:)
+    limit = depth == :all ? 1_000_000 : depth
     rows = []
     rows << "[binance.shadow] #{symbol} last_update_id=#{book.last_update_id} ts=#{Time.now.utc.iso8601(3)}"
-    book.top_asks(depth).reverse_each { |(price, qty)| rows << "  ASK #{price.to_s('F').rjust(14)}  #{qty.to_s('F')}" }
+    book.top_asks(limit).reverse_each { |(price, qty)| rows << "  ASK #{price.to_s('F').rjust(14)}  #{qty.to_s('F')}" }
     rows << '  ----'
-    book.top_bids(depth).each { |(price, qty)| rows << "  BID #{price.to_s('F').rjust(14)}  #{qty.to_s('F')}" }
+    book.top_bids(limit).each { |(price, qty)| rows << "  BID #{price.to_s('F').rjust(14)}  #{qty.to_s('F')}" }
     rows.join("\n")
   end
 end

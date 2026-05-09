@@ -60,7 +60,7 @@ RSpec.describe CoindcxBot::Exchanges::Binance::ResyncManager do
   end
 
   describe '#replay_buffer!' do
-    it 'discards events whose final_u is at or before the snapshot id' do
+    it 'discards events whose final_u is strictly before the snapshot id (u < L)' do
       stale = event(first_u: 50, final_u: 60, prev_u: nil, bids: [['100', '1.0']])
       first_live = event(first_u: 99, final_u: 105, prev_u: 95, bids: [['100', '5.0']])
 
@@ -73,7 +73,20 @@ RSpec.describe CoindcxBot::Exchanges::Binance::ResyncManager do
       expect(book.best_bid).to eq([bd('100'), bd('5.0')])
     end
 
-    it 'raises Desync when the first relevant event starts after L+1' do
+    it 'skips buffered prefix that ends at L without covering L+1, then applies the first spanning diff' do
+      noise = event(first_u: 90, final_u: 100, prev_u: 50, bids: [['100', '1.0']])
+      first = event(first_u: 99, final_u: 105, prev_u: 95, bids: [['100', '5.0']])
+
+      manager.replay_buffer!(
+        buffered_events: [noise, first],
+        snapshot: snapshot(last_update_id: 100, bids: [['100', '1.0']])
+      )
+
+      expect(book.last_update_id).to eq(105)
+      expect(book.best_bid).to eq([bd('100'), bd('5.0')])
+    end
+
+    it 'raises Desync when buffered events exist but none span L+1' do
       gap = event(first_u: 110, final_u: 120, prev_u: nil)
 
       expect do
@@ -81,7 +94,10 @@ RSpec.describe CoindcxBot::Exchanges::Binance::ResyncManager do
           buffered_events: [gap],
           snapshot: snapshot(last_update_id: 100)
         )
-      end.to raise_error(CoindcxBot::Exchanges::Binance::SequenceValidator::Desync, /U=110/)
+      end.to raise_error(
+        CoindcxBot::Exchanges::Binance::SequenceValidator::Desync,
+        /spans snapshot boundary/
+      )
     end
 
     it 'raises Desync when subsequent events have a continuity gap' do
@@ -103,6 +119,28 @@ RSpec.describe CoindcxBot::Exchanges::Binance::ResyncManager do
         buffered_events: [event(first_u: 99, final_u: 105, prev_u: 95)],
         snapshot: snapshot(last_update_id: 100)
       )
+    end
+
+    context 'when the book is still at REST snapshot id L (no diff applied in replay)' do
+      before do
+        allow(rest).to receive(:depth).and_return(snapshot(last_update_id: 100, bids: [['100', '1.0']]))
+        cycle_scripts << -> { [] }
+        manager.start
+        expect(book.last_update_id).to eq(100)
+      end
+
+      it 'applies the first live diff using U<=L+1<=u even when pu is far below L' do
+        live = event(
+          first_u: 99,
+          final_u: 105,
+          prev_u: 50,
+          bids: [['100', '5.0']]
+        )
+        manager.send(:handle_ws_event, live)
+
+        expect(book.last_update_id).to eq(105)
+        expect(book.best_bid).to eq([bd('100'), bd('5.0')])
+      end
     end
 
     it 'applies the next event when pu matches last_applied_u' do
@@ -144,6 +182,17 @@ RSpec.describe CoindcxBot::Exchanges::Binance::ResyncManager do
 
       expect(book.last_update_id).to eq(110)
       expect(book.best_ask).to eq([bd('200'), bd('7.0')])
+    end
+
+    it 'drops stale live diffs whose pu trails the last applied final id without desyncing' do
+      allow(rest).to receive(:depth).and_return(snapshot(last_update_id: 100))
+      cycle_scripts << -> { aligned_event }
+      manager.start
+
+      ws.push_event(event(first_u: 106, final_u: 110, prev_u: 105))
+      expect(book.last_update_id).to eq(110)
+      ws.push_event(event(first_u: 111, final_u: 112, prev_u: 50))
+      expect(book.last_update_id).to eq(110)
     end
 
     it 'raises GaveUp after exhausting alignment retries' do

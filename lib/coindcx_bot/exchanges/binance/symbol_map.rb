@@ -8,6 +8,7 @@ module CoindcxBot
       module SymbolMap
         BINANCE_TO_COINDCX = {
           'BTCUSDT' => 'B-BTC_USDT',
+          'SOLUSDT' => 'B-SOL_USDT',
         }.freeze
 
         COINDCX_TO_BINANCE = BINANCE_TO_COINDCX.invert.freeze
