@@ -2,6 +2,7 @@
 
 require 'json'
 require_relative '../smc_setup/json_slice'
+require_relative '../ollama_chat_fallback'
 
 module CoindcxBot
   module Regime
@@ -64,12 +65,22 @@ module CoindcxBot
           { role: 'user', content: build_user_message(context) }
         ]
         model = resolved_model
-        resp = chat_client.chat(
+        opts = { temperature: @config.regime_ai_temperature }
+        resp = OllamaChatFallback.chat_with_local_fallback(
+          logger: @logger,
+          log_tag: 'regime_ai',
           messages: messages,
-          model: model,
           format: 'json',
           stream: false,
-          options: { temperature: @config.regime_ai_temperature }
+          options: opts,
+          primary_client: chat_client,
+          primary_model: model,
+          primary_base_url: @config.regime_ai_ollama_base_url,
+          fallback_base_url: @config.regime_ai_fallback_ollama_base_url,
+          fallback_model: @config.regime_ai_fallback_model,
+          fallback_api_key: @config.regime_ai_fallback_ollama_api_key,
+          fallback_timeout: @config.regime_ai_timeout_seconds,
+          fallback_temperature: @config.regime_ai_temperature
         )
         raw = self.class.scrub_json_string(resp.content.to_s)
         hash = parse_response_for_primary_pair(raw, context)

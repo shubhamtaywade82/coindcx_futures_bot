@@ -2,6 +2,7 @@
 
 require 'json'
 require_relative 'json_slice'
+require_relative '../ollama_chat_fallback'
 
 module CoindcxBot
   module SmcSetup
@@ -27,12 +28,22 @@ module CoindcxBot
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: build_user_payload(rec, bar, bars_json, ohlcv_features) }
         ]
-        resp = chat_client.chat(
+        opts = { temperature: @config.smc_setup_temperature }
+        resp = OllamaChatFallback.chat_with_local_fallback(
+          logger: @logger,
+          log_tag: 'smc_setup:gatekeeper',
           messages: messages,
-          model: resolved_model,
           format: 'json',
           stream: false,
-          options: { temperature: @config.smc_setup_temperature }
+          options: opts,
+          primary_client: chat_client,
+          primary_model: resolved_model,
+          primary_base_url: @config.smc_setup_ollama_base_url,
+          fallback_base_url: @config.smc_setup_fallback_ollama_base_url,
+          fallback_model: @config.smc_setup_fallback_model,
+          fallback_api_key: @config.smc_setup_fallback_ollama_api_key,
+          fallback_timeout: @config.smc_setup_timeout_seconds,
+          fallback_temperature: @config.smc_setup_temperature
         )
         raw = resp.content.to_s
         h = JsonSlice.parse_object(raw)

@@ -183,8 +183,12 @@ smc_setup:
   lifecycle_enabled: true  # time expiry + optional no_trade_zone / invalidation_level from planner JSON
   model: llama3.2:3b
   ollama_base_url: http://127.0.0.1:11434
+  # When primary (e.g. cloud) is down, planner retries here — defaults below if omitted.
+  ollama_fallback_base_url: http://127.0.0.1:11434
+  ollama_fallback_model: llama3.2:3b
   timeout_seconds: 90
-  poll_interval_seconds: 120
+  planner_interval_seconds: 1800 # 30 min between Ollama planner calls (cloud model is expensive)
+  retry_attempts: 1 # cloud already slow; retries amplify quota burn
   max_active_setups_per_pair: 3
   planner_max_price_deviation_pct: 5.0 # reject Ollama setups whose prices drift > N% from current LTP
 
@@ -212,13 +216,15 @@ regime:
     mode: tui_narrative # output: TUI narrative strip (not trade gating)
     model: llama3.2:3b
     ollama_base_url: http://127.0.0.1:11434
+    ollama_fallback_base_url: http://127.0.0.1:11434
+    ollama_fallback_model: llama3.2:3b
     timeout_seconds: 90
-    min_interval_seconds: 180 # minimum seconds between Ollama calls per pair
+    min_interval_seconds: 300 # 5 min between Ollama calls (engine also skips when fingerprint unchanged)
     bars_per_pair: 24 # recent bars sent in prompt context
     max_pairs: 8 # cap on concurrent pairs in a single narrative batch
     temperature: 0.15 # low temperature for consistent regime labels
     use_retry_middleware: true
-    retry_attempts: 3
+    retry_attempts: 1 # one shot per cycle; engine retries on the next throttle window
 
   risk:
     enabled: true

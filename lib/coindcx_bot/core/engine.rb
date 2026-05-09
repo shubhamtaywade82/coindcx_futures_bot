@@ -108,8 +108,14 @@ module CoindcxBot
         @analysis_last_hmm_state = {}
         @analysis_price_rule_zone = {}
         @price_cross_cooldown = Alerts::PriceCrossCooldown.new
+        @ai_throttle_store = Persistence::AiThrottleStore.new(@journal)
         @regime_ai_mutex = Mutex.new
-        @regime_ai_state = { updated_at: nil, payload: nil, error: nil }
+        @regime_ai_state = {
+          updated_at: @ai_throttle_store.regime_ai_updated_at,
+          payload: nil,
+          error: nil,
+          fingerprint: nil
+        }
         @regime_ai_brain = nil
         @hmm_runtime = Regime::HmmRuntime.new(config: @config, logger: @logger) if @config.regime_hmm_enabled?
         @ml_runtime = Regime::MlRuntime.new(config: @config, logger: @logger) if @config.regime_ml_enabled?
@@ -134,7 +140,11 @@ module CoindcxBot
         @smc_setup_store = nil
         @smc_setup_eval = nil
         @smc_setup_planner = nil
-        @smc_setup_planner_state = { updated_at: nil, error: nil }
+        @smc_setup_planner_state = {
+          updated_at: @ai_throttle_store.smc_planner_updated_at,
+          error: nil,
+          fingerprint: nil
+        }
         @smc_setup_planner_mutex = Mutex.new
         @smc_setup_planner_running = false
         @regime_ai_running = false
@@ -325,10 +335,7 @@ module CoindcxBot
         return unless @config.regime_ai_enabled?
 
         now = Time.now
-        @regime_ai_mutex.synchronize do
-          last = @regime_ai_state[:updated_at]
-          return if last && (now - last) < @config.regime_ai_min_interval_seconds
-        end
+        return if regime_ai_throttle_active?(now)
 
         already_running = @regime_ai_thread_mutex.synchronize do
           return if @regime_ai_running
@@ -346,15 +353,63 @@ module CoindcxBot
           return
         end
 
+        fp = regime_ai_fingerprint(ctx)
+        if regime_ai_skip_unchanged?(fp, now)
+          @regime_ai_thread_mutex.synchronize { @regime_ai_running = false }
+          return
+        end
+
         Thread.new do
           Thread.current.name = 'regime_ai'
-          run_regime_ai_sync(ctx, now)
+          run_regime_ai_sync(ctx, now, fp)
         ensure
           @regime_ai_thread_mutex.synchronize { @regime_ai_running = false }
         end
       end
 
-      def run_regime_ai_sync(ctx, started_at)
+      def regime_ai_throttle_active?(now)
+        @regime_ai_mutex.synchronize do
+          last = @regime_ai_state[:updated_at]
+          return false unless last
+
+          (now - last) < @config.regime_ai_min_interval_seconds
+        end
+      end
+
+      # Returns true when the AI inputs match the last successful call. Bumps
+      # updated_at so the throttle window restarts and we don't recheck every tick.
+      def regime_ai_skip_unchanged?(fingerprint, now)
+        skipped =
+          @regime_ai_mutex.synchronize do
+            next false if @regime_ai_state[:fingerprint].nil?
+            next false if @regime_ai_state[:fingerprint] != fingerprint
+
+            @regime_ai_state[:updated_at] = now
+            true
+          end
+        @ai_throttle_store.write_regime_ai_updated_at(now) if skipped
+        skipped
+      end
+
+      def regime_ai_fingerprint(ctx)
+        [
+          last_bar_timestamps_for(Array(ctx[:pairs])),
+          hmm_state_ids(ctx[:hmm]),
+          @regime_ai_mutex.synchronize { @regime_ai_state.dig(:payload, :regime_label) }
+        ]
+      end
+
+      def last_bar_timestamps_for(pairs)
+        pairs.to_h { |pair| [pair, @candles_exec[pair]&.last&.time] }
+      end
+
+      def hmm_state_ids(hmm_context)
+        return {} unless hmm_context.is_a?(Hash)
+
+        hmm_context.transform_values { |h| h.is_a?(Hash) && (h[:state_id] || h['state_id']) }
+      end
+
+      def run_regime_ai_sync(ctx, started_at, fingerprint)
         prev_payload = @regime_ai_mutex.synchronize { @regime_ai_state[:payload] }
         brain = (@regime_ai_brain ||= Regime::AiBrain.new(config: @config, logger: @logger))
         res = brain.analyze!(ctx)
@@ -363,11 +418,13 @@ module CoindcxBot
           if res.ok && res.payload
             @regime_ai_state[:payload] = res.payload
             @regime_ai_state[:error] = nil
+            @regime_ai_state[:fingerprint] = fingerprint
           else
             @regime_ai_state[:payload] = nil
             @regime_ai_state[:error] = res.error_message
           end
         end
+        @ai_throttle_store.write_regime_ai_updated_at(started_at)
         maybe_log_regime_ai_transition!(prev_payload, res.payload) if res.ok && res.payload.is_a?(Hash)
       rescue StandardError => e
         @logger&.warn("[regime_ai] #{e.class}: #{e.message}")
@@ -566,8 +623,7 @@ module CoindcxBot
         return unless @smc_setup_store
 
         now = Time.now
-        last = @smc_setup_planner_state[:updated_at]
-        return if last && (now - last) < @config.smc_setup_planner_interval_seconds
+        return if smc_planner_throttle_active?(now)
 
         already_running = @smc_setup_planner_mutex.synchronize do
           return if @smc_setup_planner_running
@@ -582,18 +638,50 @@ module CoindcxBot
           return
         end
 
+        fp = smc_planner_fingerprint(ctx)
+        if smc_planner_skip_unchanged?(fp, now)
+          @smc_setup_planner_mutex.synchronize { @smc_setup_planner_running = false }
+          return
+        end
+
         Thread.new do
           Thread.current.name = 'smc_planner'
-          run_smc_planner_sync(ctx, now)
+          run_smc_planner_sync(ctx, now, fp)
         ensure
           @smc_setup_planner_mutex.synchronize { @smc_setup_planner_running = false }
         end
       end
 
-      def run_smc_planner_sync(ctx, started_at)
+      def smc_planner_throttle_active?(now)
+        last = @smc_setup_planner_state[:updated_at]
+        return false unless last
+
+        (now - last) < @config.smc_setup_planner_interval_seconds
+      end
+
+      def smc_planner_skip_unchanged?(fingerprint, now)
+        return false if @smc_setup_planner_state[:fingerprint].nil?
+        return false if @smc_setup_planner_state[:fingerprint] != fingerprint
+
+        @smc_setup_planner_state[:updated_at] = now
+        @ai_throttle_store.write_smc_planner_updated_at(now)
+        true
+      end
+
+      def smc_planner_fingerprint(ctx)
+        [
+          last_bar_timestamps_for(Array(ctx[:pairs])),
+          hmm_state_ids(@hmm_runtime&.hmm_context_for_ai),
+          @regime_ai_mutex.synchronize { @regime_ai_state.dig(:payload, :regime_label) }
+        ]
+      end
+
+      def run_smc_planner_sync(ctx, started_at, fingerprint)
         brain = (@smc_setup_planner ||= SmcSetup::PlannerBrain.new(config: @config, logger: @logger))
         res = brain.plan!(ctx)
         @smc_setup_planner_state[:updated_at] = started_at
+        @smc_setup_planner_state[:fingerprint] = fingerprint if res.ok
+        @ai_throttle_store.write_smc_planner_updated_at(started_at)
         if res.ok && res.payload
           begin
             @smc_setup_store.upsert_from_hash!(
