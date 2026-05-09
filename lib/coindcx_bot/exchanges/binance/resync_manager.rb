@@ -33,7 +33,8 @@ module CoindcxBot
           depth_limit: DEFAULT_DEPTH_LIMIT,
           buffer_warmup_seconds: DEFAULT_BUFFER_WARMUP_SECONDS,
           retry_backoff_seconds: DEFAULT_RETRY_BACKOFF_SECONDS,
-          sleeper: ->(seconds) { sleep(seconds) }
+          sleeper: ->(seconds) { sleep(seconds) },
+          after_apply: nil
         )
           @symbol = symbol
           @rest = rest
@@ -46,6 +47,7 @@ module CoindcxBot
           @buffer_warmup_seconds = buffer_warmup_seconds
           @retry_backoff_seconds = retry_backoff_seconds
           @sleeper = sleeper
+          @after_apply = after_apply
           @mutex = Mutex.new
           @state = :idle
           @buffer = []
@@ -53,6 +55,10 @@ module CoindcxBot
         end
 
         attr_reader :state
+
+        # Optional hook invoked after each successfully applied depth event (live + replay).
+        # Signature: +(binance_symbol, local_book, depth_event)+ — runs outside ResyncManager's buffer mutex.
+        attr_writer :after_apply
 
         # Public: full lifecycle. Connects WS, buffers, fetches snapshot,
         # replays, transitions to live. Retries the alignment phase up to
@@ -84,8 +90,7 @@ module CoindcxBot
           tail = aligned_tail_after_snapshot(buffered_events, snap_u)
           return self if tail.nil?
 
-          apply_first_event(tail.first, snap_u)
-          tail.drop(1).each { |event| step!(event) }
+          tail.each { |event| step!(event) }
           self
         end
 
@@ -100,8 +105,14 @@ module CoindcxBot
               prev_u: event.prev_u,
               last_applied_u: @book.last_update_id
             )
-            @book.apply_diff!(final_u: event.final_u, bids: event.bids, asks: event.asks)
+            @book.apply_diff!(
+              final_u: event.final_u,
+              bids: event.bids,
+              asks: event.asks,
+              event_time: event.event_time
+            )
           end
+          notify_after_apply(event)
           self
         end
 
@@ -202,7 +213,19 @@ module CoindcxBot
             final_u: event.final_u,
             snapshot_id: snapshot_id
           )
-          @book.apply_diff!(final_u: event.final_u, bids: event.bids, asks: event.asks)
+          @book.apply_diff!(
+            final_u: event.final_u,
+            bids: event.bids,
+            asks: event.asks,
+            event_time: event.event_time
+          )
+        end
+
+        def notify_after_apply(event)
+          cb = @after_apply
+          return unless cb
+
+          cb.call(@symbol, @book, event)
         end
 
         def log(level, message)

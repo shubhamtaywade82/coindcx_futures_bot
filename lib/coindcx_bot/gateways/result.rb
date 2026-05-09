@@ -11,6 +11,11 @@ module CoindcxBot
         new(ok: false, value: value, code: code, message: message)
       end
 
+      # Same as {.fail} — explicit name for validation-style outcomes (+Kernel#fail+ is unrelated).
+      def self.err(code, message, value = nil)
+        new(ok: false, value: value, code: code, message: message)
+      end
+
       attr_reader :value, :code, :message
 
       def initialize(ok:, value:, code:, message:)

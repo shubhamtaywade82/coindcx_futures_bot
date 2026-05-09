@@ -364,6 +364,32 @@ runtime:
 #     buffer_warmup_seconds: 1.0       # WS pre-buffer before fetching REST snapshot
 #     symbols:                         # Binance symbol -> CoinDCX pair (Phase 1: BTC only)
 #       BTCUSDT: B-BTC_USDT
+#
+#   # Phase 2+ microstructure plugins (all default off — enable only after validating Binance shadow).
+#   sweep:
+#     enabled: false
+#     min_levels: 3
+#     window_ms: 200
+#     displacement_atr_mult: 0.3
+#     tick_size: "0.01"
+#   iceberg:
+#     enabled: false
+#     window_ms: 2000
+#     min_refills: 3
+#     qty_tolerance: 0.2
+#   void:
+#     enabled: false
+#     depth: 50
+#     multiplier: 5
+#   zones:
+#     enabled: false
+#     band_ticks: 5
+#     min_persistence_ms: 30000
+#     expiry_ms: 60000
+#     tick_size: "0.01"
+#   divergence:
+#     max_bps: 25
+#     max_coindcx_lag_ms: 1500
 
 # Paper broker simulation settings (only active when runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.

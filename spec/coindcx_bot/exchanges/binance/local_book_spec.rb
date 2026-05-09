@@ -33,6 +33,25 @@ RSpec.describe CoindcxBot::Exchanges::Binance::LocalBook do
     end
   end
 
+  describe '#on_delta' do
+    it 'emits remove deltas with was_best when the best level is deleted' do
+      seen = []
+      book.on_delta { |d| seen << d }
+      book.replace!(
+        last_update_id: 100,
+        bids: [['100.5', '2.0'], ['100.4', '1.0']],
+        asks: [['100.6', '1.5']]
+      )
+      seen.clear
+      book.apply_diff!(final_u: 101, bids: [['100.5', '0']], asks: [], event_time: 5_000)
+
+      expect(seen.size).to eq(1)
+      expect(seen.first[:action]).to eq(:remove)
+      expect(seen.first[:was_best]).to eq(true)
+      expect(seen.first[:side]).to eq(:bid)
+    end
+  end
+
   describe '#apply_diff!' do
     before do
       book.replace!(

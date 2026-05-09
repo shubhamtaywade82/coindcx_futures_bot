@@ -21,6 +21,15 @@ RSpec.describe CoindcxBot::Orderflow::Engine do
     bus.subscribe(:orderflow_liquidity_shift) { |payload| captured_liquidity_signals << payload }
   end
 
+  it 'tags book-driven bus payloads with source :coindcx by default' do
+    seed_order_book
+    engine.on_book_update(pair: pair, bids: [{ price: '100', quantity: '100' }], asks: [])
+
+    payload = captured_liquidity_signals.last
+    expect(payload[:source]).to eq(:coindcx)
+    expect(payload[:ts]).to be_a(Integer)
+  end
+
   describe 'liquidity shift classification' do
     it 'marks ask removal as trade-through when buy trades consume the level' do
       seed_order_book

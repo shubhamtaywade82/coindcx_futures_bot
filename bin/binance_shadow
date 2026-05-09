@@ -1,24 +1,18 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Phase 1 Binance Futures depth shadow runner.
-#
-# Connects to wss://fstream.binance.com for a single Binance futures symbol
-# (default SOLUSDT), reconstructs the L2 book locally via REST snapshot +
-# diff merge, and prints the top-5 levels every 5 seconds.
-#
-# Strictly read-only: no Orderflow::Engine wiring, no event-bus emission,
-# no order placement. Use this to verify the reconstruction stays in sync
-# under live load before enabling Phase 2 (engine ingestion).
+# Phase 1: Binance Futures depth shadow (read-only book print loop).
+# Phase 2 (+BINANCE_PHASE=2): depth + aggTrade → Orderflow::Engine, domain events to stdout.
 #
 # Usage:
-#   bin/binance_shadow                 # SOLUSDT
-#   bin/binance_shadow BTCUSDT         # any Binance USDⓈ-M futures symbol
-#   PRINT_INTERVAL_SECONDS=2 bin/binance_shadow
+#   bin/binance_shadow
+#   bin/binance_shadow BTCUSDT
+#   BINANCE_PHASE=2 bin/binance_shadow SOLUSDT
 
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 
 require 'bundler/setup'
+require 'json'
 require 'logger'
 require 'coindcx_bot'
 
@@ -29,13 +23,34 @@ module BinanceShadowRunner
   DEFAULT_PRINT_INTERVAL_SECONDS = 5
   DEFAULT_DEPTH_LEVELS = 20
 
+  DOMAIN_EVENTS = [
+    :orderflow_imbalance,
+    :orderflow_walls,
+    :orderflow_liquidity_shift,
+    :orderflow_spoof_activity,
+    :orderflow_absorption,
+    :'liquidity.sweep.detected',
+    :'liquidity.iceberg.suspected',
+    :'liquidity.void.detected',
+    :'liquidity.zone.confirmed',
+    :'liquidity.wall.detected'
+  ].freeze
+
   def run(argv)
     symbol = (argv.first || DEFAULT_SYMBOL).upcase
+    logger = build_logger
+    if ENV['BINANCE_PHASE'].to_s.strip == '2'
+      run_phase2(symbol: symbol, logger: logger)
+    else
+      run_phase1(symbol: symbol, logger: logger)
+    end
+  end
+
+  def run_phase1(symbol:, logger:)
     interval = Integer(ENV.fetch('PRINT_INTERVAL_SECONDS', DEFAULT_PRINT_INTERVAL_SECONDS))
     raw_depth = ENV.fetch('TOP_LEVELS', DEFAULT_DEPTH_LEVELS.to_s).to_s
     depth = raw_depth.casecmp('all').zero? ? :all : Integer(raw_depth)
 
-    logger = build_logger
     book = CoindcxBot::Exchanges::Binance::LocalBook.new
     rest = CoindcxBot::Exchanges::Binance::FuturesRest.new
     ws = CoindcxBot::Exchanges::Binance::DepthWs.new(symbol: symbol, logger: logger)
@@ -57,6 +72,103 @@ module BinanceShadowRunner
     print_loop(symbol: symbol, book: book, interval: interval, depth: depth, logger: logger)
   end
 
+  def run_phase2(symbol:, logger:)
+    pair = CoindcxBot::Exchanges::Binance::SymbolMap.to_coindcx(symbol)
+    bus = CoindcxBot::Core::EventBus.new
+    DOMAIN_EVENTS.each do |ev|
+      bus.subscribe(ev) { |payload| puts(JSON.generate({ event: ev.to_s, payload: payload })) }
+    end
+
+    config = Phase2OrderflowConfig.new
+    engine = CoindcxBot::Orderflow::Engine.new(bus: bus, config: config, logger: logger)
+
+    book = CoindcxBot::Exchanges::Binance::LocalBook.new
+    rest = CoindcxBot::Exchanges::Binance::FuturesRest.new
+    depth_ws = CoindcxBot::Exchanges::Binance::DepthWs.new(symbol: symbol, logger: logger)
+    manager = CoindcxBot::Exchanges::Binance::ResyncManager.new(
+      symbol: symbol,
+      rest: rest,
+      depth_ws: depth_ws,
+      book: book,
+      logger: logger
+    )
+
+    trade_ws = CoindcxBot::Exchanges::Binance::TradeWs.new(
+      symbol: symbol,
+      coindcx_pair: pair,
+      logger: logger
+    )
+
+    adapter = CoindcxBot::Orderflow::BinanceAdapter.new(
+      engine: engine,
+      book: book,
+      manager: manager,
+      trade_ws: trade_ws,
+      coindcx_pair: pair,
+      sweep_detector: engine.sweep_detector,
+      iceberg_detector: engine.iceberg_detector,
+      logger: logger
+    )
+
+    install_signal_traps_phase2(adapter, engine, logger)
+    log_ws_lifecycle(socket: depth_ws, logger: logger)
+    trade_ws.on_open { logger.info('[binance.shadow] aggTrade ws connected') }
+    trade_ws.on_close { |info| logger.warn("[binance.shadow] aggTrade closed: #{info.inspect}") }
+    trade_ws.on_error { |error| logger.error("[binance.shadow] aggTrade error: #{error.message}") }
+
+    logger.info("[binance.shadow] Phase 2 #{symbol} → #{pair} depth=#{depth_ws.url}")
+    adapter.start
+    logger.info("[binance.shadow] Phase 2 aligned last_update_id=#{book.last_update_id}; streaming domain JSON lines")
+
+    sleep
+  rescue CoindcxBot::Exchanges::Binance::SymbolMap::UnknownSymbol => e
+    logger.error("[binance.shadow] #{e.message}")
+    exit(1)
+  end
+
+  class Phase2OrderflowConfig
+    def orderflow_section
+      {
+        record_sessions: false,
+        imbalance_depth: 5,
+        imbalance_spike_threshold: 0.25,
+        wall_multiplier: 3.0,
+        spoof_threshold: 500.0,
+        spoof_max_dwell_seconds: 60.0,
+        absorption_window: 20,
+        absorption_price_range_pct: 0.2,
+        absorption_volume_threshold: 1.0,
+        liquidity_classification_window_ms: 750.0,
+        trade_through_volume_ratio: 0.6,
+        sweep: {
+          enabled: true,
+          min_levels: 3,
+          window_ms: 200,
+          displacement_atr_mult: 0.3,
+          tick_size: '0.01'
+        },
+        iceberg: {
+          enabled: true,
+          window_ms: 2_000,
+          min_refills: 3,
+          qty_tolerance: 0.2
+        },
+        void: {
+          enabled: true,
+          depth: 50,
+          multiplier: 5
+        },
+        zones: {
+          enabled: true,
+          band_ticks: 5,
+          min_persistence_ms: 30_000,
+          expiry_ms: 60_000,
+          tick_size: '0.01'
+        }
+      }
+    end
+  end
+
   def build_logger
     Logger.new($stdout).tap do |l|
       l.level = ENV['DEBUG'] ? Logger::DEBUG : Logger::INFO
@@ -74,10 +186,21 @@ module BinanceShadowRunner
     end
   end
 
+  def install_signal_traps_phase2(adapter, engine, logger)
+    %w[INT TERM].each do |sig|
+      Signal.trap(sig) do
+        logger.info("[binance.shadow] received SIG#{sig} — shutting down Phase 2")
+        adapter.stop
+        engine.shutdown
+        exit(0)
+      end
+    end
+  end
+
   def log_ws_lifecycle(socket:, logger:)
-    socket.on_open  { logger.info('[binance.shadow] ws connected') }
-    socket.on_close { |info| logger.warn("[binance.shadow] ws closed: #{info.inspect}") }
-    socket.on_error { |error| logger.error("[binance.shadow] ws error: #{error.message}") }
+    socket.on_open  { logger.info('[binance.shadow] depth ws connected') }
+    socket.on_close { |info| logger.warn("[binance.shadow] depth ws closed: #{info.inspect}") }
+    socket.on_error { |error| logger.error("[binance.shadow] depth ws error: #{error.message}") }
   end
 
   def print_loop(symbol:, book:, interval:, depth:, logger:)

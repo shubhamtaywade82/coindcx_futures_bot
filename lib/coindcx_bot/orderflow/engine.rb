@@ -1,8 +1,14 @@
 # frozen_string_literal: true
 
+require 'bigdecimal'
+
 require_relative 'order_book_store'
 require_relative 'absorption_tracker'
 require_relative 'recorder'
+require_relative 'sweep_detector'
+require_relative 'iceberg_detector'
+require_relative 'liquidity_void_detector'
+require_relative 'liquidity_zone_tracker'
 
 module CoindcxBot
   module Orderflow
@@ -12,11 +18,15 @@ module CoindcxBot
     # them on the shared EventBus.
     #
     # Signals published (EventBus event → payload):
-    #   :orderflow_imbalance        — { pair, value, bias, depth }
-    #   :orderflow_walls            — { pair, bid_walls, ask_walls, threshold }
-    #   :orderflow_liquidity_shift  — { pair, events: [{type, price, size}] }
-    #   :orderflow_spoof_activity   — { pair, events: [{side, price, size, action, dwell_seconds}] }
-    #   :orderflow_absorption       — { pair, price, volume, range_pct }
+    #   :orderflow_imbalance        — { pair, value, bias, depth, source }
+    #   :orderflow_walls            — { pair, bid_walls, ask_walls, threshold, source }
+    #   :orderflow_liquidity_shift  — { pair, events: [{type, price, size}], source }
+    #   :orderflow_spoof_activity   — { pair, events: [{side, price, size, action, dwell_seconds}], source }
+    #   :orderflow_absorption       — { pair, price, volume, range_pct, source }
+    #
+    # Optional domain events (when +orderflow.{sweep,iceberg,void,zones}.enabled: true+):
+    #   :'liquidity.sweep.detected' | :'liquidity.iceberg.suspected' | :'liquidity.void.detected' | :'liquidity.zone.confirmed'
+    #   :'liquidity.wall.detected' (per wall row, for zone tracker)
     class Engine
       DEFAULT_IMBALANCE_DEPTH          = 5
       DEFAULT_WALL_MULTIPLIER          = 3.0
@@ -25,6 +35,8 @@ module CoindcxBot
       DEFAULT_IMBALANCE_SPIKE_THRESHOLD = 0.25
       DEFAULT_LIQUIDITY_CLASSIFICATION_WINDOW_MS = 750.0
       DEFAULT_TRADE_THROUGH_VOLUME_RATIO = 0.6
+
+      attr_reader :sweep_detector, :iceberg_detector
 
       def initialize(bus:, config:, logger: nil)
         @bus                = bus
@@ -37,33 +49,51 @@ module CoindcxBot
         @spoof_mutex        = Mutex.new
         @recent_trades      = Hash.new { |h, k| h[k] = [] }
         @trades_mutex       = Mutex.new
+        @sweep_detector     = SweepDetector.new(bus: bus, config: config) if subsection_enabled?(:sweep)
+        @iceberg_detector   = IcebergDetector.new(bus: bus, config: config) if subsection_enabled?(:iceberg)
+        @void_detector      = LiquidityVoidDetector.new(bus: bus, config: config) if subsection_enabled?(:void)
+        @zone_tracker       = LiquidityZoneTracker.new(bus: bus, config: config) if subsection_enabled?(:zones)
       end
 
       # Called from the WS trade callback.
       def on_trade(trade)
+        trade = trade.merge(source: trade[:source] || :coindcx)
         @recorder.record_trade(trade)
         store_trade_for_liquidity_classification(trade)
         @absorption.on_trade(trade)
+        @iceberg_detector&.on_trade(trade)
       rescue StandardError => e
         @logger&.warn("[orderflow:engine] trade error: #{e.message}")
       end
 
       # Called from the WS order-book callback.
-      def on_book_update(pair:, bids:, asks:)
+      def on_book_update(pair:, bids:, asks:, source: :coindcx, ts: nil)
+        ts_ms = normalize_book_ts_ms(ts)
+
+        prev_snap = @store.snapshot_for(pair)
         @recorder.record_snapshot(pair, bids, asks)
 
         diff = @store.update!(pair: pair, bids: bids, asks: asks)
         snap = @store.snapshot_for(pair)
+
+        @sweep_detector&.feed_coindcx_book(pair: pair, source: source, prev_snap: prev_snap, diff: diff, snap: snap)
+        @iceberg_detector&.feed_coindcx_levels(
+          pair: pair, source: source, prev_side: prev_snap[:bids], new_side: snap[:bids], side: :bid, ts_ms: ts_ms
+        )
+        @iceberg_detector&.feed_coindcx_levels(
+          pair: pair, source: source, prev_side: prev_snap[:asks], new_side: snap[:asks], side: :ask, ts_ms: ts_ms
+        )
+        @void_detector&.on_book(pair: pair, bids: snap[:bids], asks: snap[:asks], source: source, ts_ms: ts_ms)
 
         signals = []
         signals << detect_imbalance(pair, snap)
         signals << detect_walls(pair, snap)
         signals << detect_liquidity_shift(pair, diff)
         signals << detect_spoof(pair, diff)
-        signals << @absorption.on_book_update(pair: pair, snap: snap, diff: diff)
+        signals << @absorption.on_book_update(pair: pair, snap: snap, diff: diff, source: source)
         signals.compact!
 
-        publish(signals)
+        publish(signals, ts_ms: ts_ms, source: source)
       rescue StandardError => e
         @logger&.warn("[orderflow:engine] book error #{pair}: #{e.message}")
       end
@@ -73,6 +103,18 @@ module CoindcxBot
       end
 
       private
+
+      def subsection_enabled?(name)
+        sec = section[name]
+        sec.is_a?(Hash) && sec[:enabled] == true
+      end
+
+      def normalize_book_ts_ms(ts)
+        return (Time.now.to_f * 1000).to_i if ts.nil?
+
+        t = ts.to_i
+        t > 1_000_000_000_000 ? t : (ts.to_f * 1000).to_i
+      end
 
       def detect_imbalance(pair, snap)
         depth   = imbalance_depth
@@ -186,10 +228,56 @@ module CoindcxBot
         { type: :spoof_activity, pair: pair, events: suspicious }
       end
 
-      def publish(signals)
+      def publish(signals, ts_ms:, source:)
         signals.each do |signal|
-          event = :"orderflow_#{signal[:type]}"
-          @bus.publish(event, signal)
+          enriched = signal.merge(source: signal[:source] || source)
+          enriched[:ts] = ts_ms if ts_ms
+          event = :"orderflow_#{enriched[:type]}"
+          @bus.publish(event, enriched)
+          publish_wall_liquidity_events(enriched, ts_ms, source) if enriched[:type] == :walls
+        end
+      end
+
+      def publish_wall_liquidity_events(signal, ts_ms, source)
+        src = signal[:source] || source
+        pair = signal[:pair]
+        thr = BigDecimal(signal[:threshold].to_s)
+        wall_ts = ts_ms || (Time.now.to_f * 1000).to_i
+
+        Array(signal[:bid_walls]).each do |w|
+          size_bd = BigDecimal(w[:size].to_s)
+          score_f = thr.positive? ? (size_bd / thr).round(4).to_f : 0.0
+          @bus.publish(
+            :'liquidity.wall.detected',
+            {
+              source: src,
+              symbol: pair,
+              pair: pair,
+              side: :bid,
+              price: w[:price],
+              size: w[:size],
+              score: score_f,
+              ts: wall_ts
+            }
+          )
+        end
+
+        Array(signal[:ask_walls]).each do |w|
+          size_bd = BigDecimal(w[:size].to_s)
+          score_f = thr.positive? ? (size_bd / thr).round(4).to_f : 0.0
+          @bus.publish(
+            :'liquidity.wall.detected',
+            {
+              source: src,
+              symbol: pair,
+              pair: pair,
+              side: :ask,
+              price: w[:price],
+              size: w[:size],
+              score: score_f,
+              ts: wall_ts
+            }
+          )
         end
       end
 

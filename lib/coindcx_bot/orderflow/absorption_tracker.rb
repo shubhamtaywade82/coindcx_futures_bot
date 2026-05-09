@@ -35,7 +35,7 @@ module CoindcxBot
 
       # Called from the WS thread after each book update.
       # Returns a signal Hash or nil.
-      def on_book_update(pair:, snap:, diff:)
+      def on_book_update(pair:, snap:, diff:, source: :coindcx)
         return nil unless snap && diff
 
         mid = compute_mid(snap)
@@ -43,7 +43,7 @@ module CoindcxBot
 
         @mutex.synchronize do
           track_mid(pair, mid)
-          evaluate(pair, mid)
+          evaluate(pair, mid, source: source)
         end
       rescue StandardError
         nil
@@ -65,7 +65,7 @@ module CoindcxBot
         arr.shift while arr.size > window
       end
 
-      def evaluate(pair, _current_mid)
+      def evaluate(pair, _current_mid, source: :coindcx)
         mids = @mids[pair]
         return nil if mids.size < (window / 2)
 
@@ -91,7 +91,8 @@ module CoindcxBot
           pair:       pair,
           price:      price_str,
           volume:     volume.round(2),
-          range_pct:  range_pct.round(4)
+          range_pct:  range_pct.round(4),
+          source:     source
         }
       end
 
