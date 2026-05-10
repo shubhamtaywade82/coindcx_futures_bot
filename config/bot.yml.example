@@ -353,8 +353,8 @@ runtime:
 #   absorption_price_range_pct: 0.05   # mid must stay within X % over the window
 #   absorption_volume_threshold: 5000.0 # cumulative removed-size threshold to flag absorption
 #
-#   # Binance Futures market-intelligence feed (Phase 1: shadow only — read-only,
-#   # no engine wiring, no event-bus emission). See docs/order_book.md.
+#   # Binance USDⓈ-M shadow feed (read-only). Requires orderflow.enabled + Orderflow::Engine.
+#   # Feeds Orderflow::BinanceAdapter + MarketData::DivergenceMonitor on the same EventBus as the TUI.
 #   binance:
 #     enabled: false
 #     base_rest: https://fapi.binance.com
@@ -362,8 +362,9 @@ runtime:
 #     depth_levels: 1000               # REST snapshot limit (Binance allows up to 1000)
 #     resync_max_attempts: 5           # alignment retries before giving up
 #     buffer_warmup_seconds: 1.0       # WS pre-buffer before fetching REST snapshot
-#     symbols:                         # Binance symbol -> CoinDCX pair (Phase 1: BTC only)
+#     symbols:                         # Binance linear symbol (UPPER) -> CoinDCX futures pair
 #       BTCUSDT: B-BTC_USDT
+#       SOLUSDT: B-SOL_USDT
 #
 #   # Phase 2+ microstructure plugins (all default off — enable only after validating Binance shadow).
 #   sweep:
@@ -414,6 +415,14 @@ runtime:
 #       tick_size: "0.01"
 #       size_change_pct: 0.25          # re-emit wall.detected only when size moves ≥ this fraction
 #       removal_grace_ms: 500          # wait before declaring wall.removed (anti-flicker)
+
+# TUI-only options (panel registration; engine Binance shadow uses orderflow.binance above).
+# tui:
+#   panels:
+#     binance_orderflow:
+#       enabled: true                  # omit or true → panel registered when orderflow.binance.enabled; false → no panel
+#       visible: true                  # default on/off at startup (omit → mirrors orderflow.binance.enabled)
+#       toggle_key: b                  # single key to show/hide the Binance panel (reflows grid height)
 
 # Paper broker simulation settings (only active when runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.

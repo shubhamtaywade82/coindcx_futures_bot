@@ -878,6 +878,90 @@ module CoindcxBot
       250
     end
 
+    def orderflow_binance_section
+      b = orderflow_section[:binance]
+      b.is_a?(Hash) ? b : {}
+    end
+
+    def orderflow_binance_enabled?
+      truthy?(orderflow_binance_section[:enabled])
+    end
+
+    def orderflow_binance_symbol_map
+      h = orderflow_binance_section[:symbols]
+      return {} unless h.is_a?(Hash)
+
+      h.to_h do |k, v|
+        [k.to_s.strip.upcase, v.to_s.strip]
+      end.reject { |ks, vs| ks.empty? || vs.empty? }
+    end
+
+    def orderflow_binance_base_rest
+      orderflow_binance_section.fetch(:base_rest, 'https://fapi.binance.com').to_s.strip.chomp('/')
+    end
+
+    def orderflow_binance_base_ws
+      orderflow_binance_section.fetch(:base_ws, 'wss://fstream.binance.com').to_s.strip.chomp('/')
+    end
+
+    def orderflow_binance_depth_levels
+      v = Integer(orderflow_binance_section.fetch(:depth_levels, 1_000))
+      v < 5 ? 5 : [v, 1_000].min
+    rescue ArgumentError, TypeError
+      1_000
+    end
+
+    def orderflow_binance_resync_max_attempts
+      Integer(orderflow_binance_section.fetch(:resync_max_attempts, 5))
+    rescue ArgumentError, TypeError
+      5
+    end
+
+    def orderflow_binance_buffer_warmup_seconds
+      Float(orderflow_binance_section.fetch(:buffer_warmup_seconds, 1.0))
+    rescue ArgumentError, TypeError
+      1.0
+    end
+
+    def tui_section
+      s = raw[:tui]
+      s.is_a?(Hash) ? s : {}
+    end
+
+    def tui_panels_section
+      s = tui_section[:panels]
+      s.is_a?(Hash) ? s : {}
+    end
+
+    def tui_binance_orderflow_panel_section
+      p = tui_panels_section[:binance_orderflow] || tui_panels_section['binance_orderflow']
+      p.is_a?(Hash) ? p : {}
+    end
+
+    # When false, the dedicated Binance TUI panel is not registered (engine may still run Binance shadow if enabled).
+    def tui_binance_orderflow_panel_enabled?
+      return false unless orderflow_binance_enabled?
+
+      sec = tui_binance_orderflow_panel_section
+      return true if sec.empty? || !sec.key?(:enabled)
+
+      truthy?(sec[:enabled])
+    end
+
+    def tui_binance_orderflow_toggle_key
+      k = tui_binance_orderflow_panel_section.fetch(:toggle_key, 'b').to_s
+      k.strip.empty? ? 'b' : k[0]
+    end
+
+    def tui_binance_orderflow_visible_default?
+      return false unless tui_binance_orderflow_panel_enabled?
+
+      sec = tui_binance_orderflow_panel_section
+      return orderflow_binance_enabled? if sec.empty? || !sec.key?(:visible)
+
+      truthy?(sec[:visible])
+    end
+
     # Maximum reconnect attempts before the WS loop gives up (0 = unlimited).
     def ws_reconnect_attempts
       v = runtime.fetch(:ws_reconnect_attempts, 5).to_i
