@@ -145,18 +145,21 @@ module BinanceShadowRunner
           min_levels: 3,
           window_ms: 200,
           displacement_atr_mult: 0.3,
-          tick_size: '0.01'
+          tick_size: '0.01',
+          dedup: { cooldown_ms: 1_000 }
         },
         iceberg: {
           enabled: true,
           window_ms: 2_000,
           min_refills: 3,
-          qty_tolerance: 0.2
+          qty_tolerance: 0.2,
+          dedup: { cooldown_ms: 1_000 }
         },
         void: {
           enabled: true,
           depth: 50,
-          multiplier: 5
+          multiplier: 5,
+          dedup: { cooldown_ms: 1_000 }
         },
         zones: {
           enabled: true,
@@ -164,6 +167,17 @@ module BinanceShadowRunner
           min_persistence_ms: 30_000,
           expiry_ms: 60_000,
           tick_size: '0.01'
+        },
+        imbalance: {
+          dedup: { min_emit_interval_ms: 500, magnitude_change_pct: 0.5 }
+        },
+        walls: {
+          dedup: {
+            price_band_ticks: 1,
+            tick_size: '0.01',
+            size_change_pct: 0.25,
+            removal_grace_ms: 500
+          }
         }
       }
     end

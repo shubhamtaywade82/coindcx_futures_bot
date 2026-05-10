@@ -372,24 +372,47 @@ runtime:
 #     window_ms: 200
 #     displacement_atr_mult: 0.3
 #     tick_size: "0.01"
+#     dedup:
+#       cooldown_ms: 1000              # same (pair, side) suppressed within window; binance default ON
 #   iceberg:
 #     enabled: false
 #     window_ms: 2000
 #     min_refills: 3
 #     qty_tolerance: 0.2
+#     dedup:
+#       cooldown_ms: 1000              # same (pair, side, price) suppressed within window
 #   void:
 #     enabled: false
 #     depth: 50
 #     multiplier: 5
+#     dedup:
+#       cooldown_ms: 1000              # same (pair, side, void_start, void_end) suppressed within window
 #   zones:
 #     enabled: false
 #     band_ticks: 5
 #     min_persistence_ms: 30000
 #     expiry_ms: 60000
 #     tick_size: "0.01"
+#     dedup:
+#       emit_reinforcement: false      # zone tracker already idempotent on first confirm
 #   divergence:
 #     max_bps: 25
 #     max_coindcx_lag_ms: 1500
+#
+#   # Signal dedup (transition-based emission). Default: ON for source: binance, OFF for source: coindcx
+#   # (preserves legacy CoinDCX consumers). Set dedup.enabled to override per event type.
+#   imbalance:
+#     dedup:
+#       # enabled: true                # explicit override; nil → source-based default
+#       min_emit_interval_ms: 500      # rate-limit floor (skip emits faster than this)
+#       magnitude_change_pct: 0.5      # within same bias bucket, require |Δvalue| / |prev| ≥ this
+#   walls:
+#     dedup:
+#       # enabled: true                # explicit override; nil → source-based default
+#       price_band_ticks: 1            # bucket walls into bands of (tick_size * price_band_ticks)
+#       tick_size: "0.01"
+#       size_change_pct: 0.25          # re-emit wall.detected only when size moves ≥ this fraction
+#       removal_grace_ms: 500          # wait before declaring wall.removed (anti-flicker)
 
 # Paper broker simulation settings (only active when runtime.dry_run is true).
 # The paper broker simulates fills with configurable slippage and fees, persisted to SQLite.

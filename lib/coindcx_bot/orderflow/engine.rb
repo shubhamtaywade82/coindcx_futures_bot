@@ -9,6 +9,7 @@ require_relative 'sweep_detector'
 require_relative 'iceberg_detector'
 require_relative 'liquidity_void_detector'
 require_relative 'liquidity_zone_tracker'
+require_relative 'event_dedup'
 
 module CoindcxBot
   module Orderflow
@@ -49,10 +50,12 @@ module CoindcxBot
         @spoof_mutex        = Mutex.new
         @recent_trades      = Hash.new { |h, k| h[k] = [] }
         @trades_mutex       = Mutex.new
-        @sweep_detector     = SweepDetector.new(bus: bus, config: config) if subsection_enabled?(:sweep)
-        @iceberg_detector   = IcebergDetector.new(bus: bus, config: config) if subsection_enabled?(:iceberg)
-        @void_detector      = LiquidityVoidDetector.new(bus: bus, config: config) if subsection_enabled?(:void)
-        @zone_tracker       = LiquidityZoneTracker.new(bus: bus, config: config) if subsection_enabled?(:zones)
+        @signal_publisher   = SignalPublisher.new(bus: bus, config: config)
+        @detector_publisher = DedupPublisher.new(bus: bus, config: config)
+        @sweep_detector     = SweepDetector.new(bus: @detector_publisher, config: config) if subsection_enabled?(:sweep)
+        @iceberg_detector   = IcebergDetector.new(bus: @detector_publisher, config: config) if subsection_enabled?(:iceberg)
+        @void_detector      = LiquidityVoidDetector.new(bus: @detector_publisher, config: config) if subsection_enabled?(:void)
+        @zone_tracker       = LiquidityZoneTracker.new(bus: @detector_publisher, config: config) if subsection_enabled?(:zones)
       end
 
       # Called from the WS trade callback.
@@ -93,7 +96,7 @@ module CoindcxBot
         signals << @absorption.on_book_update(pair: pair, snap: snap, diff: diff, source: source)
         signals.compact!
 
-        publish(signals, ts_ms: ts_ms, source: source)
+        publish(signals, ts_ms: ts_ms, source: source, pair: pair)
       rescue StandardError => e
         @logger&.warn("[orderflow:engine] book error #{pair}: #{e.message}")
       end
@@ -228,57 +231,16 @@ module CoindcxBot
         { type: :spoof_activity, pair: pair, events: suspicious }
       end
 
-      def publish(signals, ts_ms:, source:)
+      def publish(signals, ts_ms:, source:, pair:)
         signals.each do |signal|
           enriched = signal.merge(source: signal[:source] || source)
           enriched[:ts] = ts_ms if ts_ms
-          event = :"orderflow_#{enriched[:type]}"
-          @bus.publish(event, enriched)
-          publish_wall_liquidity_events(enriched, ts_ms, source) if enriched[:type] == :walls
-        end
-      end
-
-      def publish_wall_liquidity_events(signal, ts_ms, source)
-        src = signal[:source] || source
-        pair = signal[:pair]
-        thr = BigDecimal(signal[:threshold].to_s)
-        wall_ts = ts_ms || (Time.now.to_f * 1000).to_i
-
-        Array(signal[:bid_walls]).each do |w|
-          size_bd = BigDecimal(w[:size].to_s)
-          score_f = thr.positive? ? (size_bd / thr).round(4).to_f : 0.0
-          @bus.publish(
-            :'liquidity.wall.detected',
-            {
-              source: src,
-              symbol: pair,
-              pair: pair,
-              side: :bid,
-              price: w[:price],
-              size: w[:size],
-              score: score_f,
-              ts: wall_ts
-            }
-          )
+          @signal_publisher.publish(enriched, source: (enriched[:source] || :coindcx).to_sym, ts_ms: ts_ms)
         end
 
-        Array(signal[:ask_walls]).each do |w|
-          size_bd = BigDecimal(w[:size].to_s)
-          score_f = thr.positive? ? (size_bd / thr).round(4).to_f : 0.0
-          @bus.publish(
-            :'liquidity.wall.detected',
-            {
-              source: src,
-              symbol: pair,
-              pair: pair,
-              side: :ask,
-              price: w[:price],
-              size: w[:size],
-              score: score_f,
-              ts: wall_ts
-            }
-          )
-        end
+        return if signals.any? { |s| s[:type] == :walls }
+
+        @signal_publisher.sweep_orphaned_walls(pair: pair, source: source.to_sym, ts_ms: ts_ms)
       end
 
       def passive_liquidity_event(event_type:, pair:, price:, size:, timestamp:)
