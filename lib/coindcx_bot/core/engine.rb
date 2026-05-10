@@ -88,6 +88,9 @@ module CoindcxBot
         @order_tracker = Execution::OrderTracker.new(journal: @journal, logger: @logger)
         @ws_fill_handler = Execution::WsFillHandler.new(order_tracker: @order_tracker, logger: @logger)
 
+        @divergence_guard_registry = Risk::GuardRegistry.new
+        @execution_gate = build_divergence_execution_gate
+
         @coord = Execution::Coordinator.new(
           broker: @broker,
           journal: @journal,
@@ -95,7 +98,8 @@ module CoindcxBot
           exposure_guard: @exposure,
           logger: @logger,
           fx: @fx,
-          order_tracker: @order_tracker
+          order_tracker: @order_tracker,
+          execution_gate: @execution_gate
         )
 
         @candles_htf = {}
@@ -350,6 +354,18 @@ module CoindcxBot
       end
 
       private
+
+      def build_divergence_execution_gate
+        return Risk::NoOpExecutionGate.instance unless @config.orderflow_binance_enabled?
+        return Risk::NoOpExecutionGate.instance unless @config.orderflow_divergence_gate_enabled?
+
+        Risk::ExecutionGate.new(
+          divergence_guards: @divergence_guard_registry,
+          config: @config,
+          logger: @logger,
+          bus: @bus
+        )
+      end
 
       def regime_snapshot_for_tui
         base = Regime::TuiState.build(@config)
@@ -1655,6 +1671,7 @@ module CoindcxBot
             end
             bundle[:monitor].start
             bundle[:adapter].start
+            @divergence_guard_registry.register(pair: pair, guard: @binance_divergence_guard)
             started << "#{bin_sym}->#{pair}"
           rescue StandardError => e
             @logger&.error("[engine] orderflow.binance #{bin_sym}: #{e.class}: #{e.message}")
@@ -1689,6 +1706,7 @@ module CoindcxBot
           @logger&.warn("[engine] orderflow.binance monitor stop: #{e.message}")
         end
 
+        @divergence_guard_registry.clear!
         @binance_mutex.synchronize { @binance_divergence_guard = nil }
       end
 

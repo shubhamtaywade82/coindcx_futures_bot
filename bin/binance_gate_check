@@ -1,0 +1,246 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# One-shot Binance ↔ CoinDCX divergence guard sanity check (~5s live sample).
+# Usage: bin/binance_gate_check B-SOL_USDT
+# Env: COINDCX_BOT_CONFIG, GATE_CHECK_SECONDS (default 5), CDX_DISABLE_CDXWS=1 to stub CoinDCX mid from Binance
+
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+
+require 'bundler/setup'
+require 'logger'
+require 'coindcx_bot'
+
+module BinanceGateCheck
+  module_function
+
+  def run(argv)
+    adapter = nil
+    monitor = nil
+    engine = nil
+    ws_gateway = nil
+
+    pair = (argv.first || '').to_s.strip
+    if pair.empty?
+      warn('usage: bin/binance_gate_check <COINDCX_PAIR>  e.g. B-SOL_USDT')
+      exit(1)
+    end
+
+    logger = build_logger
+    cfg = load_bot_config(logger)
+    map = cfg.orderflow_binance_symbol_map
+    binance_sym = map.find { |_b, p| p.to_s == pair }&.first
+    if binance_sym.nil?
+      warn("[gate_check] pair #{pair.inspect} not found in orderflow.binance.symbols — add it to bot.yml")
+      exit(1)
+    end
+
+    seconds = Float(ENV.fetch('GATE_CHECK_SECONDS', '5'))
+
+    bus = CoindcxBot::Core::EventBus.new
+    guard = CoindcxBot::Risk::DivergenceGuard.new(
+      max_bps: cfg.orderflow_divergence_max_bps,
+      max_lag_ms: cfg.orderflow_divergence_max_lag_ms
+    )
+
+    cdx_ws_disabled = ENV['CDX_DISABLE_CDXWS'].to_s.strip == '1'
+    keys_present = !ENV['COINDCX_API_KEY'].to_s.strip.empty? && !ENV['COINDCX_API_SECRET'].to_s.strip.empty?
+    stub_coindcx = cdx_ws_disabled || !keys_present
+    if stub_coindcx
+      logger.info(
+        '[gate_check] CoinDCX WS skipped (CDX_DISABLE_CDXWS=1 or missing COINDCX_API_KEY/SECRET) — stubbing CoinDCX mid from Binance'
+      )
+    end
+
+    ws_gateway = nil
+    unless stub_coindcx
+      configure_coin_dcx(logger)
+      ws_gateway = CoindcxBot::Gateways::WsGateway.new(client: CoinDCX.client, logger: logger)
+    end
+
+    monitor = CoindcxBot::MarketData::DivergenceMonitor.new(
+      bus: bus,
+      guard: guard,
+      pair: pair,
+      binance_symbol: binance_sym,
+      ws_gateway: ws_gateway,
+      stub_coindcx: stub_coindcx,
+      logger: logger,
+      check_interval_ms: cfg.orderflow_divergence_check_interval_ms
+    )
+
+    engine = CoindcxBot::Orderflow::Engine.new(bus: bus, config: GateCheckOrderflowConfig.new, logger: logger)
+
+    rest = CoindcxBot::Exchanges::Binance::FuturesRest.new(base_url: cfg.orderflow_binance_base_rest)
+    depth_ws = CoindcxBot::Exchanges::Binance::DepthWs.new(
+      symbol: binance_sym,
+      base_ws: cfg.orderflow_binance_base_ws,
+      logger: logger
+    )
+    book = CoindcxBot::Exchanges::Binance::LocalBook.new
+    trade_ws = CoindcxBot::Exchanges::Binance::TradeWs.new(
+      symbol: binance_sym,
+      coindcx_pair: pair,
+      base_ws: cfg.orderflow_binance_base_ws,
+      logger: logger
+    )
+    book_ticker_ws = CoindcxBot::Exchanges::Binance::BookTickerWs.new(
+      symbol: binance_sym,
+      coindcx_pair: pair,
+      base_ws: cfg.orderflow_binance_base_ws,
+      logger: logger
+    )
+    manager = CoindcxBot::Exchanges::Binance::ResyncManager.new(
+      symbol: binance_sym,
+      rest: rest,
+      depth_ws: depth_ws,
+      book: book,
+      logger: logger,
+      max_attempts: cfg.orderflow_binance_resync_max_attempts,
+      depth_limit: cfg.orderflow_binance_depth_levels,
+      buffer_warmup_seconds: cfg.orderflow_binance_buffer_warmup_seconds
+    )
+
+    adapter = CoindcxBot::Orderflow::BinanceAdapter.new(
+      engine: engine,
+      book: book,
+      manager: manager,
+      trade_ws: trade_ws,
+      coindcx_pair: pair,
+      sweep_detector: engine.sweep_detector,
+      iceberg_detector: engine.iceberg_detector,
+      logger: logger,
+      binance_symbol: binance_sym,
+      book_ticker_ws: book_ticker_ws,
+      divergence_monitor: monitor
+    )
+
+    logger.info("[gate_check] sampling #{binance_sym} → #{pair} for #{seconds}s …")
+    monitor.start
+    adapter.start
+    sleep(seconds)
+
+    res = guard.check(pair: pair)
+    snap = monitor.snapshot
+    print_summary(logger, pair:, binance_sym:, res:, snap:, gate_enabled: cfg.orderflow_divergence_gate_enabled?)
+  ensure
+    adapter&.stop
+    monitor&.stop
+    ws_gateway&.disconnect
+    engine&.shutdown
+  end
+
+  def print_summary(logger, pair:, binance_sym:, res:, snap:, gate_enabled:)
+    logger.info("[gate_check] monitor snapshot: #{snap.inspect}")
+    if res.ok?
+      logger.info("[gate_check] guard.check: OK bps=#{res.value[:bps].to_s('F')} age_ms=#{res.value[:age_ms]}")
+      rec =
+        if gate_enabled
+          'orderflow.divergence.gate.enabled is true — entries will pass when coordinator runs with Binance stack.'
+        else
+          'orderflow.divergence.gate.enabled is false — flip to true only after you accept live gating behavior.'
+        end
+      logger.info("[gate_check] recommendation: #{rec}")
+    else
+      v = res.value.is_a?(Hash) ? res.value : {}
+      logger.warn(
+        "[gate_check] guard.check: BLOCK reason=#{v[:reason] || res.code} bps=#{v[:bps].inspect} age_ms=#{v[:age_ms].inspect} msg=#{res.message}"
+      )
+      logger.warn('[gate_check] recommendation: do not enable orderflow.divergence.gate until divergence is stable.')
+    end
+  end
+
+  def load_bot_config(logger)
+    path = ENV['COINDCX_BOT_CONFIG'] || CoindcxBot::Config::DEFAULT_PATH
+    expanded = File.expand_path(path)
+    return CoindcxBot::Config.new(minimal_gate_check_config) unless File.file?(expanded)
+
+    CoindcxBot::Config.load(expanded)
+  rescue StandardError => e
+    logger.warn("[gate_check] bot.yml not loaded (#{e.message}); using embedded defaults")
+    CoindcxBot::Config.new(minimal_gate_check_config)
+  end
+
+  def minimal_gate_check_config
+    {
+      pairs: %w[B-SOL_USDT],
+      margin_currency_short_name: 'USDT',
+      inr_per_usdt: 83,
+      capital_inr: 50_000,
+      risk: { per_trade_inr_min: 250, per_trade_inr_max: 500, max_daily_loss_inr: 1500, max_open_positions: 2, max_leverage: 5 },
+      strategy: { execution_resolution: '15m', higher_timeframe_resolution: '1h' },
+      execution: { order_defaults: { margin_currency_short_name: 'USDT' } },
+      runtime: { journal_path: File.join(Dir.tmpdir, 'coindcx_gate_check_journal.sqlite3'), dry_run: true },
+      paper: { slippage_bps: 5, fee_bps: 4, db_path: File.join(Dir.tmpdir, 'coindcx_gate_check_paper.sqlite3') },
+      orderflow: {
+        enabled: true,
+        sweep: { enabled: false },
+        iceberg: { enabled: false },
+        void: { enabled: false },
+        zones: { enabled: false },
+        binance: {
+          enabled: true,
+          symbols: { 'SOLUSDT' => 'B-SOL_USDT', 'BTCUSDT' => 'B-BTC_USDT' },
+          base_rest: 'https://fapi.binance.com',
+          base_ws: 'wss://fstream.binance.com'
+        },
+        divergence: {
+          max_bps: 25,
+          max_lag_ms: 1_500,
+          check_interval_ms: 250,
+          gate: { enabled: false, exits_always_allowed: true, block_unmapped_pairs: false, cooldown_ms: 1_000 }
+        }
+      }
+    }
+  end
+
+  def configure_coin_dcx(logger)
+    CoinDCX.configure do |c|
+      c.api_key = ENV['COINDCX_API_KEY'].to_s.strip
+      c.api_secret = ENV['COINDCX_API_SECRET'].to_s.strip
+      c.logger = logger
+      url = ENV['COINDCX_SOCKET_BASE_URL'].to_s.strip
+      c.socket_base_url = url unless url.empty?
+    end
+  end
+
+  def build_logger
+    Logger.new($stdout).tap do |l|
+      l.level = ENV['DEBUG'] ? Logger::DEBUG : Logger::INFO
+      l.formatter = ->(_sev, _ts, _prog, msg) { "#{msg}\n" }
+    end
+  end
+
+  class GateCheckOrderflowConfig
+    def orderflow_section
+      {
+        record_sessions: false,
+        imbalance_depth: 5,
+        imbalance_spike_threshold: 0.25,
+        wall_multiplier: 3.0,
+        spoof_threshold: 500.0,
+        spoof_max_dwell_seconds: 60.0,
+        absorption_window: 20,
+        absorption_price_range_pct: 0.2,
+        absorption_volume_threshold: 1.0,
+        liquidity_classification_window_ms: 750.0,
+        trade_through_volume_ratio: 0.6,
+        sweep: { enabled: false },
+        iceberg: { enabled: false },
+        void: { enabled: false },
+        zones: { enabled: false },
+        imbalance: { dedup: { min_emit_interval_ms: 500, magnitude_change_pct: 0.5 } },
+        walls: {
+          dedup: {
+            price_band_ticks: 1,
+            tick_size: '0.01',
+            size_change_pct: 0.25,
+            removal_grace_ms: 500
+          }
+        }
+      }
+    end
+  end
+end
+
+BinanceGateCheck.run(ARGV) if $PROGRAM_NAME == __FILE__

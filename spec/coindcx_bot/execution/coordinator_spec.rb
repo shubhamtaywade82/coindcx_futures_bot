@@ -554,4 +554,147 @@ RSpec.describe CoindcxBot::Execution::Coordinator do
       expect(journal.open_positions).to be_empty
     end
   end
+
+  context 'when execution_gate blocks new entries' do
+    let(:paper_store_path) { File.join(Dir.tmpdir, "coindcx_coord_gate_#{SecureRandom.hex(12)}.sqlite3") }
+    let(:paper_store) { CoindcxBot::Persistence::PaperStore.new(paper_store_path) }
+    let(:fill_engine) { CoindcxBot::Execution::FillEngine.new(slippage_bps: 5, fee_bps: 4) }
+
+    let(:config) do
+      CoindcxBot::Config.new(
+        minimal_bot_config(
+          runtime: { dry_run: true, journal_path: journal_path },
+          risk: { max_leverage: 3, per_trade_inr_min: 250, per_trade_inr_max: 500 },
+          execution: { order_defaults: { leverage: 50, margin_currency_short_name: 'USDT', order_type: 'market_order' } }
+        )
+      )
+    end
+
+    let(:broker) do
+      CoindcxBot::Execution::PaperBroker.new(store: paper_store, fill_engine: fill_engine, logger: nil)
+    end
+
+    let(:blocking_gate) do
+      g = Object.new
+      g.define_singleton_method(:gate?) do |action:, pair:, now_ms: nil|
+        CoindcxBot::Gateways::Result.err(
+          :max_bps_exceeded,
+          'divergence',
+          { reason: :max_bps_exceeded, bps: BigDecimal('50.5'), age_ms: 123 }
+        )
+      end
+      g
+    end
+
+    subject(:coordinator) do
+      described_class.new(
+        broker: broker,
+        journal: journal,
+        config: config,
+        exposure_guard: guard,
+        logger: nil,
+        fx: fx,
+        execution_gate: blocking_gate
+      )
+    end
+
+    after do
+      paper_store.close
+      File.delete(paper_store_path) if File.exist?(paper_store_path)
+    end
+
+    it 'returns :blocked, logs signal_blocked_divergence, and does not open a position' do
+      signal = CoindcxBot::Strategy::Signal.new(
+        action: :open_long,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: BigDecimal('90'),
+        reason: 'test',
+        metadata: {}
+      )
+
+      expect(coordinator.apply(signal, quantity: BigDecimal('0.01'), entry_price: BigDecimal('100'))).to eq(:blocked)
+      expect(journal.open_positions).to be_empty
+
+      ev = journal.recent_events(10).find { |e| e['type'] == 'signal_blocked_divergence' }
+      expect(ev).not_to be_nil
+      payload = JSON.parse(ev['payload'], symbolize_names: true)
+      expect(payload[:pair]).to eq('B-SOL_USDT')
+      expect(payload[:action]).to eq('open_long')
+      expect(payload[:reason]).to eq('max_bps_exceeded')
+      expect(payload[:bps]).to eq('50.5')
+      expect(payload[:age_ms]).to eq(123)
+    end
+  end
+
+  context 'when execution_gate records close without consulting the gate' do
+    let(:paper_store_path) { File.join(Dir.tmpdir, "coindcx_coord_gate_close_#{SecureRandom.hex(12)}.sqlite3") }
+    let(:paper_store) { CoindcxBot::Persistence::PaperStore.new(paper_store_path) }
+    let(:fill_engine) { CoindcxBot::Execution::FillEngine.new(slippage_bps: 5, fee_bps: 4) }
+
+    let(:config) do
+      CoindcxBot::Config.new(
+        minimal_bot_config(
+          runtime: { dry_run: true, journal_path: journal_path },
+          risk: { max_leverage: 3, per_trade_inr_min: 250, per_trade_inr_max: 500 },
+          execution: { order_defaults: { leverage: 50, margin_currency_short_name: 'USDT', order_type: 'market_order' } }
+        )
+      )
+    end
+
+    let(:broker) do
+      CoindcxBot::Execution::PaperBroker.new(store: paper_store, fill_engine: fill_engine, logger: nil)
+    end
+
+    let(:gate_calls) { [] }
+    let(:recording_gate) do
+      calls = gate_calls
+      g = Object.new
+      g.define_singleton_method(:gate?) do |action:, pair:, now_ms: nil|
+        calls << [action, pair]
+        CoindcxBot::Gateways::Result.err(:max_bps_exceeded, 'x', { reason: :max_bps_exceeded, bps: nil, age_ms: nil })
+      end
+      g
+    end
+
+    subject(:coordinator) do
+      described_class.new(
+        broker: broker,
+        journal: journal,
+        config: config,
+        exposure_guard: guard,
+        logger: nil,
+        fx: fx,
+        execution_gate: recording_gate
+      )
+    end
+
+    after do
+      paper_store.close
+      File.delete(paper_store_path) if File.exist?(paper_store_path)
+    end
+
+    it 'does not call gate? for :close' do
+      jid = journal.insert_position(
+        pair: 'B-SOL_USDT',
+        side: 'long',
+        entry_price: BigDecimal('100'),
+        quantity: BigDecimal('0.01'),
+        stop_price: BigDecimal('90'),
+        trail_price: nil
+      )
+
+      close_signal = CoindcxBot::Strategy::Signal.new(
+        action: :close,
+        pair: 'B-SOL_USDT',
+        side: :long,
+        stop_price: nil,
+        reason: 'test',
+        metadata: { position_id: jid }
+      )
+
+      coordinator.apply(close_signal, exit_price: BigDecimal('105'))
+      expect(gate_calls).to be_empty
+    end
+  end
 end

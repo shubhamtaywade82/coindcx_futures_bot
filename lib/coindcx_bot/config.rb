@@ -878,6 +878,27 @@ module CoindcxBot
       250
     end
 
+    # +orderflow.divergence.gate+ — optional execution choke for new entries (see +Risk::ExecutionGate+).
+    def orderflow_divergence_gate_section
+      g = orderflow_divergence_section[:gate]
+      g.is_a?(Hash) ? g : {}
+    end
+
+    def orderflow_divergence_gate_enabled?
+      truthy?(orderflow_divergence_gate_section[:enabled])
+    end
+
+    def orderflow_divergence_gate_block_unmapped_pairs?
+      truthy?(orderflow_divergence_gate_section[:block_unmapped_pairs])
+    end
+
+    def orderflow_divergence_gate_cooldown_ms
+      v = Integer(orderflow_divergence_gate_section.fetch(:cooldown_ms, 1_000))
+      v < 1 ? 1 : v
+    rescue ArgumentError, TypeError
+      1_000
+    end
+
     def orderflow_binance_section
       b = orderflow_section[:binance]
       b.is_a?(Hash) ? b : {}

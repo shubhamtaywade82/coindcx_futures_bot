@@ -42,7 +42,11 @@ RSpec.describe CoindcxBot::Core::Engine, 'binance orderflow stack' do
     engine = described_class.new(config: config, logger: logger)
     engine.instance_variable_set(:@binance_adapters, [adapter])
     engine.instance_variable_set(:@binance_monitors, [monitor])
-    engine.instance_variable_set(:@binance_divergence_guard, CoindcxBot::Risk::DivergenceGuard.new(max_bps: 25, max_lag_ms: 1_500))
+    g = CoindcxBot::Risk::DivergenceGuard.new(max_bps: 25, max_lag_ms: 1_500)
+    engine.instance_variable_set(:@binance_divergence_guard, g)
+    reg = engine.instance_variable_get(:@divergence_guard_registry)
+    reg.register(pair: 'B-SOL_USDT', guard: g)
+    expect(reg.pairs).to eq(['B-SOL_USDT'])
 
     engine.send(:stop_binance_orderflow_stacks!)
 
@@ -51,5 +55,6 @@ RSpec.describe CoindcxBot::Core::Engine, 'binance orderflow stack' do
     expect(engine.instance_variable_get(:@binance_adapters)).to eq([])
     expect(engine.instance_variable_get(:@binance_monitors)).to eq([])
     expect(engine.instance_variable_get(:@binance_divergence_guard)).to be_nil
+    expect(reg.pairs).to eq([])
   end
 end

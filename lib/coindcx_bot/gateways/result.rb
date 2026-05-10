@@ -32,6 +32,8 @@ module CoindcxBot
       def failure?
         !@ok
       end
+
+      alias err? failure?
     end
   end
 end
