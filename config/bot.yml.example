@@ -397,7 +397,8 @@ runtime:
 #       emit_reinforcement: false      # zone tracker already idempotent on first confirm
 #   divergence:
 #     max_bps: 25
-#     max_coindcx_lag_ms: 1500
+#     max_lag_ms: 1500
+#     check_interval_ms: 250
 #
 #   # Signal dedup (transition-based emission). Default: ON for source: binance, OFF for source: coindcx
 #   # (preserves legacy CoinDCX consumers). Set dedup.enabled to override per event type.

@@ -16,7 +16,10 @@ module CoindcxBot
         coindcx_pair:,
         sweep_detector: nil,
         iceberg_detector: nil,
-        logger: nil
+        logger: nil,
+        binance_symbol: nil,
+        book_ticker_ws: nil,
+        divergence_monitor: nil
       )
         @engine = engine
         @book = book
@@ -26,6 +29,9 @@ module CoindcxBot
         @sweep = sweep_detector
         @iceberg = iceberg_detector
         @logger = logger
+        @book_ticker_ws = book_ticker_ws
+        @divergence_monitor = divergence_monitor
+        @binance_symbol = binance_symbol || resolve_binance_symbol(@pair)
         @throttle_mutex = Mutex.new
         # Start in the distant past so the first depth tick always flushes.
         @last_push_mono = -Float::INFINITY
@@ -35,10 +41,12 @@ module CoindcxBot
       def start
         @manager.start
         @trade_ws.connect
+        @book_ticker_ws&.connect
         self
       end
 
       def stop
+        @book_ticker_ws&.disconnect
         @trade_ws.disconnect
         @manager.stop
         self
@@ -47,6 +55,7 @@ module CoindcxBot
       private
 
       def wire_callbacks
+        wire_book_ticker_divergence
         @manager.after_apply = method(:on_depth_applied).to_proc
         @trade_ws.on_trade { |t| @engine.on_trade(t) }
         @book.on_delta do |delta|
@@ -54,6 +63,24 @@ module CoindcxBot
           @iceberg&.feed_book_delta(pair: @pair, source: :binance, delta: delta)
         end
         @book.on_reset { @sweep&.reset!(@pair) }
+      end
+
+      def resolve_binance_symbol(pair)
+        Exchanges::Binance::SymbolMap.to_binance(pair)
+      rescue Exchanges::Binance::SymbolMap::UnknownSymbol
+        nil
+      end
+
+      def wire_book_ticker_divergence
+        return unless @book_ticker_ws && @divergence_monitor && @binance_symbol
+
+        @book_ticker_ws.on_quote do |h|
+          @divergence_monitor.on_binance_book_ticker(
+            best_bid: h[:best_bid],
+            best_ask: h[:best_ask],
+            ts: h[:ts]
+          )
+        end
       end
 
       def on_depth_applied(_binance_symbol, book, event)

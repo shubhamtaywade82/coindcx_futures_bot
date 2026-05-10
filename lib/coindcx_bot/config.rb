@@ -853,6 +853,31 @@ module CoindcxBot
       [10, 20, 50].include?(v) ? v : 10
     end
 
+    # +orderflow.divergence+ — Binance vs CoinDCX mid guard (see +Risk::DivergenceGuard+).
+    def orderflow_divergence_section
+      d = orderflow_section[:divergence]
+      d.is_a?(Hash) ? d : {}
+    end
+
+    def orderflow_divergence_max_bps
+      BigDecimal(orderflow_divergence_section.fetch(:max_bps, 25).to_s)
+    end
+
+    def orderflow_divergence_max_lag_ms
+      sec = orderflow_divergence_section
+      raw = sec[:max_lag_ms] || sec[:max_coindcx_lag_ms] || 1_500
+      Integer(raw)
+    rescue ArgumentError, TypeError
+      1_500
+    end
+
+    def orderflow_divergence_check_interval_ms
+      v = Integer(orderflow_divergence_section.fetch(:check_interval_ms, 250))
+      v < 50 ? 50 : v
+    rescue ArgumentError, TypeError
+      250
+    end
+
     # Maximum reconnect attempts before the WS loop gives up (0 = unlimited).
     def ws_reconnect_attempts
       v = runtime.fetch(:ws_reconnect_attempts, 5).to_i

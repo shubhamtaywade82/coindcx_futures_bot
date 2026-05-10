@@ -70,4 +70,32 @@ RSpec.describe CoindcxBot::Orderflow::BinanceAdapter do
     expect(engine_calls.first[:source]).to eq(:binance)
     expect(engine_calls.first[:pair]).to eq('B-SOL_USDT')
   end
+
+  it 'forwards bookTicker quotes to divergence_monitor when both are configured' do
+    engine = CoindcxBot::Orderflow::Engine.new(bus: bus, config: config, logger: nil)
+    div = instance_double(CoindcxBot::MarketData::DivergenceMonitor)
+    allow(div).to receive(:on_binance_book_ticker)
+    quote_handler = nil
+    book_ticker = Object.new
+    book_ticker.define_singleton_method(:on_quote) { |&b| quote_handler = b; book_ticker }
+    book_ticker.define_singleton_method(:connect) {}
+    book_ticker.define_singleton_method(:disconnect) {}
+
+    described_class.new(
+      engine: engine,
+      book: book,
+      manager: manager,
+      trade_ws: trade_ws,
+      coindcx_pair: 'B-SOL_USDT',
+      sweep_detector: nil,
+      iceberg_detector: nil,
+      binance_symbol: 'SOLUSDT',
+      book_ticker_ws: book_ticker,
+      divergence_monitor: div
+    ).start
+
+    expect(quote_handler).to be_a(Proc)
+    quote_handler.call(best_bid: BigDecimal('1'), best_ask: BigDecimal('2'), ts: 99)
+    expect(div).to have_received(:on_binance_book_ticker).with(best_bid: BigDecimal('1'), best_ask: BigDecimal('2'), ts: 99)
+  end
 end

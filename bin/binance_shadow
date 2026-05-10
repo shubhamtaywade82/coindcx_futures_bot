@@ -12,6 +12,7 @@
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 
 require 'bundler/setup'
+require 'bigdecimal'
 require 'json'
 require 'logger'
 require 'coindcx_bot'
@@ -34,6 +35,12 @@ module BinanceShadowRunner
     :'liquidity.void.detected',
     :'liquidity.zone.confirmed',
     :'liquidity.wall.detected'
+  ].freeze
+
+  DIVERGENCE_EVENTS = [
+    CoindcxBot::MarketData::DivergenceMonitor::EVENT_OK,
+    CoindcxBot::MarketData::DivergenceMonitor::EVENT_EXCEEDED,
+    CoindcxBot::MarketData::DivergenceMonitor::EVENT_RECOVERED
   ].freeze
 
   def run(argv)
@@ -78,6 +85,48 @@ module BinanceShadowRunner
     DOMAIN_EVENTS.each do |ev|
       bus.subscribe(ev) { |payload| puts(JSON.generate({ event: ev.to_s, payload: payload })) }
     end
+    DIVERGENCE_EVENTS.each do |ev|
+      bus.subscribe(ev) { |payload| puts(JSON.generate({ event: ev, payload: payload })) }
+    end
+
+    bot_config = load_shadow_bot_config(logger)
+    div_max_bps = bot_config ? bot_config.orderflow_divergence_max_bps : BigDecimal('25')
+    div_max_lag_ms = bot_config ? bot_config.orderflow_divergence_max_lag_ms : 1_500
+    div_check_ms = bot_config ? bot_config.orderflow_divergence_check_interval_ms : 250
+
+    guard = CoindcxBot::Risk::DivergenceGuard.new(max_bps: div_max_bps, max_lag_ms: div_max_lag_ms)
+
+    cdx_ws_disabled = ENV['CDX_DISABLE_CDXWS'].to_s.strip == '1'
+    keys_present = !ENV['COINDCX_API_KEY'].to_s.strip.empty? && !ENV['COINDCX_API_SECRET'].to_s.strip.empty?
+    stub_coindcx = cdx_ws_disabled || !keys_present
+    if stub_coindcx
+      logger.info(
+        '[binance.shadow] CoinDCX WS skipped (CDX_DISABLE_CDXWS=1 or missing COINDCX_API_KEY/SECRET) — stubbing CoinDCX mid from Binance for divergence sanity'
+      )
+    end
+
+    ws_gateway = nil
+    unless stub_coindcx
+      configure_coin_dcx_shadow(logger)
+      ws_gateway = CoindcxBot::Gateways::WsGateway.new(client: CoinDCX.client, logger: logger)
+    end
+
+    book_ticker_ws = CoindcxBot::Exchanges::Binance::BookTickerWs.new(
+      symbol: symbol,
+      coindcx_pair: pair,
+      logger: logger
+    )
+
+    divergence_monitor = CoindcxBot::MarketData::DivergenceMonitor.new(
+      bus: bus,
+      guard: guard,
+      pair: pair,
+      binance_symbol: symbol,
+      ws_gateway: ws_gateway,
+      stub_coindcx: stub_coindcx,
+      logger: logger,
+      check_interval_ms: div_check_ms
+    )
 
     config = Phase2OrderflowConfig.new
     engine = CoindcxBot::Orderflow::Engine.new(bus: bus, config: config, logger: logger)
@@ -107,23 +156,75 @@ module BinanceShadowRunner
       coindcx_pair: pair,
       sweep_detector: engine.sweep_detector,
       iceberg_detector: engine.iceberg_detector,
-      logger: logger
+      logger: logger,
+      binance_symbol: symbol,
+      book_ticker_ws: book_ticker_ws,
+      divergence_monitor: divergence_monitor
     )
 
-    install_signal_traps_phase2(adapter, engine, logger)
+    install_signal_traps_phase2(adapter: adapter, engine: engine, divergence_monitor: divergence_monitor,
+                                  ws_gateway: ws_gateway, logger: logger)
     log_ws_lifecycle(socket: depth_ws, logger: logger)
+    log_book_ticker_lifecycle(socket: book_ticker_ws, logger: logger)
     trade_ws.on_open { logger.info('[binance.shadow] aggTrade ws connected') }
     trade_ws.on_close { |info| logger.warn("[binance.shadow] aggTrade closed: #{info.inspect}") }
     trade_ws.on_error { |error| logger.error("[binance.shadow] aggTrade error: #{error.message}") }
 
-    logger.info("[binance.shadow] Phase 2 #{symbol} → #{pair} depth=#{depth_ws.url}")
+    raw_depth = ENV.fetch('TOP_LEVELS', DEFAULT_DEPTH_LEVELS.to_s).to_s
+    depth = raw_depth.casecmp('all').zero? ? :all : Integer(raw_depth)
+
+    logger.info("[binance.shadow] Phase 2 #{symbol} → #{pair} depth=#{depth_ws.url} bookTicker=#{book_ticker_ws.url}")
+    divergence_monitor.start
     adapter.start
-    logger.info("[binance.shadow] Phase 2 aligned last_update_id=#{book.last_update_id}; streaming domain JSON lines")
+    logger.info("[binance.shadow] Phase 2 aligned last_update_id=#{book.last_update_id}; streaming domain JSON lines + divergence")
+
+    start_phase2_print_loop(symbol: symbol, book: book, monitor: divergence_monitor, depth: depth, logger: logger)
 
     sleep
   rescue CoindcxBot::Exchanges::Binance::SymbolMap::UnknownSymbol => e
     logger.error("[binance.shadow] #{e.message}")
     exit(1)
+  end
+
+  def load_shadow_bot_config(logger)
+    path = ENV['COINDCX_BOT_CONFIG'] || CoindcxBot::Config::DEFAULT_PATH
+    expanded = File.expand_path(path)
+    return nil unless File.file?(expanded)
+
+    CoindcxBot::Config.load(expanded)
+  rescue StandardError => e
+    logger.warn("[binance.shadow] bot.yml not loaded (#{e.message}); divergence thresholds use defaults")
+    nil
+  end
+
+  def configure_coin_dcx_shadow(logger)
+    CoinDCX.configure do |c|
+      c.api_key = ENV['COINDCX_API_KEY'].to_s.strip
+      c.api_secret = ENV['COINDCX_API_SECRET'].to_s.strip
+      c.logger = logger
+      url = ENV['COINDCX_SOCKET_BASE_URL'].to_s.strip
+      c.socket_base_url = url unless url.empty?
+      if c.respond_to?(:socket_io_connect_options=)
+        eio = ENV['COINDCX_SOCKET_EIO'].to_s.strip
+        c.socket_io_connect_options = { EIO: Integer(eio) } unless eio.empty?
+      end
+    end
+  end
+
+  def start_phase2_print_loop(symbol:, book:, monitor:, depth:, logger:)
+    Thread.new do
+      loop do
+        sleep(DEFAULT_PRINT_INTERVAL_SECONDS)
+        next if book.empty?
+
+        snap = monitor.snapshot
+        div_line =
+          "[binance.shadow] divergence pair=#{snap[:pair]} status=#{snap[:status]} bps=#{snap[:bps].inspect} " \
+          "age_ms=#{snap[:age_ms].inspect} reason=#{snap[:reason].inspect}"
+        logger.info(format_book(symbol: symbol, book: book, depth: depth))
+        logger.info(div_line)
+      end
+    end
   end
 
   class Phase2OrderflowConfig
@@ -200,15 +301,23 @@ module BinanceShadowRunner
     end
   end
 
-  def install_signal_traps_phase2(adapter, engine, logger)
+  def install_signal_traps_phase2(adapter:, engine:, divergence_monitor:, ws_gateway:, logger:)
     %w[INT TERM].each do |sig|
       Signal.trap(sig) do
         logger.info("[binance.shadow] received SIG#{sig} — shutting down Phase 2")
         adapter.stop
+        divergence_monitor.stop
+        ws_gateway&.disconnect
         engine.shutdown
         exit(0)
       end
     end
+  end
+
+  def log_book_ticker_lifecycle(socket:, logger:)
+    socket.on_open  { logger.info('[binance.shadow] bookTicker ws connected') }
+    socket.on_close { |info| logger.warn("[binance.shadow] bookTicker ws closed: #{info.inspect}") }
+    socket.on_error { |error| logger.error("[binance.shadow] bookTicker ws error: #{error.message}") }
   end
 
   def log_ws_lifecycle(socket:, logger:)
