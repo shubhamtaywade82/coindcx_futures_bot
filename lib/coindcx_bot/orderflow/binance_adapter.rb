@@ -19,7 +19,8 @@ module CoindcxBot
         logger: nil,
         binance_symbol: nil,
         book_ticker_ws: nil,
-        divergence_monitor: nil
+        divergence_monitor: nil,
+        recorder: nil
       )
         @engine = engine
         @book = book
@@ -32,6 +33,7 @@ module CoindcxBot
         @book_ticker_ws = book_ticker_ws
         @divergence_monitor = divergence_monitor
         @binance_symbol = binance_symbol || resolve_binance_symbol(@pair)
+        @recorder = recorder
         @throttle_mutex = Mutex.new
         # Start in the distant past so the first depth tick always flushes.
         @last_push_mono = -Float::INFINITY
@@ -57,7 +59,10 @@ module CoindcxBot
       def wire_callbacks
         wire_book_ticker_divergence
         @manager.after_apply = method(:on_depth_applied).to_proc
-        @trade_ws.on_trade { |t| @engine.on_trade(t) }
+        @trade_ws.on_trade do |t|
+          record_binance_trade!(t)
+          @engine.on_trade(t)
+        end
         @book.on_delta do |delta|
           @sweep&.feed_local_delta(pair: @pair, source: :binance, delta: delta)
           @iceberg&.feed_book_delta(pair: @pair, source: :binance, delta: delta)
@@ -93,9 +98,7 @@ module CoindcxBot
         emit_ts = ts_ms
 
         @throttle_mutex.synchronize do
-          if now - @last_push_mono < THROTTLE_SECONDS
-            return
-          end
+          return if now - @last_push_mono < THROTTLE_SECONDS
 
           @last_push_mono = now
           bids_asks = levels_for_engine(book)
@@ -109,10 +112,23 @@ module CoindcxBot
           bids: bids_asks[:bids],
           asks: bids_asks[:asks],
           source: :binance,
-          ts: emit_ts
+          at_ms: emit_ts
         )
+        record_binance_book!(bids_asks[:bids], bids_asks[:asks])
       rescue StandardError => e
         @logger&.warn("[orderflow:binance_adapter] #{e.message}")
+      end
+
+      def record_binance_trade!(trade)
+        return unless @recorder
+
+        @recorder.record_trade(trade.merge(source: :binance))
+      end
+
+      def record_binance_book!(bids, asks)
+        return unless @recorder
+
+        @recorder.record_snapshot(@pair, bids, asks, source: :binance)
       end
 
       def levels_for_engine(book)

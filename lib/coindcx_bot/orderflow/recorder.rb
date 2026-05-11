@@ -11,22 +11,30 @@ module CoindcxBot
       def initialize(config:, logger: nil)
         @config = config
         @logger = logger
-        @enabled = config.respond_to?(:orderflow_section) && config.orderflow_section.fetch(:record_sessions, false)
+        @enabled =
+          if config.respond_to?(:orderflow_recorder_enabled?)
+            config.orderflow_recorder_enabled?
+          else
+            config.respond_to?(:orderflow_section) && config.orderflow_section.fetch(:record_sessions, false)
+          end
         @mutex = Mutex.new
         @file = nil
         setup_file if @enabled
       end
 
-      def record_snapshot(pair, bids, asks)
+      def record_snapshot(pair, bids, asks, source: :coindcx)
         return unless @enabled
 
-        write(type: :snapshot, pair: pair, bids: bids, asks: asks, ts: Time.now.to_f)
+        write(type: :snapshot, pair: pair, bids: bids, asks: asks, source: source, ts: Time.now.to_f)
       end
 
       def record_trade(trade)
         return unless @enabled
 
-        write(type: :trade, **trade, ts: Time.now.to_f)
+        t = trade.respond_to?(:transform_keys) ? trade.transform_keys(&:to_sym) : trade
+        src = t[:source] || t['source'] || :coindcx
+        ts = t[:ts] || t['ts'] || Time.now.to_f
+        write(t.except(:type).merge(type: :trade, ts: ts, source: src))
       end
 
       def close

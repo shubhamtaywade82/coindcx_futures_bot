@@ -306,3 +306,20 @@ orderflow:
       exits_always_allowed: true      # informational — closes/partials/trails are never gated
       block_unmapped_pairs: false      # if true, block opens on pairs with no Binance symbol map
       cooldown_ms: 1000                # bus risk.execution.blocked dedupe window
+  confluence:
+    enabled: false                     # requires orderflow.enabled + orderflow.binance.enabled
+    max_context_age_ms: 5000
+    entry_to_wall_bps: 15
+    veto_min_score: 1.5
+    sweep_window_ms: 30000
+    iceberg_proximity_bps: 10
+    zone_distance_bps: 50
+    void_proximity_bps: 30
+    imbalance_strict: false
+    rules:
+      wall_in_path_veto: true
+      sweep_confirms: true
+      iceberg_caution: true
+      zone_alignment: true
+      void_caution: true
+      imbalance_alignment: true

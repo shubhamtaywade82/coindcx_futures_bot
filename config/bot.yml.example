@@ -362,9 +362,18 @@ runtime:
 #     depth_levels: 1000               # REST snapshot limit (Binance allows up to 1000)
 #     resync_max_attempts: 5           # alignment retries before giving up
 #     buffer_warmup_seconds: 1.0       # WS pre-buffer before fetching REST snapshot
+#     max_symbols_per_socket: 25       # multiplexed WS partition size (Binance soft cap ~25 streams)
 #     symbols:                         # Binance linear symbol (UPPER) -> CoinDCX futures pair
 #       BTCUSDT: B-BTC_USDT
+#       ETHUSDT: B-ETH_USDT
 #       SOLUSDT: B-SOL_USDT
+#       BNBUSDT: B-BNB_USDT
+#       XRPUSDT: B-XRP_USDT
+#       DOGEUSDT: B-DOGE_USDT
+#     # With 2+ symbols the engine opens one multiplexed depth / aggTrade / bookTicker socket per partition.
+#     # With exactly 1 symbol it keeps the legacy single-stream DepthWs / TradeWs / BookTickerWs.
+#   recorder:
+#     enabled: false                   # JSONL session log under data/orderflow_logs/ (tags :source per line)
 #
 #   # Phase 2+ microstructure plugins (all default off — enable only after validating Binance shadow).
 #   sweep:
@@ -405,6 +414,25 @@ runtime:
 #       exits_always_allowed: true     # informational — exits are never gated
 #       block_unmapped_pairs: false    # if true, block opens when pair has no Binance ↔ CoinDCX symbol map
 #       cooldown_ms: 1000              # risk.execution.blocked bus dedupe (ms)
+#
+#   # Post-strategy liquidity confluence (Binance context + veto/annotate). Parent enabled: false by default.
+#   confluence:
+#     enabled: false                   # requires orderflow.enabled + orderflow.binance.enabled
+#     max_context_age_ms: 5000
+#     entry_to_wall_bps: 15
+#     veto_min_score: 1.5
+#     sweep_window_ms: 30000
+#     iceberg_proximity_bps: 10
+#     zone_distance_bps: 50
+#     void_proximity_bps: 30
+#     imbalance_strict: false
+#     rules:
+#       wall_in_path_veto: true
+#       sweep_confirms: true
+#       iceberg_caution: true
+#       zone_alignment: true
+#       void_caution: true
+#       imbalance_alignment: true
 #
 #   # Signal dedup (transition-based emission). Default: ON for source: binance, OFF for source: coindcx
 #   # (preserves legacy CoinDCX consumers). Set dedup.enabled to override per event type.

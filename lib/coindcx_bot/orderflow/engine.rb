@@ -37,7 +37,7 @@ module CoindcxBot
       DEFAULT_LIQUIDITY_CLASSIFICATION_WINDOW_MS = 750.0
       DEFAULT_TRADE_THROUGH_VOLUME_RATIO = 0.6
 
-      attr_reader :sweep_detector, :iceberg_detector
+      attr_reader :sweep_detector, :iceberg_detector, :recorder
 
       def initialize(bus:, config:, logger: nil)
         @bus                = bus
@@ -45,7 +45,7 @@ module CoindcxBot
         @logger             = logger
         @store              = OrderBookStore.new
         @absorption         = AbsorptionTracker.new(config: config)
-        @recorder           = Recorder.new(config: config, logger: logger)
+        @recorder = Recorder.new(config: config, logger: logger)
         @spoof_candidates   = Hash.new { |h, k| h[k] = {} }
         @spoof_mutex        = Mutex.new
         @recent_trades      = Hash.new { |h, k| h[k] = [] }
@@ -70,11 +70,11 @@ module CoindcxBot
       end
 
       # Called from the WS order-book callback.
-      def on_book_update(pair:, bids:, asks:, source: :coindcx, ts: nil)
-        ts_ms = normalize_book_ts_ms(ts)
+      def on_book_update(pair:, bids:, asks:, source: :coindcx, at_ms: nil)
+        ts_ms = normalize_book_ts_ms(at_ms)
 
         prev_snap = @store.snapshot_for(pair)
-        @recorder.record_snapshot(pair, bids, asks)
+        @recorder.record_snapshot(pair, bids, asks, source: source)
 
         diff = @store.update!(pair: pair, bids: bids, asks: asks)
         snap = @store.snapshot_for(pair)
@@ -112,11 +112,11 @@ module CoindcxBot
         sec.is_a?(Hash) && sec[:enabled] == true
       end
 
-      def normalize_book_ts_ms(ts)
-        return (Time.now.to_f * 1000).to_i if ts.nil?
+      def normalize_book_ts_ms(raw)
+        return (Time.now.to_f * 1000).to_i if raw.nil?
 
-        t = ts.to_i
-        t > 1_000_000_000_000 ? t : (ts.to_f * 1000).to_i
+        t = raw.to_i
+        t > 1_000_000_000_000 ? t : (raw.to_f * 1000).to_i
       end
 
       def detect_imbalance(pair, snap)
@@ -153,6 +153,7 @@ module CoindcxBot
         { type: :walls, pair: pair, bid_walls: bid_walls, ask_walls: ask_walls, threshold: threshold.round(2) }
       end
 
+      # rubocop:disable Metrics/MethodLength
       def detect_liquidity_shift(pair, diff)
         events = []
         diff.ask_removed.each do |price, size|
@@ -197,6 +198,7 @@ module CoindcxBot
 
         { type: :liquidity_shift, pair: pair, events: events }
       end
+      # rubocop:enable Metrics/MethodLength
 
       def detect_spoof(pair, diff)
         threshold = spoof_threshold

@@ -59,6 +59,21 @@ module CoindcxBot
           self
         end
 
+        def self.trade_from_agg_payload(payload, coindcx_pair:, binance_symbol:)
+          m = payload['m']
+          aggressor_sell = m == true
+          pair = coindcx_pair&.to_s
+          pair = binance_symbol.to_s if pair.nil? || pair.empty?
+          {
+            pair: pair,
+            price: BigDecimal(payload['p'].to_s),
+            size: BigDecimal(payload['q'].to_s),
+            side: aggressor_sell ? :sell : :buy,
+            ts: Integer(payload['T']),
+            source: :binance,
+          }
+        end
+
         private
 
         def reset_callbacks
@@ -85,17 +100,11 @@ module CoindcxBot
         end
 
         def build_trade(payload)
-          m = payload['m']
-          aggressor_sell = m == true
-          pair = @coindcx_pair || @binance_symbol
-          {
-            pair: pair,
-            price: BigDecimal(payload['p'].to_s),
-            size: BigDecimal(payload['q'].to_s),
-            side: aggressor_sell ? :sell : :buy,
-            ts: Integer(payload['T']),
-            source: :binance
-          }
+          self.class.trade_from_agg_payload(
+            payload,
+            coindcx_pair: @coindcx_pair,
+            binance_symbol: @binance_symbol
+          )
         end
 
         def default_transport

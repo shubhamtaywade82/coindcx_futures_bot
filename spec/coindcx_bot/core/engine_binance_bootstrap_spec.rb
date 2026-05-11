@@ -32,6 +32,34 @@ RSpec.describe CoindcxBot::Core::Engine, 'binance orderflow stack' do
     )
   end
 
+  it 'does not construct MultiplexedDepthWs when only one binance symbol is configured' do
+    expect(CoindcxBot::Exchanges::Binance::MultiplexedDepthWs).not_to receive(:new)
+    engine = described_class.new(config: config, logger: logger)
+    allow(engine).to receive(:build_binance_orderflow_bundle).and_raise(StandardError, 'skip_real_stack')
+    expect { engine.send(:start_binance_orderflow_stacks!) }.not_to raise_error
+  end
+
+  it 'constructs MultiplexedDepthWs when multiple binance symbols are configured' do
+    cfg = CoindcxBot::Config.new(
+      minimal_bot_config(
+        orderflow: {
+          enabled: true,
+          binance: {
+            enabled: true,
+            max_symbols_per_socket: 25,
+            symbols: {
+              'BTCUSDT' => 'B-BTC_USDT',
+              'ETHUSDT' => 'B-ETH_USDT'
+            }
+          }
+        }
+      )
+    )
+    eng = described_class.new(config: cfg, logger: logger)
+    expect(CoindcxBot::Exchanges::Binance::MultiplexedDepthWs).to receive(:new).once.and_raise(StandardError, 'multiplex_depth_ctor')
+    expect { eng.send(:start_binance_orderflow_stacks!) }.not_to raise_error
+  end
+
   it 'stop_binance_orderflow_stacks! invokes stop on adapters and monitors and clears guard' do
     adapter = instance_double(CoindcxBot::Orderflow::BinanceAdapter, stop: nil)
     monitor = instance_double(

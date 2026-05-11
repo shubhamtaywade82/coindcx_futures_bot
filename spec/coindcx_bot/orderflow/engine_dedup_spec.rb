@@ -96,17 +96,17 @@ RSpec.describe 'CoindcxBot::Orderflow::Engine dedup integration' do
 
       base_ts = (Time.now.to_f * 1000).to_i
 
-      engine.on_book_update(pair: 'B-SOL_USDT', bids: wall_book[:bids], asks: wall_book[:asks], source: :binance, ts: base_ts)
+      engine.on_book_update(pair: 'B-SOL_USDT', bids: wall_book[:bids], asks: wall_book[:asks], source: :binance, at_ms: base_ts)
       engine.on_book_update(pair: 'B-SOL_USDT',
                             bids: [{ price: '99.99', quantity: '10' }],
                             asks: [{ price: '100.01', quantity: '10' }],
-                            source: :binance, ts: base_ts + 50)
+                            source: :binance, at_ms: base_ts + 50)
       expect(removed).to be_empty
 
       engine.on_book_update(pair: 'B-SOL_USDT',
                             bids: [{ price: '99.99', quantity: '10' }],
                             asks: [{ price: '100.01', quantity: '10' }],
-                            source: :binance, ts: base_ts + 200)
+                            source: :binance, at_ms: base_ts + 200)
 
       expect(removed.map(&:first).sort).to eq(%i[ask bid])
     end

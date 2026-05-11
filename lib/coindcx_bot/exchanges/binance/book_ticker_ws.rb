@@ -59,6 +59,18 @@ module CoindcxBot
           self
         end
 
+        def self.quote_from_book_ticker_payload(payload, coindcx_pair:, binance_symbol:)
+          pair = coindcx_pair&.to_s
+          pair = binance_symbol.to_s if pair.nil? || pair.empty?
+          {
+            pair: pair,
+            best_bid: BigDecimal(payload['b'].to_s),
+            best_ask: BigDecimal(payload['a'].to_s),
+            ts: Integer(payload['E'] || payload['T'] || 0),
+            source: :binance,
+          }
+        end
+
         private
 
         def reset_callbacks
@@ -72,14 +84,12 @@ module CoindcxBot
           payload = decode_payload(raw)
           return unless payload && payload['e'] == 'bookTicker'
 
-          pair = @coindcx_pair || @binance_symbol
-          @on_quote&.call(
-            pair: pair,
-            best_bid: BigDecimal(payload['b'].to_s),
-            best_ask: BigDecimal(payload['a'].to_s),
-            ts: Integer(payload['E'] || payload['T'] || 0),
-            source: :binance
+          h = self.class.quote_from_book_ticker_payload(
+            payload,
+            coindcx_pair: @coindcx_pair,
+            binance_symbol: @binance_symbol
           )
+          @on_quote&.call(h)
         rescue StandardError => e
           @on_error&.call(e)
         end

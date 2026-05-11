@@ -4,11 +4,29 @@ module CoindcxBot
   module Exchanges
     module Binance
       # Single source of truth for Binance ↔ CoinDCX symbol equivalence.
-      # Phase 1 ships BTCUSDT only; extend the table as more pairs come online.
+      # Only pairs with a documented B-*_USDT-style CoinDCX code are listed.
       module SymbolMap
         BINANCE_TO_COINDCX = {
+          'ADAUSDT' => 'B-ADA_USDT',
+          'APTUSDT' => 'B-APT_USDT',
+          'ARBUSDT' => 'B-ARB_USDT',
+          'ATOMUSDT' => 'B-ATOM_USDT',
+          'AVAXUSDT' => 'B-AVAX_USDT',
+          'BNBUSDT' => 'B-BNB_USDT',
           'BTCUSDT' => 'B-BTC_USDT',
+          'DOGEUSDT' => 'B-DOGE_USDT',
+          'DOTUSDT' => 'B-DOT_USDT',
+          'ETHUSDT' => 'B-ETH_USDT',
+          'FILUSDT' => 'B-FIL_USDT',
+          'INJUSDT' => 'B-INJ_USDT',
+          'LINKUSDT' => 'B-LINK_USDT',
+          'LTCUSDT' => 'B-LTC_USDT',
+          'MATICUSDT' => 'B-MATIC_USDT',
+          'NEARUSDT' => 'B-NEAR_USDT',
+          'OPUSDT' => 'B-OP_USDT',
           'SOLUSDT' => 'B-SOL_USDT',
+          'TRXUSDT' => 'B-TRX_USDT',
+          'XRPUSDT' => 'B-XRP_USDT',
         }.freeze
 
         COINDCX_TO_BINANCE = BINANCE_TO_COINDCX.invert.freeze

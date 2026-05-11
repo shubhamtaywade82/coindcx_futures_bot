@@ -78,6 +78,25 @@ module CoindcxBot
           self
         end
 
+        # Public for multiplexed streams (same shape as single-stream decode).
+        def self.build_depth_event(payload)
+          Event.new(
+            event_type: payload['e'],
+            symbol: payload['s'],
+            first_u: Integer(payload['U']),
+            final_u: Integer(payload['u']),
+            prev_u: payload['pu'].nil? ? nil : Integer(payload['pu']),
+            event_time: payload['E'].to_i,
+            tx_time: payload['T'].to_i,
+            bids: parse_levels_static(payload['b']),
+            asks: parse_levels_static(payload['a'])
+          )
+        end
+
+        def self.parse_levels_static(rows)
+          Array(rows).map { |(price, qty)| [BigDecimal(price.to_s), BigDecimal(qty.to_s)] }
+        end
+
         private
 
         def reset_callbacks
@@ -104,21 +123,11 @@ module CoindcxBot
         end
 
         def build_event(payload)
-          Event.new(
-            event_type: payload['e'],
-            symbol: payload['s'],
-            first_u: Integer(payload['U']),
-            final_u: Integer(payload['u']),
-            prev_u: payload['pu'].nil? ? nil : Integer(payload['pu']),
-            event_time: payload['E'].to_i,
-            tx_time: payload['T'].to_i,
-            bids: parse_levels(payload['b']),
-            asks: parse_levels(payload['a'])
-          )
+          self.class.build_depth_event(payload)
         end
 
         def parse_levels(rows)
-          Array(rows).map { |(price, qty)| [BigDecimal(price.to_s), BigDecimal(qty.to_s)] }
+          self.class.parse_levels_static(rows)
         end
 
         def default_transport
