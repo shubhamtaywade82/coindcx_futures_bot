@@ -36,6 +36,12 @@ module CoindcxBot
         @cmd_feedback = nil
         @focus = nil
         @stdin_raw_mode = false
+        @binance_panel = nil
+        @grid_panel = nil
+        @keybar_panel = nil
+        @origin_after_orderflow = 0
+        @binance_toggle_key = 'b'
+        @engine = nil
       end
 
       def run
@@ -49,7 +55,7 @@ module CoindcxBot
         @ltp_poller = nil
         @tui_footer_poll_interval = nil
         @focus = FocusRing.new(config.pairs)
-        engine = CoindcxBot::Core::Engine.new(
+        @engine = CoindcxBot::Core::Engine.new(
           config: config,
           logger: build_logger,
           tick_store: tick_store,
@@ -57,9 +63,12 @@ module CoindcxBot
           on_tick: ->(_tick) { @render_loop&.request_redraw },
           on_market_data: -> { @render_loop&.request_redraw }
         )
+        engine = @engine
+        @binance_toggle_key = config.tui_binance_orderflow_toggle_key
 
         symbols = config.pairs
         panels  = build_panels(
+          config: config,
           tick_store: tick_store,
           order_book_store: order_book_store,
           engine: engine,
@@ -179,7 +188,7 @@ module CoindcxBot
       rescue StandardError
         nil
       end
-      def build_panels(tick_store:, order_book_store:, engine:, symbols:)
+      def build_panels(config:, tick_store:, order_book_store:, engine:, symbols:)
         origin = 0
 
         header = Panels::HeaderPanel.new(
@@ -202,6 +211,20 @@ module CoindcxBot
           focus_pair_proc: -> { @focus&.current }
         )
         origin += orderflow.row_count
+        @origin_after_orderflow = origin
+
+        binance = nil
+        if config.tui_binance_orderflow_panel_enabled?
+          binance = Panels::BinanceOrderflowPanel.new(
+            bus: engine.instance_variable_get(:@bus),
+            engine: engine,
+            origin_row: origin,
+            focus_pair_proc: -> { @focus&.current },
+            visible: config.tui_binance_orderflow_visible_default?
+          )
+          @binance_panel = binance
+          origin += binance.row_count
+        end
 
         # Flexible height calculation
         # Keybar is 5 rows (rule + 2 control lines + footer hint + command palette).
@@ -222,13 +245,50 @@ module CoindcxBot
           flexible_height: flex_inner
         )
         origin += grid.row_count
+        @grid_panel = grid
 
         keybar = Panels::KeybarPanel.new(
           origin_row: origin,
           footer_text_proc: -> { footer_hint_text },
-          command_line_proc: -> { command_palette_line }
+          command_line_proc: -> { command_palette_line },
+          extra_controls_line_two_proc: -> { binance_orderflow_keybar_hint }
         )
-        [header, regime_strip, smc_strip, orderflow, grid, keybar]
+        @keybar_panel = keybar
+
+        out = [header, regime_strip, smc_strip, orderflow]
+        out << binance if binance
+        out << grid << keybar
+        out
+      end
+
+      def binance_orderflow_keybar_hint
+        return '' unless @binance_panel
+
+        k = @binance_toggle_key.to_s
+        "#{bold(k)}: #{muted('Binance OF')}"
+      end
+
+      def relayout_bottom_panels_after_binance_toggle!
+        return unless @binance_panel && @grid_panel && @keybar_panel
+
+        r0 = @origin_after_orderflow
+        @binance_panel.reposition!(r0)
+        grid_top = r0 + @binance_panel.row_count
+        total_h = TermHeight.rows
+        keybar_rows = 5
+        fixed_below = keybar_rows + 1
+        avail_h = total_h - grid_top - fixed_below
+        flex_inner = [avail_h - 4, 6].max
+        @grid_panel.instance_variable_set(:@flexible_height, flex_inner)
+        @grid_panel.instance_variable_set(:@row, grid_top)
+        @keybar_panel.instance_variable_set(:@row, grid_top + @grid_panel.row_count)
+      end
+
+      def toggle_binance_orderflow_panel!
+        return unless @binance_panel
+
+        @binance_panel.visible = !@binance_panel.visible
+        relayout_bottom_panels_after_binance_toggle!
       end
 
       def start_engine(engine)
@@ -278,8 +338,14 @@ module CoindcxBot
           else
             ''
           end
+        binance_hint =
+          if @binance_panel
+            " · #{@binance_toggle_key} Binance OF"
+          else
+            ''
+          end
         "#{poll_part}WS tick wake · max #{(RENDER_INTERVAL * 1000).to_i}ms if idle · " \
-          'q quit · p r k o f · n focus · / cmd · Esc cancel cmd'
+          "q quit · p r k o f · n focus · / cmd · Esc cancel cmd#{binance_hint}"
       end
 
       # Dedicated palette row (always visible) — input after `/`, last result otherwise.
@@ -334,7 +400,14 @@ module CoindcxBot
         when 'k' then engine.kill_switch_on!; false
         when 'o' then engine.kill_switch_off!; false
         when 'f' then engine.flatten_all!;    false
-        else false
+        else
+          if @binance_panel && cmd.to_s.downcase == @binance_toggle_key.to_s.downcase
+            toggle_binance_orderflow_panel!
+            @render_loop&.request_redraw
+            false
+          else
+            false
+          end
         end
       end
 
@@ -358,7 +431,8 @@ module CoindcxBot
         when 'kill off', 'killoff', 'kill-off' then engine.kill_switch_off!; @cmd_feedback = 'kill off'
         when 'flatten', 'flat', 'f' then engine.flatten_all!; @cmd_feedback = 'flatten sent'
         when 'help', 'h', '?'
-          @cmd_feedback = 'pause resume kill kill-off flatten focus 0 n (optional leading /)'
+          extra = @binance_panel ? " #{@binance_toggle_key}=binance-orderflow" : ''
+          @cmd_feedback = "pause resume kill kill-off flatten focus 0 n (optional leading /)#{extra}"
         when /\Afocus\s+(\d+)\z/
           @focus&.select_absolute!(Regexp.last_match(1))
           @cmd_feedback = "focus #{Regexp.last_match(1)}"

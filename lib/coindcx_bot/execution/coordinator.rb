@@ -4,9 +4,10 @@ require 'bigdecimal'
 require 'securerandom'
 
 module CoindcxBot
-  module Execution
-    class Coordinator
-      def initialize(broker:, journal:, config:, exposure_guard:, logger:, fx:, order_tracker: nil)
+    module Execution
+      class Coordinator
+      def initialize(broker:, journal:, config:, exposure_guard:, logger:, fx:, order_tracker: nil,
+                     execution_gate: nil)
         @broker        = broker
         @journal       = journal
         @config        = config
@@ -15,6 +16,7 @@ module CoindcxBot
         @fx            = fx
         @dry           = config.dry_run?
         @order_tracker = order_tracker
+        @gate          = execution_gate || Risk::NoOpExecutionGate.instance
       end
 
       def flatten_all(pairs, ltps: {})
@@ -95,6 +97,14 @@ module CoindcxBot
       end
 
       def apply(signal, quantity: nil, entry_price: nil, exit_price: nil)
+        if signal.action == :open_long || signal.action == :open_short
+          gate_result = @gate.gate?(action: signal.action, pair: signal.pair)
+          if gate_result.err?
+            log_signal_blocked_divergence!(signal, gate_result)
+            return :blocked
+          end
+        end
+
         case signal.action
         when :hold
           :ok
@@ -136,6 +146,28 @@ module CoindcxBot
       end
 
       private
+
+      def log_signal_blocked_divergence!(signal, gate_result)
+        vh = gate_result.value
+        vh = {} unless vh.is_a?(Hash)
+        bps_s =
+          if vh[:bps].nil?
+            nil
+          elsif vh[:bps].is_a?(BigDecimal)
+            vh[:bps].to_s('F')
+          else
+            vh[:bps].to_s
+          end
+        payload = {
+          pair: signal.pair.to_s,
+          action: signal.action.to_s,
+          reason: (vh[:reason] || gate_result.code).to_s,
+          bps: bps_s,
+          age_ms: vh[:age_ms]
+        }.compact
+        @logger&.warn("[execution] #{signal.pair} #{signal.action} blocked: #{payload[:reason]}")
+        @journal.log_event('signal_blocked_divergence', payload)
+      end
 
       def flatten_pair(pair, ltp: nil)
         pair_s = pair.to_s

@@ -853,6 +853,226 @@ module CoindcxBot
       [10, 20, 50].include?(v) ? v : 10
     end
 
+    # +orderflow.divergence+ — Binance vs CoinDCX mid guard (see +Risk::DivergenceGuard+).
+    def orderflow_divergence_section
+      d = orderflow_section[:divergence]
+      d.is_a?(Hash) ? d : {}
+    end
+
+    def orderflow_divergence_max_bps
+      BigDecimal(orderflow_divergence_section.fetch(:max_bps, 25).to_s)
+    end
+
+    def orderflow_divergence_max_lag_ms
+      sec = orderflow_divergence_section
+      raw = sec[:max_lag_ms] || sec[:max_coindcx_lag_ms] || 1_500
+      Integer(raw)
+    rescue ArgumentError, TypeError
+      1_500
+    end
+
+    def orderflow_divergence_check_interval_ms
+      v = Integer(orderflow_divergence_section.fetch(:check_interval_ms, 250))
+      v < 50 ? 50 : v
+    rescue ArgumentError, TypeError
+      250
+    end
+
+    # +orderflow.divergence.gate+ — optional execution choke for new entries (see +Risk::ExecutionGate+).
+    def orderflow_divergence_gate_section
+      g = orderflow_divergence_section[:gate]
+      g.is_a?(Hash) ? g : {}
+    end
+
+    def orderflow_divergence_gate_enabled?
+      truthy?(orderflow_divergence_gate_section[:enabled])
+    end
+
+    def orderflow_divergence_gate_block_unmapped_pairs?
+      truthy?(orderflow_divergence_gate_section[:block_unmapped_pairs])
+    end
+
+    def orderflow_divergence_gate_cooldown_ms
+      v = Integer(orderflow_divergence_gate_section.fetch(:cooldown_ms, 1_000))
+      v < 1 ? 1 : v
+    rescue ArgumentError, TypeError
+      1_000
+    end
+
+    def orderflow_binance_section
+      b = orderflow_section[:binance]
+      b.is_a?(Hash) ? b : {}
+    end
+
+    def orderflow_binance_enabled?
+      truthy?(orderflow_binance_section[:enabled])
+    end
+
+    def orderflow_binance_symbol_map
+      h = orderflow_binance_section[:symbols]
+      return {} unless h.is_a?(Hash)
+
+      mapped = h.to_h do |k, v|
+        [k.to_s.strip.upcase, v.to_s.strip]
+      end
+      mapped.reject { |ks, vs| ks.empty? || vs.empty? }
+    end
+
+    def orderflow_binance_base_rest
+      orderflow_binance_section.fetch(:base_rest, 'https://fapi.binance.com').to_s.strip.chomp('/')
+    end
+
+    def orderflow_binance_base_ws
+      orderflow_binance_section.fetch(:base_ws, 'wss://fstream.binance.com').to_s.strip.chomp('/')
+    end
+
+    def orderflow_binance_depth_levels
+      v = Integer(orderflow_binance_section.fetch(:depth_levels, 1_000))
+      v < 5 ? 5 : [v, 1_000].min
+    rescue ArgumentError, TypeError
+      1_000
+    end
+
+    def orderflow_binance_resync_max_attempts
+      Integer(orderflow_binance_section.fetch(:resync_max_attempts, 5))
+    rescue ArgumentError, TypeError
+      5
+    end
+
+    def orderflow_binance_buffer_warmup_seconds
+      Float(orderflow_binance_section.fetch(:buffer_warmup_seconds, 1.0))
+    rescue ArgumentError, TypeError
+      1.0
+    end
+
+    # Soft cap for combined-stream URLs (Binance documents ~25 streams per connection).
+    def orderflow_binance_max_symbols_per_socket
+      v = Integer(orderflow_binance_section.fetch(:max_symbols_per_socket, 25))
+      v < 1 ? 25 : v
+    rescue ArgumentError, TypeError
+      25
+    end
+
+    def orderflow_recorder_section
+      r = orderflow_section[:recorder]
+      r.is_a?(Hash) ? r : {}
+    end
+
+    # True when +orderflow.recorder.enabled+ or legacy +orderflow.record_sessions+ is set.
+    def orderflow_recorder_enabled?
+      truthy?(orderflow_recorder_section[:enabled]) || truthy?(orderflow_section[:record_sessions])
+    end
+
+    # Post-strategy liquidity confluence filter (Binance context only; see +Orderflow::LiquidityConfluenceFilter+).
+    def orderflow_confluence_section
+      c = orderflow_section[:confluence]
+      c.is_a?(Hash) ? c : {}
+    end
+
+    def orderflow_confluence_enabled?
+      truthy?(orderflow_confluence_section[:enabled])
+    end
+
+    def orderflow_confluence_rules
+      r = orderflow_confluence_section[:rules]
+      base = {
+        wall_in_path_veto: true,
+        sweep_confirms: true,
+        iceberg_caution: true,
+        zone_alignment: true,
+        void_caution: true,
+        imbalance_alignment: true,
+      }
+      return base unless r.is_a?(Hash)
+
+      base.merge(r.transform_keys(&:to_sym))
+    end
+
+    def orderflow_confluence_max_context_age_ms
+      Integer(orderflow_confluence_section.fetch(:max_context_age_ms, 5_000))
+    rescue ArgumentError, TypeError
+      5_000
+    end
+
+    def orderflow_confluence_entry_to_wall_bps
+      Integer(orderflow_confluence_section.fetch(:entry_to_wall_bps, 15))
+    rescue ArgumentError, TypeError
+      15
+    end
+
+    def orderflow_confluence_veto_min_score
+      BigDecimal(orderflow_confluence_section.fetch(:veto_min_score, 1.5).to_s)
+    rescue ArgumentError, TypeError
+      BigDecimal('1.5')
+    end
+
+    def orderflow_confluence_sweep_window_ms
+      Integer(orderflow_confluence_section.fetch(:sweep_window_ms, 30_000))
+    rescue ArgumentError, TypeError
+      30_000
+    end
+
+    def orderflow_confluence_iceberg_proximity_bps
+      Integer(orderflow_confluence_section.fetch(:iceberg_proximity_bps, 10))
+    rescue ArgumentError, TypeError
+      10
+    end
+
+    def orderflow_confluence_zone_distance_bps
+      Integer(orderflow_confluence_section.fetch(:zone_distance_bps, 50))
+    rescue ArgumentError, TypeError
+      50
+    end
+
+    def orderflow_confluence_void_proximity_bps
+      Integer(orderflow_confluence_section.fetch(:void_proximity_bps, 30))
+    rescue ArgumentError, TypeError
+      30
+    end
+
+    def orderflow_confluence_imbalance_strict?
+      truthy?(orderflow_confluence_section.fetch(:imbalance_strict, false))
+    end
+
+    def tui_section
+      s = raw[:tui]
+      s.is_a?(Hash) ? s : {}
+    end
+
+    def tui_panels_section
+      s = tui_section[:panels]
+      s.is_a?(Hash) ? s : {}
+    end
+
+    def tui_binance_orderflow_panel_section
+      p = tui_panels_section[:binance_orderflow] || tui_panels_section['binance_orderflow']
+      p.is_a?(Hash) ? p : {}
+    end
+
+    # When false, the dedicated Binance TUI panel is not registered (engine may still run Binance shadow if enabled).
+    def tui_binance_orderflow_panel_enabled?
+      return false unless orderflow_binance_enabled?
+
+      sec = tui_binance_orderflow_panel_section
+      return true if sec.empty? || !sec.key?(:enabled)
+
+      truthy?(sec[:enabled])
+    end
+
+    def tui_binance_orderflow_toggle_key
+      k = tui_binance_orderflow_panel_section.fetch(:toggle_key, 'b').to_s
+      k.strip.empty? ? 'b' : k[0]
+    end
+
+    def tui_binance_orderflow_visible_default?
+      return false unless tui_binance_orderflow_panel_enabled?
+
+      sec = tui_binance_orderflow_panel_section
+      return orderflow_binance_enabled? if sec.empty? || !sec.key?(:visible)
+
+      truthy?(sec[:visible])
+    end
+
     # Maximum reconnect attempts before the WS loop gives up (0 = unlimited).
     def ws_reconnect_attempts
       v = runtime.fetch(:ws_reconnect_attempts, 5).to_i

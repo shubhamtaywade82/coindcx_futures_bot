@@ -88,6 +88,9 @@ module CoindcxBot
         @order_tracker = Execution::OrderTracker.new(journal: @journal, logger: @logger)
         @ws_fill_handler = Execution::WsFillHandler.new(order_tracker: @order_tracker, logger: @logger)
 
+        @divergence_guard_registry = Risk::GuardRegistry.new
+        @execution_gate = build_divergence_execution_gate
+
         @coord = Execution::Coordinator.new(
           broker: @broker,
           journal: @journal,
@@ -95,7 +98,8 @@ module CoindcxBot
           exposure_guard: @exposure,
           logger: @logger,
           fx: @fx,
-          order_tracker: @order_tracker
+          order_tracker: @order_tracker,
+          execution_gate: @execution_gate
         )
 
         @candles_htf = {}
@@ -183,6 +187,39 @@ module CoindcxBot
             Orderflow::Engine.new(bus: @bus, config: config, logger: @logger)
           end
 
+        @binance_adapters = []
+        @binance_monitors = []
+        @binance_multiplexers = []
+        @binance_mutex = Mutex.new
+        @binance_divergence_guard = nil
+
+        @liquidity_context_store = nil
+        @liquidity_filter = nil
+        if @orderflow_engine && config.orderflow_binance_enabled? && config.orderflow_confluence_enabled?
+          @liquidity_context_store = Orderflow::LiquidityContextStore.new(
+            bus: @bus,
+            divergence_lookup: lambda { |pair_s|
+              found = nil
+              @binance_mutex.synchronize do
+                (@binance_monitors || []).each do |m|
+                  s = m.snapshot
+                  next unless s.is_a?(Hash) && s[:pair].to_s == pair_s.to_s
+
+                  found = s
+                  break
+                end
+              end
+              found
+            }
+          )
+          @liquidity_filter = Orderflow::LiquidityConfluenceFilter.new(
+            context_store: @liquidity_context_store,
+            config: config,
+            logger: @logger,
+            bus: @bus
+          )
+        end
+
         @stop_breach_queue = {}
         @stop_breach_mutex = Mutex.new
 
@@ -193,6 +230,7 @@ module CoindcxBot
           @ws_tick_at[tick.pair] = Time.now
           @tracker.record_tick(tick)
           forward_tick_to_store(tick)
+          forward_binance_divergence_coindcx_mid!(tick)
           @logger&.info("[ws] tick #{tick.pair} #{tick.price}") if ENV['COINDCX_WS_TRACE'].to_s == '1'
           check_and_queue_stop_breach(tick) if !@config.dry_run? && @config.exit_on_hard_stop?
           @on_tick&.call(tick)
@@ -344,6 +382,44 @@ module CoindcxBot
       end
 
       private
+
+      def build_divergence_execution_gate
+        return Risk::NoOpExecutionGate.instance unless @config.orderflow_binance_enabled?
+        return Risk::NoOpExecutionGate.instance unless @config.orderflow_divergence_gate_enabled?
+
+        Risk::ExecutionGate.new(
+          divergence_guards: @divergence_guard_registry,
+          config: @config,
+          logger: @logger,
+          bus: @bus
+        )
+      end
+
+      def log_signal_filtered_liquidity_if_needed!(before, after)
+        liq = after.metadata[:liquidity]
+        return unless liq.is_a?(Hash) && !liq.empty?
+
+        @journal.log_event(
+          'signal_filtered_liquidity',
+          {
+            pair: after.pair.to_s,
+            prior_action: before.action,
+            action: after.action,
+            reason: after.reason.to_s,
+            liquidity: journal_safe_liquidity(liq)
+          }
+        )
+      end
+
+      def journal_safe_liquidity(obj)
+        case obj
+        when ::Hash then obj.transform_values { |v| journal_safe_liquidity(v) }
+        when ::Array then obj.map { |v| journal_safe_liquidity(v) }
+        when ::BigDecimal then obj.to_s('F')
+        when ::Symbol then obj.to_s
+        else obj
+        end
+      end
 
       def regime_snapshot_for_tui
         base = Regime::TuiState.build(@config)
@@ -799,7 +875,7 @@ module CoindcxBot
         [
           last_bar_timestamps_for(Array(ctx[:pairs])),
           hmm_state_ids(ctx[:hmm]),
-          @regime_ai_mutex.synchronize { @regime_ai_state.dig(:payload, :regime_label) }
+          @regime_ai_mutex.synchronize { @regime_ai_state.dig(:payload, :regime_label) },
         ]
       end
 
@@ -1076,7 +1152,7 @@ module CoindcxBot
         [
           last_bar_timestamps_for(Array(ctx[:pairs])),
           hmm_state_ids(@hmm_runtime&.hmm_context_for_ai),
-          @regime_ai_mutex.synchronize { @regime_ai_state.dig(:payload, :regime_label) }
+          @regime_ai_mutex.synchronize { @regime_ai_state.dig(:payload, :regime_label) },
         ]
       end
 
@@ -1608,6 +1684,8 @@ module CoindcxBot
           end
         end
 
+        start_binance_orderflow_stacks!
+
         until @stop
           sleep 0.1
         end
@@ -1615,6 +1693,272 @@ module CoindcxBot
       rescue StandardError => e
         @last_error = e.message
         @logger.error("[ws] session error: #{e.message}")
+      ensure
+        stop_binance_orderflow_stacks!
+      end
+
+      def start_binance_orderflow_stacks!
+        return unless @config.orderflow_binance_enabled?
+        unless @orderflow_engine
+          @logger&.info('[engine] orderflow.binance: skipped (orderflow.enabled is false — Orderflow::Engine required)')
+          return
+        end
+
+        map = @config.orderflow_binance_symbol_map
+        if map.empty?
+          @logger&.warn('[engine] orderflow.binance.enabled but orderflow.binance.symbols empty — skip')
+          return
+        end
+
+        @binance_divergence_guard = Risk::DivergenceGuard.new(
+          max_bps: @config.orderflow_divergence_max_bps,
+          max_lag_ms: @config.orderflow_divergence_max_lag_ms
+        )
+
+        started = []
+        if map.size <= 1
+          map.each do |bin_sym, pair|
+            bundle = build_binance_orderflow_bundle(binance_symbol: bin_sym, coindcx_pair: pair)
+            @binance_mutex.synchronize do
+              @binance_adapters << bundle[:adapter]
+              @binance_monitors << bundle[:monitor]
+            end
+            bundle[:monitor].start
+            bundle[:adapter].start
+            @divergence_guard_registry.register(pair: pair, guard: @binance_divergence_guard)
+            started << "#{bin_sym}->#{pair}"
+          rescue StandardError => e
+            @logger&.error("[engine] orderflow.binance #{bin_sym}: #{e.class}: #{e.message}")
+          end
+        else
+          start_binance_multiplex_orderflow_stacks!(map, started)
+        end
+
+        @logger&.info("[engine] orderflow.binance shadow feeds: #{started.size} symbol(s) — #{started.join(', ')}") unless started.empty?
+      rescue StandardError => e
+        @logger&.error("[engine] orderflow.binance bootstrap: #{e.class}: #{e.message}")
+      end
+
+      def stop_binance_orderflow_stacks!
+        adapters, monitors, muxes = @binance_mutex.synchronize do
+          ads = (@binance_adapters || []).dup
+          mons = (@binance_monitors || []).dup
+          mx = (@binance_multiplexers || []).dup
+          @binance_adapters = []
+          @binance_monitors = []
+          @binance_multiplexers = []
+          [ads, mons, mx]
+        end
+
+        return if adapters.empty? && monitors.empty? && muxes.empty?
+
+        adapters.each do |adapter|
+          adapter.stop
+        rescue StandardError => e
+          @logger&.warn("[engine] orderflow.binance adapter stop: #{e.message}")
+        end
+
+        monitors.each do |monitor|
+          monitor.stop
+        rescue StandardError => e
+          @logger&.warn("[engine] orderflow.binance monitor stop: #{e.message}")
+        end
+
+        muxes.each do |mux|
+          mux.disconnect
+        rescue StandardError => e
+          @logger&.warn("[engine] orderflow.binance multiplex disconnect: #{e.message}")
+        end
+
+        @divergence_guard_registry.clear!
+        @binance_mutex.synchronize { @binance_divergence_guard = nil }
+      end
+
+      def start_binance_multiplex_orderflow_stacks!(map, started)
+        bin_keys = map.keys
+        max_per = @config.orderflow_binance_max_symbols_per_socket
+        depth_mux = Exchanges::Binance::MultiplexedDepthWs.new(
+          symbols: bin_keys,
+          base_ws: @config.orderflow_binance_base_ws,
+          max_symbols_per_socket: max_per,
+          logger: @logger
+        )
+        trade_mux = Exchanges::Binance::MultiplexedTradeWs.new(
+          symbol_map: map,
+          base_ws: @config.orderflow_binance_base_ws,
+          max_symbols_per_socket: max_per,
+          logger: @logger
+        )
+        book_mux = Exchanges::Binance::MultiplexedBookTickerWs.new(
+          symbol_map: map,
+          base_ws: @config.orderflow_binance_base_ws,
+          max_symbols_per_socket: max_per,
+          logger: @logger
+        )
+        @binance_mutex.synchronize { @binance_multiplexers = [depth_mux, trade_mux, book_mux] }
+
+        map.each do |bin_sym, pair|
+          bundle = build_binance_orderflow_bundle_multiplex(
+            binance_symbol: bin_sym,
+            coindcx_pair: pair,
+            depth_mux: depth_mux,
+            trade_mux: trade_mux,
+            book_mux: book_mux
+          )
+          @binance_mutex.synchronize do
+            @binance_adapters << bundle[:adapter]
+            @binance_monitors << bundle[:monitor]
+          end
+          bundle[:monitor].start
+          bundle[:adapter].start
+          @divergence_guard_registry.register(pair: pair, guard: @binance_divergence_guard)
+          started << "#{bin_sym}->#{pair}"
+        rescue StandardError => e
+          @logger&.error("[engine] orderflow.binance #{bin_sym}: #{e.class}: #{e.message}")
+        end
+      end
+
+      def build_binance_orderflow_bundle(binance_symbol:, coindcx_pair:)
+        rest = Exchanges::Binance::FuturesRest.new(base_url: @config.orderflow_binance_base_rest)
+        depth_ws = Exchanges::Binance::DepthWs.new(
+          symbol: binance_symbol,
+          base_ws: @config.orderflow_binance_base_ws,
+          logger: @logger
+        )
+        book = Exchanges::Binance::LocalBook.new
+        trade_ws = Exchanges::Binance::TradeWs.new(
+          symbol: binance_symbol,
+          coindcx_pair: coindcx_pair,
+          base_ws: @config.orderflow_binance_base_ws,
+          logger: @logger
+        )
+        book_ticker = Exchanges::Binance::BookTickerWs.new(
+          symbol: binance_symbol,
+          coindcx_pair: coindcx_pair,
+          base_ws: @config.orderflow_binance_base_ws,
+          logger: @logger
+        )
+        manager = Exchanges::Binance::ResyncManager.new(
+          symbol: binance_symbol,
+          rest: rest,
+          depth_ws: depth_ws,
+          book: book,
+          logger: @logger,
+          max_attempts: @config.orderflow_binance_resync_max_attempts,
+          depth_limit: @config.orderflow_binance_depth_levels,
+          buffer_warmup_seconds: @config.orderflow_binance_buffer_warmup_seconds
+        )
+
+        monitor = CoindcxBot::MarketData::DivergenceMonitor.new(
+          bus: @bus,
+          guard: @binance_divergence_guard,
+          pair: coindcx_pair,
+          binance_symbol: binance_symbol,
+          ws_gateway: nil,
+          stub_coindcx: false,
+          logger: @logger,
+          check_interval_ms: @config.orderflow_divergence_check_interval_ms
+        )
+
+        adapter = Orderflow::BinanceAdapter.new(
+          engine: @orderflow_engine,
+          book: book,
+          manager: manager,
+          trade_ws: trade_ws,
+          coindcx_pair: coindcx_pair,
+          sweep_detector: @orderflow_engine.sweep_detector,
+          iceberg_detector: @orderflow_engine.iceberg_detector,
+          logger: @logger,
+          binance_symbol: binance_symbol,
+          book_ticker_ws: book_ticker,
+          divergence_monitor: monitor
+        )
+
+        { adapter: adapter, monitor: monitor }
+      end
+
+      def build_binance_orderflow_bundle_multiplex(binance_symbol:, coindcx_pair:, depth_mux:, trade_mux:, book_mux:)
+        rest = Exchanges::Binance::FuturesRest.new(base_url: @config.orderflow_binance_base_rest)
+        depth_ws = depth_mux.stream_for(binance_symbol)
+        book = Exchanges::Binance::LocalBook.new
+        trade_ws = trade_mux.stream_for(binance_symbol)
+        book_ticker = book_mux.stream_for(binance_symbol)
+        manager = Exchanges::Binance::ResyncManager.new(
+          symbol: binance_symbol,
+          rest: rest,
+          depth_ws: depth_ws,
+          book: book,
+          logger: @logger,
+          max_attempts: @config.orderflow_binance_resync_max_attempts,
+          depth_limit: @config.orderflow_binance_depth_levels,
+          buffer_warmup_seconds: @config.orderflow_binance_buffer_warmup_seconds
+        )
+
+        monitor = CoindcxBot::MarketData::DivergenceMonitor.new(
+          bus: @bus,
+          guard: @binance_divergence_guard,
+          pair: coindcx_pair,
+          binance_symbol: binance_symbol,
+          ws_gateway: nil,
+          stub_coindcx: false,
+          logger: @logger,
+          check_interval_ms: @config.orderflow_divergence_check_interval_ms
+        )
+
+        adapter = Orderflow::BinanceAdapter.new(
+          engine: @orderflow_engine,
+          book: book,
+          manager: manager,
+          trade_ws: trade_ws,
+          coindcx_pair: coindcx_pair,
+          sweep_detector: @orderflow_engine.sweep_detector,
+          iceberg_detector: @orderflow_engine.iceberg_detector,
+          logger: @logger,
+          binance_symbol: binance_symbol,
+          book_ticker_ws: book_ticker,
+          divergence_monitor: monitor
+        )
+
+        { adapter: adapter, monitor: monitor }
+      end
+
+      def forward_binance_divergence_coindcx_mid!(tick)
+        monitors = @binance_mutex.synchronize { (@binance_monitors || []).dup }
+        return if monitors.empty?
+
+        mid = divergence_mid_from_tick(tick)
+        return if mid.nil?
+
+        ts = tick.respond_to?(:received_at) && tick.received_at ? (tick.received_at.to_f * 1000).to_i : (Time.now.to_f * 1000).to_i
+        pair_s = tick.pair.to_s
+        monitors.each do |monitor|
+          snap = monitor.snapshot
+          next unless snap[:pair].to_s == pair_s
+
+          monitor.feed_coindcx_mid(mid: mid, ts: ts)
+        rescue StandardError => e
+          @logger&.warn("[engine] binance divergence coindcx tick #{pair_s}: #{e.message}")
+        end
+      end
+
+      def divergence_mid_from_tick(tick)
+        return nil unless tick
+
+        bid = tick.respond_to?(:bid) ? tick.bid : nil
+        ask = tick.respond_to?(:ask) ? tick.ask : nil
+        if l1_book_usable?(bid, ask)
+          b = BigDecimal(bid.to_s)
+          a = BigDecimal(ask.to_s)
+          return (b + a) / 2
+        end
+
+        px = tick.price
+        return nil if px.nil?
+
+        bd = BigDecimal(px.to_s)
+        bd.positive? ? bd : nil
+      rescue ArgumentError, TypeError
+        nil
       end
 
       def tick_cycle
@@ -1947,6 +2291,11 @@ module CoindcxBot
           ltp: ltp,
           regime_hint: regime_hint_for(pair)
         )
+
+        pre_liquidity_sig = sig
+        entry_hint = ltp || exec.last&.close
+        sig = @liquidity_filter.filter(pre_liquidity_sig, entry_price: entry_hint) if @liquidity_filter
+        log_signal_filtered_liquidity_if_needed!(pre_liquidity_sig, sig) if @liquidity_filter
 
         @last_strategy_by_pair[pair.to_s] = { action: sig.action, reason: sig.reason.to_s }
 

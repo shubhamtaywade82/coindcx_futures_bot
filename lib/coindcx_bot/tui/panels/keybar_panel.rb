@@ -13,12 +13,13 @@ module CoindcxBot
         include Theme
 
         def initialize(origin_row:, footer_text: nil, footer_text_proc: nil, command_line_proc: nil,
-                       origin_col: 0, output: $stdout)
+                       origin_col: 0, output: $stdout, extra_controls_line_two_proc: nil)
           @row = origin_row
           @col = origin_col
           @footer_text = footer_text
           @footer_text_proc = footer_text_proc
           @command_line_proc = command_line_proc
+          @extra_controls_line_two_proc = extra_controls_line_two_proc
           @output = output
           @cursor = TTY::Cursor
         end
@@ -66,10 +67,14 @@ module CoindcxBot
         end
 
         def controls_line_two
-          [
+          base = [
             "#{muted('pairs · config/bot.yml')}",
             "#{muted('Esc')} #{muted('cancel cmd')}"
           ].join(muted('  │  '))
+          extra = @extra_controls_line_two_proc&.call
+          return base if extra.nil? || extra.to_s.strip.empty?
+
+          "#{base}#{muted('  │  ')}#{extra}"
         end
 
         def command_palette_row
